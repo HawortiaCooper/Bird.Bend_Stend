@@ -1,0 +1,79 @@
+Hello. 
+We need to develop bend stand control and measurement software. 
+It will be consisting of two main parts: FW for the Nucleo F446RE board and SW with gui for the user. 
+first - take project at  E:\Bavovna\Drone\Stefan as the reference. From it you can take pinout and basic board initialisation. 
+Board is connected to HBS86H driver and provides it step/dir/en signals
+Driver controls 86HS2140 motor
+As sensor  Keli DEF 200kg used
+AFE - HX711
+
+
+
+FW need to cover: 
+1) Connection to one AFE boards. AFE board type is HX711. Initial config should be 80Hz samplerate, PGA gain 128
+Implementation, drivers you can inherrit from E:\Bavovna\Drone\Thrust_Stand_HAW   No changes in that folder alowed
+2) Need to have start/stop switches and zeroing mechanism 
+3) Have NC button to imidiately stop the motor
+4) Need to have configuration settings for AFE, also should have parameter to calibrate number of steps per mm
+5) Need to have comand, which will read all configurations
+6) Need to have comand to set each of available configuration parameters
+7) Need to have comand which set/reset mark to data chunk be used for analysys (just 0 or 1, let's call it data validity flag)
+8) Need to have comands for start/stop data streaming
+9) Connection to the PC over UART. Use 921600 speed, no dataflow control. All the UART communication should have CRC16 checks
+10) Data streaming to the PC.  Data block must start with the separator. Data block is in hex, not human-readable. Must contain CRC-16. 
+11) Data chunk should contain fields for:
+- system time mark, 
+- Payload version (1 byte)
+- flag byte (here will have data validity flag)
+- AFE data (32 bit),
+- setpoint distance 
+- CRC-16
+
+SW need to cover: 
+1) Should provide an interface to config connected board. So we need to be able to read actual settings from the connected board, display it into dedicated fields, save to file/recall, change, write back to the board, validate writing. 
+2) Should have safety limits settings - for travel and load
+3) Should have mappings/marks which will be addad to the test report. For example - measured element, number. Also leave an option to add custom 
+4) Should have realtime display window. There I want to be able to swith on/off plots for each value which I'm getting from the board, or which is calculated from that data. Realtime display window should be detouchable
+5) Need to have manual control tab, where I'll be able to manualy move motor with slider, entering travel distance, travel forward/rear for 0.1mm, 1mm, 10mm. Button for immediate motor stop. 
+6) Safety knob (NC), which should immediately stop step motor. Also keybord button pause/brake should from any place stop motor/script execution
+7) Also there I need to have buttons to start/stop datastream from the HW board, record capture to the file, take momentary sample
+8) Should have calibration and tare tab. 
+On calibration tab - we need to have a button, which will run the wizard, which will guide us thru the calibration steps. So it shows step description, and continue button.
+
+Example sequence: 
+Travel calibration:
+1. Travel calibration, step1: travel for 10mm, show to an operator window, where he should put real measured distance. Recalculate step-per-mm number, send to the board. 
+2. Travel calibration, step2: Travel for 50mm more, show window with entry field, fine-tune steps-per-dir constant
+
+Pull calibration:
+1. step1: ask operator te remove load, measure reference level
+2. step2: Ask operator to put known weight, enter it to the field, click continue (then data streaming is on, we collect and average data for 10s)
+2. step3: Ask operator to put bigger known weight, enter it to the field, click continue (then data streaming is on, we collect and average data for 10s)
+Then we calculate, how linear points are, trying to linear approximate points (if they are linear), calculate K and B for slipe/offset, and then this coefficients will be used for scaling charts from the raw data
+Calibration result will be saved to the file, will be loaded by default later 
+
+Tare runs data capture, collect data for some amount of time (10s, for example), calculates average and use this value to compensate offset (for pull)
+Tare button should be available from any tab, because it will be clicked/executed before each measurement
+
+12) Should have tab to define and execute test steps (where we define time, target travel or load, speed of travel and ramping, , settling time, capture duration. Data capture is enabled the whole time, but for the report only data after settling time and while no changes in throttle happens is taken). Also pattern can be looped, control should be present
+13) Wizards to generate steps, ramps, other sequences. 
+14) Sequences can be saved and recalled. 
+15) When we have defined sequence - we should have the chart, x-axis is the travel, y - load, which we see at sequence. When sequence is executed - moving line marker should display actual stage
+
+
+Development should be done in specification-driven way. 
+Let's define roles - 
+1) Orchestrant - takes care on agents control and communicating with me
+2) Researcher - do research on how to control that driver, board. Also let it analyze thrust_stand project and take it's gui solutions as example. explores details about used hardware and software, firmware, stores this data and preparing guidelines for implementers
+3) Implementer A - will be taking care of FW for the PCB. Writes the drivers, code, managing project for it. Proficient in embedded design and arduino.
+4) Implementer B - takes care of backend on PC SW side. Drivers, API's, communication with the PCB 
+5) Implementer C - integrator, who will allign and check interface between PCB and SW
+6) Implementer D - will work on GUI for using the board
+7) Validator E - checks, test, validation for th FW
+8) Validator F - checks, tests, validation for SW
+
+
+All the work should be in E:\Bavovna\Drone\Bird.Bend_Stend
+Everything related to HW desigh - in E:\Bavovna\Drone\Bird.Bend_Stend\01_HW
+Everything related to FW desigh - in E:\Bavovna\Drone\Bird.Bend_Stend\02_FW
+Everything related to SW desigh - in E:\Bavovna\Drone\Bird.Bend_Stend\03_SW

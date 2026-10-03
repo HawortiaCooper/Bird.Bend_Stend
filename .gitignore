@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# PlatformIO / FW build
+.pio/
+02_FW/.vscode/
+*.elf
+*.map
+*.bin
+*.hex
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
+
+# Recordings produced by the app
+03_SW/recordings/
+*.rawdump
