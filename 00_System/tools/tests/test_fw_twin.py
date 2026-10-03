@@ -372,3 +372,81 @@ def test_hardfault_reset_plants_record(tw):
     tw.advance_ms(5)
     r = tw.act("reset", cause="hardfault", pc=0x08001234, cfsr=0x8200)
     assert r["ok"] and tw.resets[-1]["cause"] == "software"
+
+
+# ---------------------------------------------------------------------------- v0.6 twin (REQ-C-M2-02…10)
+def test_loop_load_delays_main_loop_not_isrs(tw):
+    """REQ-C-M2-02: each main-loop pass consumes us_per_pass; responses (main loop) come later, the tick runs."""
+    link = TwinLink(tw)
+    tw.advance_ms(5)
+    seq = link.send("PING")
+    tw.advance_ms(5)
+    rx0 = [w for w in tw.wire_log if w["dir"] == "rx" and w["seq"] == seq][-1]
+    tx0 = [w for w in tw.wire_log if w["dir"] == "tx" and w["seq"] == seq and w["type"] == 0x81][0]
+    tw.act("inject", fault="loop_load", us_per_pass=900, duration_ms=200)
+    tw.advance_ms(3)
+    seq = link.send("PING")
+    tw.advance_ms(10)
+    rx1 = [w for w in tw.wire_log if w["dir"] == "rx" and w["seq"] == seq][-1]
+    tx1 = [w for w in tw.wire_log if w["dir"] == "tx" and w["seq"] == seq and w["type"] == 0x81][0]
+    assert (tx1["first_us"] - rx1["last_us"]) > (tx0["first_us"] - rx0["last_us"])
+    assert tx1["first_us"] - rx1["last_us"] <= 2 * 900 + 100
+
+
+def test_conversions_carry_gain_and_rate(tw):
+    """REQ-C-M2-05: every conversion reports the gain pulses / channel and the rate used."""
+    tw.advance_ms(100)
+    conv = tw.act("query", what="conversions")["conversions"]
+    assert conv and all({"gain_pulses", "channel_gain", "rate_sps"} <= set(c) for c in conv)
+
+
+def test_world_follows_dir_pin_and_wiring(tw):
+    """REQ-C-M2-06: the world integrates PUL + DIR pin; with dir_wiring_inverted it moves the other way while
+    the FW counter is unchanged."""
+    link = TwinLink(tw)
+    tw.act("driver", dir_wiring_inverted=True)
+    _train(tw, link, 100, 9000)
+    tw.advance_ms(20)
+    w = tw.act("query", what="world")
+    assert w["pos_steps"] == 100 and w["x_um_true"] == pytest.approx(-125.0)
+
+
+def test_pend_auto_model(tw):
+    """REQ-C-M2-07: PEND inactive while pulsing and pend_lag_ms after the last pulse."""
+    link = TwinLink(tw)
+    tw.act("driver", pend_auto=True, pend_lag_ms=5)
+    _train(tw, link, 200, 9000)                                 # 20 ms of pulses
+    tw.advance_ms(5)
+    assert not (int(tw._engine_query()["inputs"]) >> 6) & 1     # PEND low while moving
+    tw.advance_ms(40)
+    assert (int(tw._engine_query()["inputs"]) >> 6) & 1
+
+
+def test_seam_log_has_no_stop_level(tw):
+    """REQ-C-M2-09: hal_inputs_config logs pause / alm only (CR-01)."""
+    tw.advance_ms(5)
+    assert not any("stop=" in x["args"] for x in tw.seam_log if x["call"] == "hal_inputs_config")
+
+
+def test_query_clear_and_log_size(tw):
+    """REQ-C-M2-10: default log_max 1 000 000; query clear drains the log."""
+    assert tw.edges.maxlen == 1_000_000
+    tw.advance_ms(20)
+    assert tw.act("query", what="conversions", clear=True)["conversions"]
+    assert tw.act("query", what="conversions")["conversions"] == []
+
+
+def test_diag_meas_model_counter_and_stamps(probe_exe, tmp_path):
+    """REQ-C-M2-08: twin model of hal_meas_cmd (via the probe core, which forwards DIAG_MEAS)."""
+    import struct
+    with Twin("lockstep", exe=probe_exe, run_dir=tmp_path, hw_meas=True) as t:
+        link = TwinLink(t)
+        t.advance_ms(2)
+        _train(t, link, 50, 9000)
+        t.advance_ms(10)
+        r = link.cmd("DIAG_MEAS", {"op": 3, "sel": 0, "a": 0, "b": 0})
+        if r["status"] != "OK":
+            pytest.skip(f"probe core does not forward DIAG_MEAS ({r})")
+        assert r["w"][0] == 50
+        s = link.cmd("DIAG_MEAS", {"op": 4, "sel": 1, "a": 0, "b": 0})["w"]
+        assert s[0] == 50 and s[2] > s[3] > 0

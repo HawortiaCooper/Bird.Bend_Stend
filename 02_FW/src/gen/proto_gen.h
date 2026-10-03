@@ -1,5 +1,5 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.5, PROTO 1.0, PAYLOAD 1)
+ * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.6, PROTO 1.0, PAYLOAD 1)
  * Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
  * Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes
  * and their argument enums. FW code uses these identifiers only (no hand-listed codes).
@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define PROTO_ICD_VERSION      "0.5"
+#define PROTO_ICD_VERSION      "0.6"
 #define PROTO_MAJOR            1u
 #define PROTO_MINOR            0u
 #define PROTO_PAYLOAD_VERSION  1u
@@ -46,6 +46,9 @@ extern "C" {
 #define PROTO_TWIN_TCP_PORT          5760u                  /* FW host twin serial-over-TCP port (127.0.0.1) */
 #define PROTO_TWIN_CTL_PORT          5761u                  /* FW host twin world-control port (JSON lines, tools/README) */
 #define PROTO_HOME_RELEASE_MAX_UM    0x00002710UL           /* HOME: START not released within this travel in RELEASE / BACKOFF -> HOME_WIRING (ICD §5.4, OI-FW-23) */
+#define PROTO_MEAS_BODY_LEN          64u                    /* DIAG_MEAS OK body: u32 w[16] (ICD Appendix C) */
+#define PROTO_MEAS_STAMPS_PER_PAGE   14u                    /* DIAG_MEAS STAMPS: stamps per page (w2..w15) */
+#define PROTO_MEAS_MAGIC             0x4D454153UL           /* DIAG_MEAS NOINIT w0 when the .noinit block is valid ('MEAS') */
 #define PROTO_HOME_SLOW_EXTRA_UM     0x00002710UL           /* HOME: no START edge within home.backoff_um + this travel in SLOW_APPROACH -> HOME_NOT_FOUND (ICD §5.4, OI-FW-23) */
 
 /* ---- command TYPEs (ICD §3.2); response TYPE = TYPE | PROTO_RESP_BIT ---- */
@@ -76,6 +79,7 @@ typedef enum {
     CMD_FAULT_CLEAR          = 0x3A,
     CMD_PAUSE                = 0x3B,
     CMD_RESUME               = 0x3C,
+    CMD_DIAG_MEAS            = 0x3D,
 } proto_cmd_t;
 
 /* fixed request LEN per command (E_LENGTH otherwise) */
@@ -105,6 +109,7 @@ typedef enum {
 #define CMD_REQ_LEN_FAULT_CLEAR          0u
 #define CMD_REQ_LEN_PAUSE                0u
 #define CMD_REQ_LEN_RESUME               0u
+#define CMD_REQ_LEN_DIAG_MEAS            8u
 
 /* commands the SW sends through its priority path (ICD §2.4) */
 #define CMD_IS_PRIORITY(t) \
@@ -186,7 +191,9 @@ typedef enum {
 #define BLOCK_DRIVER_ALARM               0x0200u /* ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging) */
 #define BLOCK_PAUSED_BIT                 10u
 #define BLOCK_PAUSED                     0x0400u /* PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31) */
-#define BLOCK_DEFINED_MASK               0x07FFu
+#define BLOCK_MEAS_STATE_BIT             11u
+#define BLOCK_MEAS_STATE                 0x0800u /* DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c) */
+#define BLOCK_DEFINED_MASK               0x0FFFu
 
 /* ---- STOP mode (ICD §5.5) ---- */
 typedef enum {
@@ -280,7 +287,9 @@ typedef enum {
 #define FEAT_BUTTONS                    0x00000080UL /* PAUSE button input (the STOP/BREAK input is retired, D-36) */
 #define FEAT_DRV_SIGNALS_BIT            8u
 #define FEAT_DRV_SIGNALS                0x00000100UL /* ALM/PEND/DRV_POWER inputs */
-#define FEAT_DEFINED_MASK               0x000001FFUL
+#define FEAT_HW_MEAS_BIT                9u
+#define FEAT_HW_MEAS                    0x00000200UL /* measurement build (HW_MEAS, CR-02 / D-40c): DIAG_MEAS 0x3D executes; 0 = release / twin -> E_INTERNAL NOT_IN_BUILD */
+#define FEAT_DEFINED_MASK               0x000003FFUL
 
 /* ---- DATA flags (u8; also STATUS flags) (ICD §7.6) ---- */
 #define DF_VALID_BIT                  0u
@@ -492,6 +501,83 @@ typedef enum {
 #define AFES_MISSED_EDGE_BIT            1u
 #define AFES_MISSED_EDGE                0x02u /* at least one DOUT-ready edge was missed before this sample (recovered by hal_hx711_kick or a late edge): the core sets OVERRUN in the next DATA frame */
 #define AFES_DEFINED_MASK               0x03u
+
+/* ---- DIAG_MEAS op (request byte 0) (ICD App. C) ---- */
+typedef enum {
+    MEAS_OP_INFO                     = 0, /* variant, clocks, ring size, stamp overhead */
+    MEAS_OP_PROBE_ARM                = 1, /* arm the event-latency probe (MT-3) */
+    MEAS_OP_PROBE_READ               = 2, /* read the probe captures */
+    MEAS_OP_COUNTER                  = 3, /* independent PUL counter (MT-2): read / reset */
+    MEAS_OP_STAMPS                   = 4, /* device-time stamp ring (MT-4), newest first */
+    MEAS_OP_NOINIT                   = 5, /* .noinit block (last PUL, heartbeat, hang start; survives a reset) */
+    MEAS_OP_STIM_RUN                 = 6, /* stimulus series on the J-STIM output (MT-7) */
+    MEAS_OP_HANG                     = 7, /* test-image hang injection while moving (IWDG evidence) */
+    MEAS_OP_STATIC_LEVEL             = 8, /* drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed) */
+    MEAS_OP_DWT                      = 9, /* DWT section statistics (HW_MEAS_DWT builds; else w0 = 0) */
+} proto_meas_op_t;
+
+/* ---- DIAG_MEAS probe event source (PROBE_ARM sel; J-EVT selector position, FW_test_plan §6.2) (ICD App. C) ---- */
+typedef enum {
+    MEAS_SRC_ESTOP                    = 0, /* E-stop sense PA10 */
+    MEAS_SRC_LIMIT_START              = 1, /* START limit PB0 */
+    MEAS_SRC_LIMIT_END                = 2, /* END limit PC1 */
+    MEAS_SRC_PAUSE                    = 3, /* PAUSE button PB6 */
+    MEAS_SRC_DOUT                     = 4, /* HX711 DOUT PB4 (data ready) */
+    MEAS_SRC_DRV_PWR                  = 5, /* driver-power sense PA7 */
+    MEAS_SRC_RX                       = 6, /* USART2 RX PA3 (start bit of a frame byte) */
+    MEAS_SRC_DIR                      = 7, /* DIR output node */
+    MEAS_SRC_STIM                     = 8, /* stimulus output PB8 (self-test) */
+} proto_meas_src_t;
+
+/* ---- DIAG_MEAS probe mode (PROBE_ARM a bits 0-1) (ICD App. C) ---- */
+typedef enum {
+    MEAS_MODE_TRIGGER                  = 0, /* the first event edge after arming starts the probe counter (single shot) */
+    MEAS_MODE_RESET                    = 1, /* every event edge restarts the probe counter (last event wins) */
+    MEAS_MODE_PWM_INPUT                = 2, /* PUL period and high width per pulse (min/max over the pulses since arming) */
+} proto_meas_probe_mode_t;
+
+/* ---- DIAG_MEAS PROBE_READ w0 flags (ICD App. C) ---- */
+#define MEAS_PF_ARMED_BIT                  0u
+#define MEAS_PF_ARMED                      0x0001u /* probe armed */
+#define MEAS_PF_TRIGGERED_BIT              1u
+#define MEAS_PF_TRIGGERED                  0x0002u /* the event occurred (w1 valid) */
+#define MEAS_PF_OVERCAPTURE_BIT            2u
+#define MEAS_PF_OVERCAPTURE                0x0004u /* a capture was overwritten before it was read (hardware over-capture) */
+#define MEAS_PF_WINDOW_OVERFLOW_BIT        3u
+#define MEAS_PF_WINDOW_OVERFLOW            0x0008u /* the probe counter overflowed after the event (window 65 536 ticks): later captures invalid */
+#define MEAS_PF_EDGE_BEFORE_EVENT_BIT      4u
+#define MEAS_PF_EDGE_BEFORE_EVENT          0x0010u /* a PUL edge was captured before the event (CCR = 0 case) */
+#define MEAS_PF_DEFINED_MASK               0x001Fu
+
+/* ---- DIAG_MEAS stamp channel (STAMPS sel) (ICD App. C) ---- */
+typedef enum {
+    MEAS_CHAN_EVT                      = 0, /* J-EVT edges (TIM8 CH1) */
+    MEAS_CHAN_PUL                      = 1, /* PUL rising edges (TIM8 CH2) */
+    MEAS_CHAN_DIR                      = 2, /* DIR edges (TIM8 CH4) */
+    MEAS_CHAN_AUX                      = 3, /* J-AUX edges (TIM1 CH4) */
+} proto_meas_chan_t;
+
+/* ---- DIAG_MEAS HANG where (HANG sel) (ICD App. C) ---- */
+typedef enum {
+    MEAS_HANG_MAIN                     = 0, /* main loop stops kicking the IWDG */
+    MEAS_HANG_TICK                     = 1, /* the 1 kHz tick hangs */
+    MEAS_HANG_ISR1                     = 2, /* level-1 ISR storm (software-triggered unused EXTI line, test image only) */
+} proto_meas_hang_where_t;
+
+/* ---- DIAG_MEAS STATIC_LEVEL pin (sel) (ICD App. C) ---- */
+typedef enum {
+    MEAS_PIN_PUL                      = 0, /* PUL output */
+    MEAS_PIN_DIR                      = 1, /* DIR output */
+} proto_meas_pin_t;
+
+/* ---- DIAG_MEAS INFO w0 variant (ICD App. C) ---- */
+#define MEAS_VAR_MEAS_BIT                   0u
+#define MEAS_VAR_MEAS                       0x00000001UL /* HW_MEAS build (MT-2/3/4/7, HANG, STATIC_LEVEL) */
+#define MEAS_VAR_DWT_BIT                    1u
+#define MEAS_VAR_DWT                        0x00000002UL /* HW_MEAS_DWT build (DWT section statistics) */
+#define MEAS_VAR_TWIN_MODEL_BIT             2u
+#define MEAS_VAR_TWIN_MODEL                 0x00000004UL /* the FW host twin's model of DIAG_MEAS (REQ-C-M2-08) */
+#define MEAS_VAR_DEFINED_MASK               0x00000007UL
 
 #ifdef __cplusplus
 }

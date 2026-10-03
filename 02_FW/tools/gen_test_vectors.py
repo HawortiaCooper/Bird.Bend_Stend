@@ -5,6 +5,7 @@ Reads IN PLACE (never copied):
     00_System/tools/vectors/check_vectors.json      command-acceptance oracle (ref_cmdcheck)
     00_System/tools/vectors/units_vectors.json      µm <-> steps, speed cap (ICD §0.1)
     00_System/tools/vectors/motion_vectors.json     ramp periods, stop paths, planner (M2, ref_motion.py)
+    00_System/tools/vectors/loadlim_vectors.json    FW load limit incl. the regrow window (ref_loadlim.py)
 and writes $BUILD_DIR/vectors/vec_{crc,frames,streams,check,units,names}.h (not in the repo).
 
 Consistency gate (build error = stale or mixed combination):
@@ -230,6 +231,8 @@ def req_init(f):
              f"{i32(d['raw_stop'])}, {d['cmp']}u }}")
     elif tn == "STOP":
         u = f".u.stop = {{ {d['mode']}u }}"
+    elif tn == "DIAG_MEAS":
+        u = f".u.meas = {{ {d['op']}u, {d['sel']}u, {d['a']}u, {d['b']}u }}"
     elif rc.REQ_LEN.get(tn, -1) == 0:
         u = ""
     else:
@@ -237,7 +240,7 @@ def req_init(f):
     return f"{{ .type = {t}u{', ' + u if u else ''} }}"
 
 
-RB = {"NACK": 0, "EMPTY": 1, "INFO": 2, "STATUS": 3, "PAGE": 4, "ENTRY": 5, "U32": 6, "U16": 7}
+RB = {"NACK": 0, "EMPTY": 1, "INFO": 2, "STATUS": 3, "PAGE": 4, "ENTRY": 5, "U32": 6, "U16": 7, "MEAS": 8}
 
 
 def gen_frames(v):
@@ -301,6 +304,8 @@ def gen_frames(v):
             resps.append((i, "U16", 0, d["settle_ms"], None))
         elif tn == "FAULT_CLEAR":
             resps.append((i, "U16", 0, bits(d["cleared"], rc.FAULTS), None))
+        elif tn == "DIAG_MEAS":
+            resps.append((i, "MEAS", 0, 0, d["w"]))
         elif len(d) == 1:
             resps.append((i, "EMPTY", 0, 0, None))
         else:
@@ -317,10 +322,12 @@ def gen_frames(v):
             out.append("};")
         elif kind == "ENTRY":
             out.append(f"static const param_entry_t VRE_{k} = {entry_init(obj)};")
+        elif kind == "MEAS":
+            out.append(f"static const uint32_t VRW_{k}[16] = {{" + ",".join(f"{w}u" for w in obj) + "};")
     out.append("enum { " + ", ".join(f"RB_{k} = {n}" for k, n in RB.items()) + " };")
     out.append("typedef struct { uint16_t idx; uint8_t kind; uint8_t status; uint32_t num;")
     out.append("    const info_t *info; const status_t *st; const param_entry_t *entries;")
-    out.append("    uint8_t page, page_count, n; } vec_resp_t;")
+    out.append("    uint8_t page, page_count, n; const uint32_t *w; } vec_resp_t;")
     out.append("static const vec_resp_t VEC_RESPS[] = {")
     for k, (i, kind, st, num, obj) in enumerate(resps):
         info = f"&VRI_{k}" if kind == "INFO" else "0"
@@ -329,7 +336,8 @@ def gen_frames(v):
         page = obj["page"] if kind == "PAGE" else 0
         pc = obj["page_count"] if kind == "PAGE" else 0
         n = len(obj["entries"]) if kind == "PAGE" else (1 if kind == "ENTRY" else 0)
-        out.append(f"    {{ {i}u, RB_{kind}, {st}u, {num}u, {info}, {sts}, {ent}, {page}u, {pc}u, {n}u }},")
+        w = f"VRW_{k}" if kind == "MEAS" else "0"
+        out.append(f"    {{ {i}u, RB_{kind}, {st}u, {num}u, {info}, {sts}, {ent}, {page}u, {pc}u, {n}u, {w} }},")
     out.append("};")
     out.append(f"#define VEC_RESPS_N {len(resps)}u")
 
@@ -384,10 +392,10 @@ def gen_check(v, dic):
              "(update the FW replay: cmd_ctx_t / this script)")
     by_key = {p.key: p for p in dic.params}
     defaults = v["state_defaults"]
-    for x in v["vectors"]:
+    for x in v["vectors"] + v.get("hw_meas_vectors", []):
         if set(RETIRED_KEYS) & set(x["state"]):
             fail(f"check vector {x['name']}: retired state key set (state_schema {STATE_SCHEMA})")
-    for k in list(defaults) + [k for x in v["vectors"] for k in x["state"]]:
+    for k in list(defaults) + [k for x in v["vectors"] + v.get("hw_meas_vectors", []) for k in x["state"]]:
         if k not in STATE_KEYS:
             fail(f"check_vectors.json: unknown state key {k!r} (state_schema {STATE_SCHEMA})")
     out = ["typedef struct { uint16_t id; uint32_t raw; } vec_pov_t;",
@@ -396,49 +404,62 @@ def gen_check(v, dic):
            "    bool estop_latched, estop_input_open; uint32_t estop_closed_ms;",
            "    bool halt_latched;",
            "    uint16_t faults, fault_causes; bool limit_start, limit_end, afe_stale, afe_saturated;",
-           "    int32_t raw; bool drv_power, alm_active, nvm_record_valid, paused;",
+           "    int32_t raw; bool drv_power, alm_active, nvm_record_valid, paused, hw_meas;",
            "    uint8_t n_par; const vec_pov_t *par;",
            "    uint8_t type; uint8_t seq; const uint8_t *payload; uint16_t len;",
            "    const uint8_t *req_frame; uint16_t req_frame_len;",
            "    uint8_t exp_status; uint16_t exp_detail; const uint8_t *resp_frame; uint16_t resp_len;",
            "    int8_t paused_after; } vec_check_t;"]
-    rows = []
-    for k, x in enumerate(v["vectors"]):
-        st = dict(defaults)
-        st.update(x["state"])
-        pars = []
-        for key, val in st["params"].items():
-            if key not in by_key:
-                fail(f"check vector {x['name']}: unknown parameter {key}")
-            p = by_key[key]
-            pars.append((p.id, gen_params.raw_u32(p, val)))
-        if pars:
-            out.append(f"static const vec_pov_t VCP_{k}[] = {{" +
-                       ",".join(f"{{0x{pid:04X}u,0x{raw:08X}u}}" for pid, raw in pars) + "};")
-        rq = x["request"]
-        pl = bytes.fromhex(rq["payload_hex"])
-        out.append(f"static const uint8_t VCQ_{k}[] = {carr(pl)};")
-        out.append(f"static const uint8_t VCF_{k}[] = {carr(bytes.fromhex(rq['frame_hex']))};")
-        e = x["expect"]
-        resp = bytes.fromhex(e.get("response_frame_hex", ""))
-        out.append(f"static const uint8_t VCR_{k}[] = {carr(resp)};")
-        pa = e.get("paused_after")
-        rows.append(
-            f"    {{ {cstr(x['name'])}, {rc.MOTION_STATE.index(st['motion_state'])}u, "
-            f"{st['enabling_left_ms']}u, {cbool(st['homed'])}, {i32(st['pos_um'])}, "
-            f"{cbool(st['estop_latched'])}, {cbool(st['estop_input_open'])}, {st['estop_closed_ms']}u, "
-            f"{cbool(st['halt_latched'])}, "
-            f"0x{bits(st['faults'], rc.FAULTS):04X}u, 0x{bits(st['fault_causes'], rc.FAULTS):04X}u, "
-            f"{cbool(st['limit_start'])}, {cbool(st['limit_end'])}, {cbool(st['afe_stale'])}, "
-            f"{cbool(st['afe_saturated'])}, {i32(st['raw'])}, {cbool(st['drv_power'])}, "
-            f"{cbool(st['alm_active'])}, {cbool(st['nvm_record_valid'])}, {cbool(st['paused'])}, "
-            f"{len(pars)}u, {('VCP_' + str(k)) if pars else '0'}, {rq['type']}u, {rq['seq']}u, VCQ_{k}, "
-            f"{len(pl)}u, VCF_{k}, {len(bytes.fromhex(rq['frame_hex']))}u, {rc.STATUS[e['status']]}u, "
-            f"{e['detail']}u, VCR_{k}, {len(resp)}u, {-1 if pa is None else int(bool(pa))} }},")
+    def table(vectors, prefix, hw_meas):
+        rows = []
+        for k, x in enumerate(vectors):
+            st = dict(defaults)
+            st.update(x["state"])
+            pars = []
+            for key, val in st["params"].items():
+                if key not in by_key:
+                    fail(f"check vector {x['name']}: unknown parameter {key}")
+                p = by_key[key]
+                pars.append((p.id, gen_params.raw_u32(p, val)))
+            tag = f"{prefix}{k}"
+            if pars:
+                out.append(f"static const vec_pov_t VCP_{tag}[] = {{" +
+                           ",".join(f"{{0x{pid:04X}u,0x{raw:08X}u}}" for pid, raw in pars) + "};")
+            rq = x["request"]
+            typ = int(rq["type"], 0) if isinstance(rq["type"], str) else int(rq["type"])
+            pl = bytes.fromhex(rq["payload_hex"])
+            out.append(f"static const uint8_t VCQ_{tag}[] = {carr(pl)};")
+            out.append(f"static const uint8_t VCF_{tag}[] = {carr(bytes.fromhex(rq['frame_hex']))};")
+            e = x["expect"]
+            resp = bytes.fromhex(e.get("response_frame_hex", ""))
+            out.append(f"static const uint8_t VCR_{tag}[] = {carr(resp)};")
+            pa = e.get("paused_after")
+            rows.append(
+                f"    {{ {cstr(x['name'])}, {rc.MOTION_STATE.index(st['motion_state'])}u, "
+                f"{st['enabling_left_ms']}u, {cbool(st['homed'])}, {i32(st['pos_um'])}, "
+                f"{cbool(st['estop_latched'])}, {cbool(st['estop_input_open'])}, {st['estop_closed_ms']}u, "
+                f"{cbool(st['halt_latched'])}, "
+                f"0x{bits(st['faults'], rc.FAULTS):04X}u, 0x{bits(st['fault_causes'], rc.FAULTS):04X}u, "
+                f"{cbool(st['limit_start'])}, {cbool(st['limit_end'])}, {cbool(st['afe_stale'])}, "
+                f"{cbool(st['afe_saturated'])}, {i32(st['raw'])}, {cbool(st['drv_power'])}, "
+                f"{cbool(st['alm_active'])}, {cbool(st['nvm_record_valid'])}, {cbool(st['paused'])}, "
+                f"{cbool(hw_meas)}, "
+                f"{len(pars)}u, {('VCP_' + tag) if pars else '0'}, {typ}u, {rq['seq']}u, VCQ_{tag}, "
+                f"{len(pl)}u, VCF_{tag}, {len(bytes.fromhex(rq['frame_hex']))}u, {rc.STATUS[e['status']]}u, "
+                f"{e['detail']}u, VCR_{tag}, {len(resp)}u, {-1 if pa is None else int(bool(pa))} }},")
+        return rows
+
+    rows = table(v["vectors"], "", False)
     out.append("static const vec_check_t VEC_CHECK[] = {")
     out += rows
     out.append("};")
     out.append(f"#define VEC_CHECK_N {len(v['vectors'])}u")
+    mv = v.get("hw_meas_vectors", [])           # ICD v0.6: replayed with FEAT_HW_MEAS = 1 (D-40 c)
+    rows = table(mv, "m", True)
+    out.append("static const vec_check_t VEC_CHECK_MEAS[] = {")
+    out += rows if rows else ["    { 0 }"]
+    out.append("};")
+    out.append(f"#define VEC_CHECK_MEAS_N {len(mv)}u")
     return out
 
 
@@ -506,6 +527,37 @@ def gen_motion(v):
     return out
 
 
+def gen_loadlim(v):
+    """loadlim_vectors.json (ref_loadlim.py oracle, ICD v0.6 §5.5, D-40 d)."""
+    ops = {"sample": 0, "fault_clear": 1, "config": 2}
+    out = ["typedef struct { uint8_t op; int32_t a, b; uint8_t trip_samples; int32_t regrow;",
+           "    int8_t trip; int8_t window; int32_t ref; } vec_llstep_t;",
+           "typedef struct { const char *name; int32_t lo, hi; uint8_t trip_samples; int32_t regrow;",
+           "    uint16_t n; const vec_llstep_t *steps; } vec_ll_t;"]
+    for k, c in enumerate(v["cases"]):
+        rows = []
+        for st in c["steps"]:
+            o = ops[st["op"]]
+            if o == 0:
+                a, b, ts, rg = st["raw"], 0, 0, 0
+            elif o == 2:
+                a, b, ts, rg = st["load_raw_min"], st["load_raw_max"], st["trip_samples"], st["regrow"]
+            else:
+                a, b, ts, rg = 0, 0, 0, 0
+            trip = -1 if "trip" not in st else int(bool(st["trip"]))
+            win = -1 if "regrow_window" not in st else int(bool(st["regrow_window"]))
+            rows.append(f"{{{o}u, {i32(a)}, {i32(b)}, {ts}u, {i32(rg)}, {trip}, {win}, {i32(st.get('ref', 0))}}}")
+        out.append(f"static const vec_llstep_t VLL_{k}[] = {{" + ",".join(rows) + "};")
+    out.append("static const vec_ll_t VEC_LOADLIM[] = {")
+    for k, c in enumerate(v["cases"]):
+        i = c["init"]
+        out.append(f"    {{ {cstr(c['name'])}, {i32(i['load_raw_min'])}, {i32(i['load_raw_max'])}, "
+                   f"{i['trip_samples']}u, {i32(i['regrow'])}, {len(c['steps'])}u, VLL_{k} }},")
+    out.append("};")
+    out.append(f"#define VEC_LOADLIM_N {len(v['cases'])}u")
+    return out
+
+
 def gen_names():
     """Every generated identifier compared with the hand-written ref_codec tables: a missing or
     renamed macro is a compile error, a different value a test failure (IF-001, GF-08)."""
@@ -547,7 +599,7 @@ def gen_names():
 def main():
     jsons = {}
     raw = b""
-    for name in ("protocol_vectors", "check_vectors", "units_vectors", "motion_vectors"):
+    for name in ("protocol_vectors", "check_vectors", "units_vectors", "motion_vectors", "loadlim_vectors"):
         path = os.path.join(VEC, name + ".json")
         b = open(path, "rb").read()
         raw += b
@@ -563,6 +615,7 @@ def main():
     write("vec_units.h", gen_units(jsons["units_vectors"]), sha)
     write("vec_names.h", gen_names(), sha)
     write("vec_motion.h", gen_motion(jsons["motion_vectors"]), sha)
+    write("vec_loadlim.h", gen_loadlim(jsons["loadlim_vectors"]), sha)
     print(f"gen_test_vectors: ICD {icd}, hash 0x{h:08X}: {len(pv['crc16'])} crc, {len(pv['frames'])} "
           f"frames, {len(pv['streams'])} streams, {len(jsons['check_vectors']['vectors'])} check, "
           f"{len(jsons['units_vectors']['um_to_steps'])}+{len(jsons['units_vectors']['steps_to_um'])}+"

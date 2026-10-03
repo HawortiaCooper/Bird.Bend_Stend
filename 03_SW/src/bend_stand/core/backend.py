@@ -47,6 +47,7 @@ from bend_stand.core.link import SUPERVISOR_TICK_NS
 from bend_stand.core.liveness import LivenessMonitor
 from bend_stand.core.motion import MotionController
 from bend_stand.core.model import (
+    INT_DF, INT_DS, INT_SYS,
     INDICATOR_UNKNOWN, BackendStatus, BoardConfigFile, CalibrationStatus, ClearResult, DeviceInfo, EndpointInfo,
     EngineState, GateCode, GateId, GateItem, GateResult, HotkeyStatus, Indicator, Indicators, Issue, IssueSeverity,
     LimitConfig, LinkState, LinkStatus, MotionStatus, OperationStatus, SafetyStatus,
@@ -111,7 +112,7 @@ class ConfigAPI:
 
     def check(self, edits: Mapping[str, Any]) -> list[Issue]:
         d = self._be.device
-        return check_edits(d.params.values(), edits, moving=bool(d.last_flags & pg.DataFlags.MOVING))
+        return check_edits(d.params.values(), edits, moving=bool(d.last_flags & INT_DF.MOVING))
 
     def write_and_verify_async(self, edits: Mapping[str, Any]) -> Future[VerifyReport]:
         return self._be._job(self._be.device.write_and_verify_job, dict(edits))  # noqa: SLF001
@@ -178,7 +179,7 @@ class LimitsAPI:
 
     def set(self, cfg: LimitConfig) -> list[Issue]:
         """Apply the limits (refused while moving); returns the ERROR issues (empty = applied)."""
-        if self._be.device.last_flags & pg.DataFlags.MOVING:
+        if self._be.device.last_flags & INT_DF.MOVING:
             return [Issue(None, IssueSeverity.ERROR, "MOVING", "limits cannot be changed while the axis moves")]
         issues = [i for i in self.check(cfg) if i.severity == IssueSeverity.ERROR]
         if not issues:
@@ -195,7 +196,7 @@ class LimitsAPI:
     def set_manual_thresholds_async(self, raw_min: int, raw_max: int, zero_raw: int = 0) -> Future[ThresholdState]:
         """M2 bring-up path: operator-entered raw thresholds, written and verified (state VERIFIED, cal_id
         ``manual-raw``). Refused while moving."""
-        if self._be.device.last_flags & pg.DataFlags.MOVING:
+        if self._be.device.last_flags & INT_DF.MOVING:
             return failed_future(GateRefused(GateResult((GateItem(GateCode.MOTION_ACTIVE, Severity.REFUSE,
                                                                   "axis moving"),))))
         issues = self._be.device.threshold_mgr.set_manual(raw_min, raw_max, zero_raw)
@@ -433,7 +434,7 @@ class Backend:
     def shutdown(self) -> None:
         """STOP if moving, stop recording, disconnect, join threads."""
         try:
-            if self.device.last_flags & pg.DataFlags.MOVING:
+            if self.device.last_flags & INT_DF.MOVING:
                 self.device.stop(pg.StopMode.IMMEDIATE, "shutdown")
             if self.recorder.state != "IDLE":
                 self.recorder.stop()
@@ -587,7 +588,7 @@ class Backend:
         self.hotkey = wh.GlobalHaltHotkey(lambda src: self.halt(src), backend=backend, on_status=on_status,
                                           on_test=on_test, clock_ns=self.clock.monotonic_ns,
                                           thread_init=lambda: raise_thread_priority(2))
-        self.hotkey.can_test = lambda: not (self.device.last_flags & pg.DataFlags.MOVING)
+        self.hotkey.can_test = lambda: not (self.device.last_flags & INT_DF.MOVING)
         if self.lockstep:                         # no threads on the lockstep clock: test_hooks.hotkey_press()
             self._hotkey_mode, self._hotkey_reason = "UNAVAILABLE", "lockstep clock (no hotkey thread)"
             return
@@ -778,14 +779,14 @@ class Backend:
             if n:
                 src = None
                 if n == "HALT":
-                    src = self._latch_source(bool(flags & pg.DataFlags.HALT), d.halt_src_ev,
+                    src = self._latch_source(bool(flags & INT_DF.HALT), d.halt_src_ev,
                                              st.halt_src if st is not None else None)
                 put(n, bool(flags >> i & 1), live, source=src)
         for i, n in enumerate(pg.DATA_STATUS_BITS):
             if n:
                 src = None
                 if n == "PAUSED":
-                    src = self._latch_source(bool(status & pg.DataStatus.PAUSED), d.pause_src_ev,
+                    src = self._latch_source(bool(status & INT_DS.PAUSED), d.pause_src_ev,
                                              st.pause_src if st is not None else None)
                 put(n, bool(status >> i & 1), live and bool(vmask >> i & 1), source=src)
         for i, n in enumerate(pg.FAULTS_BITS):
@@ -824,10 +825,11 @@ class Backend:
         return GateSnapshot(
             link=d.state, compat=d.compat, stream_on=d.stream_on, data_fresh=fresh, flags=flags,
             status=status_bits & vmask, faults=st.faults if st else 0, io=(st.io & d.valid_io_mask()) if st else 0,
-            moving=bool(flags & pg.DataFlags.MOVING) or self.motion.busy, recording=self.recorder.state != "IDLE",
+            moving=self.motion.fw_moving() or self.motion.busy, recording=self.recorder.state != "IDLE",
             status_known=st is not None, hotkey_available=bool(hk is not None and hk.available),
             features=d.info.features if d.info is not None else frozenset(), valid_status=vmask,
-            motion_state=st.motion if st is not None else None, thresholds_state=d.thresholds.state,
+            motion_state=("ENABLING" if not flags & INT_DF.ENABLED and self.motion.enabling_left_ms(now) > 0
+                          else st.motion if st is not None else None), thresholds_state=d.thresholds.state,
             hotkey_test=bool(hk is not None and hk.test_mode_active), jogging=self.motion.jogging, raw=raw,
             zero_raw=int(params.get("safety.zero_raw", 0) or 0),
             home_max_load_raw=int(params.get("home.max_load_raw", 322_123) or 322_123), load_known=False)
@@ -845,13 +847,13 @@ class Backend:
             except ValueError:
                 hp = str(st.home_phase)
         return MotionStatus(
-            moving=bool(flags & pg.DataFlags.MOVING), homed=bool(flags & pg.DataFlags.HOMED),
-            enabled=bool(flags & pg.DataFlags.ENABLED), enabling_left_ms=m.enabling_left_ms(now),
-            paused=bool(status_bits & pg.DataStatus.PAUSED), position_mm=pos,
+            moving=bool(flags & INT_DF.MOVING), homed=bool(flags & INT_DF.HOMED),
+            enabled=bool(flags & INT_DF.ENABLED), enabling_left_ms=m.enabling_left_ms(now),
+            paused=bool(status_bits & INT_DS.PAUSED), position_mm=pos,
             test_position_mm=None if pos is None else pos - m.x_zero_mm, commanded_target_mm=m.commanded_target_mm,
             pending_target_mm=m.pending_target_mm, x_zero_mm=m.x_zero_mm, owner="MANUAL",
             motion_state=st.motion if st is not None else None, limits=m.limits() if self.device.connected else None,
-            jogging=m.jogging, home_phase=hp, pos_uncertain=bool(status_bits & pg.DataStatus.POS_UNCERTAIN))
+            jogging=m.jogging, home_phase=hp, pos_uncertain=bool(status_bits & INT_DS.POS_UNCERTAIN))
 
     def status(self) -> BackendStatus:
         now = self.clock.monotonic_ns()
@@ -861,13 +863,13 @@ class Backend:
         stats = self._link_stats()
         lt = self.pipeline.latest_copy()
         data_age = None if d.last_data_ns is None else (now - d.last_data_ns) / 1e6
-        moving = bool(flags & pg.DataFlags.MOVING)
+        moving = bool(flags & INT_DF.MOVING)
         fw_rate = (st.afe_rate_dsps / 10.0) if st is not None and st.afe_rate_dsps else None
         self._status_seq += 1
         return BackendStatus(
             link=LinkStatus(d.state, d.why, d.endpoint, d.compat, d.info, stats),
             stream=StreamStatus(d.stream_on, lt.rate_sps, fw_rate,
-                                bool(status_bits & pg.DataStatus.AFE_RATE_MISMATCH), data_age),
+                                bool(status_bits & INT_DS.AFE_RATE_MISMATCH), data_age),
             indicators=self._indicators(now),
             motion=self._motion_status(now, flags, status_bits, st),
             safety=SafetyStatus(thresholds=d.thresholds),
@@ -876,10 +878,10 @@ class Backend:
             recording=self.recorder.status(),
             gates=self._gates(now),
             hotkey=self.hotkey_status(),
-            cfg_dirty=None if st is None else bool(st.sys_flags & pg.SysFlags.CFG_DIRTY),
+            cfg_dirty=None if st is None else bool(st.sys_flags & INT_SYS.CFG_DIRTY),
             config_read_only=d.compat.config_read_only,
-            reboot_pending=None if st is None else bool(st.sys_flags & pg.SysFlags.REBOOT_PENDING),
-            nvm_defaulted=None if st is None else bool(st.sys_flags & pg.SysFlags.NVM_DEFAULTED),
+            reboot_pending=None if st is None else bool(st.sys_flags & INT_SYS.REBOOT_PENDING),
+            nvm_defaulted=None if st is None else bool(st.sys_flags & INT_SYS.NVM_DEFAULTED),
             board=st, seq=self._status_seq)
 
 

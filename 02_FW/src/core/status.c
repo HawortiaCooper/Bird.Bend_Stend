@@ -16,14 +16,7 @@
 #include "hal_uart.h"
 #include "units.h"
 
-#if defined(__has_include)
-#if __has_include("build_info_gen.h")
-#include "build_info_gen.h"
-#endif
-#endif
-#ifndef FW_BUILD_DATE
-#define FW_BUILD_DATE "host"
-#endif
+extern const char fw_build_id[];              /* build_id.c: the only object that differs per build */
 
 int32_t fw_pos_um(void)
 {
@@ -141,7 +134,7 @@ void status_build(status_t *s)
 
 void info_build(info_t *i)
 {
-    const char *b = FW_BUILD_DATE;
+    const char *b = fw_build_id;
     size_t n = strlen(b);
     memset(i, 0, sizeof *i);
     i->proto_major = (uint8_t)PROTO_MAJOR;
@@ -154,5 +147,5 @@ void info_build(info_t *i)
     hal_uid(i->uid);
     memcpy(i->build, b, (n > sizeof i->build) ? sizeof i->build : n);
     i->param_count = (uint16_t)PARAM_COUNT;
-    i->feature_mask = FW_FEATURES;
+    i->feature_mask = FW_FEATURES | (g_fw.hw_meas ? (uint32_t)FEAT_HW_MEAS : 0u);
 }

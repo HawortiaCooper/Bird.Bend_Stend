@@ -1,8 +1,8 @@
 /* NUCLEO-F446RE pin map (= 01_HW/pinout.md §1; register-level names, no Arduino pin numbers).
- * M1 drives only LED, RATE and TRIP; the motor outputs (PUL/DIR/ENA) stay in their reset state
- * (Hi-Z = no LED current = driver holding, D-13) and no input is sampled (M2, FW_design §9).
- * D-36 (2026-10-03): there is no separate holding STOP button - PC7 is no longer reserved for a
- * STOP input (the generated names io.stop_active_level / STOP_BTN stay until CR-01 / ICD v0.5).
+ * M2: PUL/DIR/ENA configured by hal_step_init() (boot step 6), inputs by exti_init() /
+ * hx711_init().
+ * D-36 / CR-01 (ICD v0.5): there is no STOP-button input; PC7 is the J-PUL-A loopback input of the
+ * measurement header (CR-02).
  * Implements: FW-PLT-001, SYS-007
  */
 #ifndef BOARD_PINS_H
@@ -56,8 +56,23 @@
 #define PIN_RX_BIT       3u
 #define USART2_AF        7u
 
-/* debug markers (FW_DEBUG_PINS builds only) */
-#define PIN_DBG0_BIT     8u      /* PC8 */
-#define PIN_DBG1_BIT     9u      /* PC9 */
+/* measurement header MH (CR-02, D-40 c; pinout §1.5): loopback / stimulus pins. Digital inputs
+ * without pull in every build (never analog: 5 V taps may be fitted, REQ-A-M2-04); timer AF inputs
+ * (PB8 = stimulus output) only in the HW_MEAS images. The v0.3 scope markers on PC8/PC9
+ * (FW_DEBUG_PINS) are retired (no scope, D-35 G5; the pins are J-ENA / J-DIR now). */
+#define PIN_MH_PUL_A_PORT GPIOC  /* PC7  TIM8_CH2 AF3  J-PUL-A */
+#define PIN_MH_PUL_A_BIT  7u
+#define PIN_MH_PUL_B_PORT GPIOB  /* PB7  TIM4_CH2 AF2  J-PUL-B (independent counter) */
+#define PIN_MH_PUL_B_BIT  7u
+#define PIN_MH_DIR_PORT   GPIOC  /* PC9  TIM8_CH4 AF3  J-DIR */
+#define PIN_MH_DIR_BIT    9u
+#define PIN_MH_ENA_PORT   GPIOC  /* PC8  TIM8_CH3 AF3  J-ENA */
+#define PIN_MH_ENA_BIT    8u
+#define PIN_MH_EVT_PORT   GPIOC  /* PC6  TIM8_CH1 AF3  J-EVT */
+#define PIN_MH_EVT_BIT    6u
+#define PIN_MH_AUX_PORT   GPIOA  /* PA11 TIM1_CH4 AF1  J-AUX */
+#define PIN_MH_AUX_BIT    11u
+#define PIN_MH_STIM_PORT  GPIOB  /* PB8  TIM10_CH1 AF3 J-STIM (output only in HW_MEAS) */
+#define PIN_MH_STIM_BIT   8u
 
 #endif /* BOARD_PINS_H */

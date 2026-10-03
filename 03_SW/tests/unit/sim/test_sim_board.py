@@ -382,7 +382,7 @@ def test_vocabulary_matches_tools_readme() -> None:
     assert names and names == dict(VOCABULARY)
     cl = Client()
     for action, side in names.items():
-        if side == "T" and action != "flash":
+        if side == "T" and action not in ("flash", "driver"):        # S variants
             assert cl.ctl.act(action) == {"ok": False, "error": "twin only"}
     assert cl.ctl.act("nope")["ok"] is False
     assert cl.ctl.act("inject", fault="isr_storm")["error"] == "inject: twin only"

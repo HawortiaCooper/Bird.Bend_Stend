@@ -1,6 +1,6 @@
 # 00_System/tools — Integrator tools (owner: Implementer C)
 
-Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.5, `params.yaml` dict_version 4 and `protocol.yaml`
+Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.6, `params.yaml` dict_version 4 and `protocol.yaml`
 (protocol name registry, ICD §0.3).
 Python ≥ 3.11, standard library + PyYAML (generators only). Use the project venv: `.venv\Scripts\python`.
 
@@ -9,9 +9,10 @@ Python ≥ 3.11, standard library + PyYAML (generators only). Use the project ve
 | `gen_params.py` | **Single generator entry point.** `params.yaml` → `02_FW/src/gen/params_gen.{h,c}`, `03_SW/src/bend_stand/core/params_gen.py`, ICD Appendix A; runs `gen_protocol.py`. Origin: Thrust_Stand_HAW `00_System/tools/gen_params.py` @9473c68 (trimmed). |
 | `gen_protocol.py` | `protocol.yaml` → `02_FW/src/gen/proto_gen.h` (C), `03_SW/src/bend_stand/core/protocol_gen.py` (Python `IntEnum`/`IntFlag`, `<ID>_BITS`, `<ID>_DESC`, `CMD_REQ_LEN`, `CMD_RETRY`), ICD tables between `GENERATED protocol:<id>` markers + Appendix B (GF-08). |
 | `ref_codec.py` | Reference codec (oracle): CRC-16/CCITT-FALSE, frame encoder, ICD §2.3 parser with resync, encode/decode of every request, response, DATA and EVENT payload. Stdlib only. |
+| `ref_loadlim.py` | Reference FW load limit (M2, D-40 d): violations, trip samples, rails, regrow window; the docstring is the definition behind `loadlim_vectors.json` (ICD §5.5). |
 | `ref_motion.py` | Reference step-period generator (M2): exact sqrt ramp with max rule and fractional carry (R4 §1.5), controlled stop, JOG on-the-fly changes, ICD §6.5 stop-path rule, planner. The docstring is the normative definition behind `motion_vectors.json`. |
 | `ref_cmdcheck.py` | Reference acceptance model of ICD §4–§6 (check order, BLOCK mask, busy, clears, SET_PARAM checks, hard rules). Acceptance only, no execution. |
-| `gen_vectors.py` | **The single vector generator** → `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (M1), `vectors/motion_vectors.json` (M2, from `ref_motion.py`). |
+| `gen_vectors.py` | **The single vector generator** → `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (M1), `vectors/motion_vectors.json` (M2, from `ref_motion.py`), `vectors/loadlim_vectors.json` (M2, from `ref_loadlim.py`). |
 | `vectors/` | Generated shared vectors (never hand-edited). |
 | `fw_twin/` | **FW host twin** (P2/M1): `build.py` (host gcc build of A's unmodified `02_FW/src/{pure,core,gen}` + twin seams), `engine/` (C: scheduler, seam implementations, world model), `twin.py` (launcher: virtual time, TCP ports, vocabulary v2, logs; Python API `Twin` / `TwinLink`), `contract/` (seam v1 header copies, used only while A's headers are absent), `probe/` (harness probe core — **not the FW**). See "FW host twin — how to run it" below. |
 | `tests/` | pytest proving the codec, the model and the generators against the vectors; `test_fw_twin.py` = twin harness self-tests (probe core). |
@@ -41,6 +42,8 @@ Both implementations MUST pass the same files; the vectors are the oracle for by
 | `streams` | feed `chunks_hex` in order to a fresh `frame.c` parser; call the 20 ms timeout hook if `idle_timeout_at_end`; frames **and** counters equal | same with `io.framing.FrameDecoder` |
 | `units_vectors.json` (ICD §0.1) | `units.c` `um_to_steps` / `steps_to_um` / rate cap with `spm` = the binary32 from `spm_f32_hex`: every value exact | `calc.motion.um_to_steps` / `steps_to_um` and the simulator's step model: every value exact |
 | `motion_vectors.json` (M2) | `ramp.c` / `stepgen_core` from the case parameters and events: every period within `tolerance.period_ticks` (±1) and the sum within `tolerance.sum_ticks` (±N/1000) of `periods`; `ctrl_stop_path()` equals every `ctrl_stop_paths` row | the simulator's step model: every period and sum exact (binary64) |
+| `loadlim_vectors.json` (M2) | `loadlim.c`: replay each case (init, then sample / fault_clear / config steps): `trip` and `regrow_window` equal after every step | the simulator's load limit: same |
+| `check_vectors.json` `hw_meas_vectors` (v0.6) | only against a HW_MEAS build (FEAT_HW_MEAS = 1); release / twin builds replay `vectors` (DIAG_MEAS → NOT_IN_BUILD) | the simulator answers NOT_IN_BUILD (no HW_MEAS model) |
 | `check_vectors.json` | set up the pure command-check context from `state_defaults` ⊕ `state` (and the param overrides), run the command check on `request.payload_hex`, compare STATUS/detail and, for NACKs, the encoded response with `response_frame_hex`; no side effect on NACK | the simulator (`io.sim.fw_logic`) in the same state answers identically (differential check of the SimBoard) |
 
 FW side: a pre-script in `02_FW` (owned by A/E) converts the JSON into a C header (arrays of hex strings +
@@ -95,7 +98,9 @@ void     core_tick_1ms(void);                                         /* callbac
 /* hal_step.h */
 typedef struct { uint32_t pw_ticks, dir_setup_ticks; bool pul_invert, ena_invert; } hal_step_cfg_t;
 uint32_t hal_step_init(const hal_step_cfg_t *cfg);                    /* returns f_tick (90 MHz target) */
-void     hal_step_set_dir(int dir);                                   /* only while stopped */
+void     hal_step_set_dir(int dir);                                   /* only while stopped; v1.3: +-1 logical
+                                                                         direction, +-2 = same direction with the
+                                                                         DIR output inverted (motion.dir_invert) */
 void     hal_step_start(uint32_t first_period_ticks);                 /* first edge >= dir_setup after the call */
 void     hal_step_set_period(uint32_t ticks);                         /* preload: period after the running one */
 void     hal_step_set_period_now(uint32_t ticks);                     /* stretch the running period (§5.6.4) */
@@ -111,7 +116,7 @@ typedef struct { uint32_t period; bool last; bool stop; } step_next_t;
 step_next_t step_isr(void);                                           /* callback, level 2, per completed pulse */
 /* hal_inputs.h  — ids = ICD IO bit indices 0..7 */
 uint16_t hal_inputs_raw(void);                                        /* electrical levels (1 = pin high) */
-typedef struct { uint8_t stop_active_level, pause_active_level, alm_active_level; } hal_in_cfg_t;
+typedef struct { uint8_t pause_active_level, alm_active_level; } hal_in_cfg_t;   /* v1.2: STOP input retired */
 void     hal_inputs_config(const hal_in_cfg_t *c);                    /* polarity for the fixed reactions */
 void     hal_inputs_rearm(uint8_t id);                                /* re-enable a self-masked line */
 void     on_input_edge(uint8_t id, bool level, uint32_t t_us);        /* callback, level 0/1, AFTER the HAL's
@@ -136,6 +141,7 @@ void hal_reset(void);  void hal_uid(uint8_t uid[12]);  bool hal_clk_fallback(voi
 uint16_t hal_stack_free_min(void);
 bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);   /* seam v1.2 (OI-FW-32): HardFault record of the
                                                           previous run, true once after boot, then cleared */
+size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max);   /* seam v1.3 HW_MEAS (D-40c) */
 /* critical sections (seam v1.1, A's proposal adopted in P2/M1): HALT = PRIMASK, AFE/MOTION = BASEPRI 0x20,
    DATA = 0x30, TICK = 0x40; no-ops in the twin (single thread, ISRs never preempt; nesting checked) */
 typedef enum { HAL_CRIT_HALT = 0, HAL_CRIT_AFE = 1, HAL_CRIT_MOTION = 2, HAL_CRIT_DATA = 3, HAL_CRIT_TICK = 4 } hal_crit_level_t;
@@ -170,6 +176,20 @@ void       hal_crit_exit(hal_crit_t saved);
 - `afe_sample_t.status` bits (`protocol.yaml` table `afe_sample_status`, C `AFES_*`): bit 0 `SCK_OVERRUN`
   (the read overran; the HX711 may have entered power-down → the core re-initialises it), bit 1 `MISSED_EDGE`
   (≥ 1 DOUT-ready edge missed before this sample → OVERRUN in the next DATA frame); bits 2–7 = 0.
+
+**Seam v1.3 (ICD v0.6, D-40 c; REQ-C-M2-01, REQ-A-M2-03)** — three changes:
+- `hal_step_set_dir(dir)`: A's interim encoding becomes the seam (SR-M2-01): `dir` = ±1 logical direction (the HAL
+  counts `pos_steps` by its sign), ±2 = the same logical direction with the DIR output inverted
+  (`motion.dir_invert`). DIR electrical level = (dir > 0) XOR (|dir| = 2).
+- `hal_in_cfg_t` without `stop_active_level` (SR-M2-02, CR-01).
+- `size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)` in `hal_sys.h`: the HW_MEAS forwarder.
+  `req` = the 8-byte DIAG_MEAS request payload, already validated by the core (LEN, op / sel / a / b ranges,
+  MEAS_STATE, ICD Appendix C); `resp` = the 64-byte OK body. Returns 64 when executed, **0 when the build has no
+  HW_MEAS** (release image, twin without `--hw-meas`): the core then answers E_INTERNAL NOT_IN_BUILD. At boot the
+  core calls it once with op INFO and sets FEAT_HW_MEAS from the result. STATIC_LEVEL is released by the HAL before
+  any other DIAG_MEAS op and at `hal_step_start` / `hal_ena_set`. Not called from ISRs; called only from the command
+  dispatcher (main loop). A's `hal_sys.h` carries it (seam check clean); the seam check still accepts a function marked
+  "PENDING-A" in the block as announced-but-not-delivered for future additions.
 
 **Seam v1.2 (M2; OI-FW-32)** — one addition, made by A in `hal_sys.h` and mirrored into the block above
 (ICD v0.5; the twin provides it):
@@ -265,7 +285,7 @@ relaxation not yet: M3), `load_offset`, `afe` (all arguments), `inject` (`tx_con
 first byte, world µs), `on_frame` (after the last byte of the nth matching request), `on_event` (after the last
 byte of the nth matching EVENT on the wire), `flash`, `clock`, `reset`, `query` (`world`, `pulses`, `outputs`,
 `edges`, `seam_log`, `wire_log`, `sent`, `flash`); also `wire`, `chatter`, `world_shift`, `iwdg`, `clk`.
-M2 additions (ICD v0.5): `inject isr_storm` (= `hang where=isr1`: main loop, tick, step ISR and sample delivery starved for `duration_ms`, hardware pulses continue at the preloaded period, level-1 input callbacks deferred, the level-0 E-stop reaction still acts; seam log `step_isr_starved`), `reset cause=hardfault` (seam v1.2 record), `afe_sample_t.status` bit 1 after `afe miss_next` / `drop_every`. Twin-only `query` extensions: `conversions` (every HX711
+M2 additions (ICD v0.6, Validator E REQ-C-M2-02…10): `inject loop_load` (`us_per_pass`, `duration_ms?`: each main-loop pass consumes that much virtual time, ISRs keep running, the next pass starts after it), `driver` (`dir_wiring_inverted?`: the world moves by the DIR **pin** — x is integrated from PUL edges and the DIR level, independent of the FW counter, and persists across MCU resets; `pend_auto?`, `pend_lag_ms?`: PEND inactive while pulsing and `pend_lag_ms` after the last pulse), `query conversions` entries carry `gain_pulses` / `channel_gain` / `rate_sps`, `query … clear: true` drains a log after reading (default `log_max` 1 000 000 per log), `Twin(hw_meas=True)` / `--hw-meas 1` = model of DIAG_MEAS (twin_meas.c: counter, probe, stamps, .noinit kept over resets, STIM_RUN, HANG, STATIC_LEVEL; DWT not modelled). Earlier M2 additions (ICD v0.5): `inject isr_storm` (= `hang where=isr1`: main loop, tick, step ISR and sample delivery starved for `duration_ms`, hardware pulses continue at the preloaded period, level-1 input callbacks deferred, the level-0 E-stop reaction still acts; seam log `step_isr_starved`), `reset cause=hardfault` (seam v1.2 record), `afe_sample_t.status` bit 1 after `afe miss_next` / `drop_every`. Twin-only `query` extensions: `conversions` (every HX711
 conversion: world `t_us`, FW `fw_t_us`, raw, delivered) and `inputs` (electrical input changes). Times in logs
 are world µs since the twin start (float, ns resolution); `wire_log` `first_us` = start of the first byte,
 `last_us` = end of the last byte.
@@ -292,11 +312,12 @@ T = twin, S = simulator, both = both (differential tests use only "both" actions
 | `wire` | `input: "estop"\|"start"\|"end"\|"pause"\|"alm"\|"pend"\|"drv_power"` ("stop" retired, v0.5), `broken: bool` | broken wire on any input (NC inputs read active / unpowered) |  | both |
 | `chatter` | `input: <as wire>`, `period_ms: float`, `duration_ms: int` | periodic toggling (e.g. ALM 1 kHz chatter) |  | T |
 | `alm` / `pend` | `active: bool` | driver outputs | ✓ | both |
+| `driver` | `dir_wiring_inverted?: bool`, `pend_auto?: bool`, `pend_lag_ms?: float` (default 5) | DIR wiring / driver SW5 inverted in the world (x follows the DIR pin); automatic PEND (REQ-C-M2-06/07, v0.6) |  | T (S: PEND model optional) |
 | `specimen` | `kind: "none"\|"spring"\|"bilinear"`, `k_n_per_mm`, `x_contact_um`, `k2_n_per_mm?`, `f_yield_n?`, `f_break_n?`, `relax_pct?`, `relax_tau_s?` | load model | ✓ | both |
 | `load_offset` | `counts: int` | cell zero offset (default scenario 50 000 counts ≤ 1 % FS, SWD-P1-15) | ✓ | both |
 | `afe` | `rate_error?: float`, `noise_counts?: float`, `stall?: bool`, `saturate?: "pos"\|"neg"\|null`, `drop_every?: int`, `miss_next?: int` (single missed DOUT edges), `sck_overrun?: bool` (power-down symptom on the next read), `raw_script?: [int]` (next samples verbatim) | HX711 model | stall / rate / rails ✓ | both (`sck_overrun`: T) |
 | `world_shift` | `um: int` | lost steps: shift `x_um_true` against the step counter (open-loop model; HOME_DRIFT tests) |  | both |
-| `inject` | `fault: "step_fault"\|"tx_congestion"\|"rx_corrupt"\|"link_silence"\|"hang"\|"isr_storm"\|"drop_next"\|"duplicate_next"\|"delay_next"\|"corrupt_next"`, `duration_ms?`, `where?: "main"\|"tick"\|"isr1"` (hang / storm), `cmd?: <CMD name>`, `what?: "request"\|"response"`, `n?: int`, `ms?: int` | fault injection (per-command link faults = B's LinkModel hooks) | step_fault, tx_congestion, link_silence, hang ✓ | both (`isr_storm`, `where`: T) |
+| `inject` | `fault: "step_fault"\|"tx_congestion"\|"rx_corrupt"\|"link_silence"\|"hang"\|"isr_storm"\|"loop_load"\|"drop_next"\|"duplicate_next"\|"delay_next"\|"corrupt_next"`, `duration_ms?`, `where?: "main"\|"tick"\|"isr1"` (hang / storm), `cmd?: <CMD name>`, `what?: "request"\|"response"`, `n?: int`, `ms?: int` | fault injection (per-command link faults = B's LinkModel hooks) | step_fault, tx_congestion, link_silence, hang ✓ | both (`isr_storm`, `where`: T) |
 | `rx_bytes` | `hex: str`, `at_us?: int` | inject raw bytes into the FW RX at a virtual time (lock-step: exact) | ✓ | both |
 | `on_frame` / `on_event` | `cmd` / `code`, `nth?: int`, `delay_us: int`, `then: {action…}` | run an action `delay_us` after the board received the nth matching request / sent the nth matching EVENT | ✓ | both |
 | `flash` | `cut_after_word?: int`, `cut_in_erase?: int`, `reset?: "power"` | power cut during the next NVM program / erase (record integrity tests) | ✓ | T (S: record-level cut) |
@@ -304,7 +325,7 @@ T = twin, S = simulator, both = both (differential tests use only "both" actions
 | `clk` | `hse_fail: bool` | `hal_clk_fallback()` at the next boot |  | T |
 | `clock` | `advance_ms?: int`, `advance_us?: int` | advance virtual time (lock-step only) | ✓ | both |
 | `reset` | `cause: "pin"\|"power"\|"iwdg"\|"software"\|"hardfault"`, `pc?: int`, `cfsr?: int` | board reset, flash kept; `hardfault` = HardFault record (seam v1.2) + reset cause SOFTWARE (M2) | ✓ (hardfault: M2) | both (hardfault: T) |
-| `query` | `what: "world"\|"pulses"\|"outputs"\|"edges"\|"seam_log"\|"wire_log"\|"sent"\|"flash"` , `since_us?: int` | `world`: `x_um_true`, inputs, load; `pulses`: PUL count; `outputs`: ENA, RATE, LED, trip relay; `edges`: `[{t_us, pin: "PUL"\|"DIR"\|"ENA", level}]`; `seam_log`: `[{t_us, call, args}]`; `wire_log`: `[{dir, type, seq, first_us, last_us, hex}]`; `sent`: frames produced incl. dropped DATA; `flash`: write counter, records | world/pulses/outputs/edges/wire_log/sent ✓ | both (`edges`, `seam_log`: T; S returns its model equivalent where defined) |
+| `query` | `what: "world"\|"pulses"\|"outputs"\|"edges"\|"seam_log"\|"wire_log"\|"sent"\|"flash"` , `since_us?: int`, `clear?: bool` (v0.6: drain after reading) | `world`: `x_um_true`, inputs, load; `pulses`: PUL count; `outputs`: ENA, RATE, LED, trip relay; `edges`: `[{t_us, pin: "PUL"\|"DIR"\|"ENA", level}]`; `seam_log`: `[{t_us, call, args}]`; `wire_log`: `[{dir, type, seq, first_us, last_us, hex}]`; `sent`: frames produced incl. dropped DATA; `flash`: write counter, records | world/pulses/outputs/edges/wire_log/sent ✓ | both (`edges`, `seam_log`: T; S returns its model equivalent where defined) |
 
 Scenario file (`bird.bend.simscenario` v1, JSON, shared by simulator and twin):
 

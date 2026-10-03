@@ -192,6 +192,64 @@ static cmd_verdict_t check_motion(const cmd_ctx_t *c, const cmd_req_t *r, bool m
     return verdict(ST_OK, 0u);
 }
 
+/* DIAG_MEAS (ICD v0.6 Appendix C, D-40 c): not in build -> E_INTERNAL NOT_IN_BUILD (after LEN); then op /
+ * sel / a / b in payload order (offsets 0 / 1 / 2 / 4); then MEAS_STATE (HANG needs a running motion,
+ * STATIC_LEVEL needs NOT_ENABLED). Oracle: ref_cmdcheck._check_meas, check_vectors hw_meas_vectors. */
+static cmd_verdict_t check_meas(const cmd_ctx_t *c, const cmd_req_t *r, bool moving)
+{
+    uint8_t op = r->u.meas.op, sel = r->u.meas.sel;
+    uint16_t a = r->u.meas.a;
+    uint32_t b = r->u.meas.b;
+    bool ok_sel, ok_a, ok_b;
+    if (!c->hw_meas) {
+        return verdict(ST_E_INTERNAL, INTERNAL_NOT_IN_BUILD);
+    }
+    switch (op) {
+    case MEAS_OP_INFO:
+    case MEAS_OP_PROBE_READ:
+        ok_sel = sel == 0u; ok_a = a == 0u; ok_b = b == 0u;
+        break;
+    case MEAS_OP_PROBE_ARM:
+        ok_sel = sel <= 8u; ok_a = (a & 0x3u) <= 2u && (a & (uint16_t)~0x0103u) == 0u; ok_b = b <= 0xFFFFu;
+        break;
+    case MEAS_OP_COUNTER:
+    case MEAS_OP_NOINIT:
+        ok_sel = sel <= 1u; ok_a = a == 0u; ok_b = b == 0u;
+        break;
+    case MEAS_OP_STAMPS:
+        ok_sel = sel <= 3u; ok_a = a <= 1023u; ok_b = b == 0u;
+        break;
+    case MEAS_OP_STIM_RUN:
+        ok_sel = (sel >> 1) >= 1u; ok_a = a >= 1u && a <= 1000u; ok_b = true;
+        break;
+    case MEAS_OP_HANG:
+        ok_sel = sel <= 2u; ok_a = a <= 10000u; ok_b = b == 0u;
+        break;
+    case MEAS_OP_STATIC_LEVEL:
+        ok_sel = sel <= 1u; ok_a = a <= 1u; ok_b = b == 0u;
+        break;
+    case MEAS_OP_DWT:
+        ok_sel = sel <= 1u; ok_a = a <= 31u; ok_b = b == 0u;
+        break;
+    default:
+        return verdict(ST_E_RANGE, 0u);
+    }
+    if (!ok_sel) {
+        return verdict(ST_E_RANGE, 1u);
+    }
+    if (!ok_a) {
+        return verdict(ST_E_RANGE, 2u);
+    }
+    if (!ok_b) {
+        return verdict(ST_E_RANGE, 4u);
+    }
+    if ((op == (uint8_t)MEAS_OP_HANG && !moving) ||
+        (op == (uint8_t)MEAS_OP_STATIC_LEVEL && c->motion_state != (uint8_t)MS_NOT_ENABLED)) {
+        return verdict(ST_E_STATE, BLOCK_MEAS_STATE);
+    }
+    return verdict(ST_OK, 0u);
+}
+
 cmd_verdict_t cmd_check(const cmd_ctx_t *c, uint8_t type, const uint8_t *payload, uint16_t len)
 {
     int16_t need = proto_req_len(type);
@@ -299,6 +357,8 @@ cmd_verdict_t cmd_check(const cmd_ctx_t *c, uint8_t type, const uint8_t *payload
     case CMD_JOG:
     case CMD_HOME:
         return check_motion(c, &r, moving);
+    case CMD_DIAG_MEAS:
+        return check_meas(c, &r, moving);
     default:
         return verdict(ST_OK, 0u);          /* PING, GET_INFO, GET_STATUS, STREAM_*, HALT, PAUSE */
     }

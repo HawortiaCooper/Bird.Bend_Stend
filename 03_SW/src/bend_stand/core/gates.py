@@ -24,10 +24,12 @@ from types import MappingProxyType
 from typing import Mapping
 
 from bend_stand.core import protocol_gen as pg
-from bend_stand.core.model import Compat, GateCode, GateId, GateItem, GateResult, LinkState, MotionKind, Severity
+from bend_stand.core.model import (
+    INT_DF, INT_DS, INT_IO, Compat, GateCode, GateId, GateItem, GateResult, LinkState, MotionKind, Severity,
+)
 
 R, C, W = Severity.REFUSE, Severity.CONFIRM, Severity.WARN
-DF, DS = pg.DataFlags, pg.DataStatus
+DF, DS, IO = INT_DF, INT_DS, INT_IO       # plain ints (fast)
 
 CLEAR_HINTS: Mapping[str, str] = MappingProxyType({
     "ESTOP": "release the red E-stop button, press RESET (K1), wait ≥ io.estop_release_ms, Clear E-stop, then "
@@ -167,7 +169,7 @@ def g_estop_clear(s: GateSnapshot) -> GateResult:
         return GateResult(tuple(items))
     if not s.flags & DF.ESTOP:
         items.append(GateItem(GateCode.NOTHING_TO_CLEAR, R, "E-stop not latched"))
-    elif s.io & pg.IoBits.ESTOP_OPEN:
+    elif s.io & IO.ESTOP_OPEN:
         items.append(GateItem("ESTOP", R, "E-stop input still open", CLEAR_HINTS["ESTOP"]))
     else:
         items.append(GateItem(GateCode.CAUSE_ACTIVE, C, "button released and K1 reset; the driver stays disabled: "
@@ -229,9 +231,11 @@ def motion_items(s: GateSnapshot, kind: MotionKind) -> list[GateItem]:
     items += _latched(s)
     if s.status & DS.PAUSED:
         items.append(GateItem("PAUSED", R, "paused — press Resume (clears PAUSE)", CLEAR_HINTS["PAUSED"]))
-    if s.motion_state == "ENABLING":
+    if s.flags & DF.ENABLED:
+        pass                                           # DATA is authoritative; STATUS motion_state may be older
+    elif s.motion_state == "ENABLING":
         items.append(GateItem(GateCode.ENABLING_SW, R, "driver settling after ENABLE"))
-    elif not s.flags & DF.ENABLED:
+    else:
         items.append(GateItem("NOT_ENABLED", R, "driver not enabled", CLEAR_HINTS["NOT_ENABLED"]))
     if kind in (MotionKind.MOVE, MotionKind.LOAD_APPROACH) and not s.flags & DF.HOMED:
         items.append(GateItem("NOT_HOMED", R, "axis not homed", CLEAR_HINTS["NOT_HOMED"]))
@@ -276,7 +280,7 @@ def g_enable(s: GateSnapshot) -> GateResult:
     if items:
         return GateResult(tuple(items))
     items += _feature_items(s, "MOTION")
-    if s.flags & DF.ESTOP or s.io & pg.IoBits.ESTOP_OPEN:
+    if s.flags & DF.ESTOP or s.io & IO.ESTOP_OPEN:
         items.append(GateItem("ESTOP", R, "E-stop latched or pressed", CLEAR_HINTS["ESTOP"]))
     if _drv_power_off(s):
         items.append(GateItem("DRV_UNPOWERED", R, "driver unpowered", CLEAR_HINTS["DRV_UNPOWERED"]))

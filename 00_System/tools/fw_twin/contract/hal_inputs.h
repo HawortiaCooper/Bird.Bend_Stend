@@ -15,7 +15,7 @@ extern "C" {
 
 /* ids = ICD IO bit indices 0..7 */
 uint16_t hal_inputs_raw(void);                                        /* electrical levels (1 = pin high) */
-typedef struct { uint8_t stop_active_level, pause_active_level, alm_active_level; } hal_in_cfg_t;
+typedef struct { uint8_t pause_active_level, alm_active_level; } hal_in_cfg_t;   /* seam v1.2 (SR-M2-02) */
 void     hal_inputs_config(const hal_in_cfg_t *c);                    /* polarity for the fixed reactions */
 void     hal_inputs_rearm(uint8_t id);                                /* re-enable a self-masked line */
 void     on_input_edge(uint8_t id, bool level, uint32_t t_us);        /* callback, level 0/1, AFTER the fixed reaction */

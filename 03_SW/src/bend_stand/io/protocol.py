@@ -41,6 +41,7 @@ _REQ: dict[Cmd, tuple[struct.Struct | None, tuple[str, ...]]] = {
     Cmd.JOG: (struct.Struct("<iIi"), ("v_um_s", "a_um_s2", "bound_um")),
     Cmd.MOVE_UNTIL_LOAD: (struct.Struct("<iIIiB"), ("bound_um", "v_um_s", "a_um_s2", "raw_stop", "cmp")),
     Cmd.STOP: (struct.Struct("<B"), ("mode",)),
+    Cmd.DIAG_MEAS: (struct.Struct("<BBHI"), ("op", "sel", "a", "b")),      # ICD v0.6 App. C (CR-02, D-40c)
 }
 
 #: byte offset → field name of every request (E_RANGE detail decoding, §4.7)
@@ -493,3 +494,18 @@ def retry_class(cmd: Cmd | int, payload: bytes = b"") -> pg.RetryClass:
     if cmd == Cmd.JOG and len(payload) >= 4 and struct.unpack_from("<i", payload)[0] == 0:
         return pg.RetryClass.RETRY
     return pg.CMD_RETRY[cmd]
+
+
+# ============================================================================== DIAG_MEAS (ICD v0.6 Appendix C)
+
+def decode_meas(body: bytes) -> tuple[int, ...]:
+    """DIAG_MEAS OK body: ``u32 w[16]`` (64 B; HW_MEAS builds only — release / twin answer NOT_IN_BUILD)."""
+    if len(body) < pg.MEAS_BODY_LEN:
+        raise ValueError(f"DIAG_MEAS body {len(body)} B < {pg.MEAS_BODY_LEN}")
+    return struct.unpack_from("<16I", body, 0)
+
+
+def encode_meas(words: Sequence[int]) -> bytes:
+    if len(words) != 16:
+        raise ValueError("DIAG_MEAS body needs 16 words")
+    return struct.pack("<16I", *(int(w) & 0xFFFFFFFF for w in words))

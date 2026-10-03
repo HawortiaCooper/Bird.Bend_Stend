@@ -260,23 +260,8 @@ def test_tc_if_005_02_estop_clear_lost_new_estop_not_wiped(vbe):
     H.act(vbe, "estop", open=False)
 
 
-@pytest.mark.req("IF-005", "IF-009")
-def test_tc_if_005_02_no_motion_command_from_the_m1_api(vbe):
-    """M1: every motion entry point refuses locally (gate NOT_IMPLEMENTED) — no motion frame ever reaches the wire
-    (the M2 part of TC-IF-005-02 runs when motion exists)."""
-    # Verifies: IF-005, IF-009
-    m0 = H.wire_mark(vbe)
-    for fn in (lambda: vbe.motion.move_to(10.0), lambda: vbe.motion.move_by(1.0),
-               lambda: vbe.motion.home(load_confirmed=True)):
-        f = fn()
-        with pytest.raises(Exception):
-            f.result(0)
-    vbe.motion.jog_start(1, 1.0)
-    vbe.motion.jog_stop()
-    assert not vbe.motion.enable().ok
-    H.advance(vbe, 500)
-    names = {w.name for w in H.tx(vbe, since=m0)}
-    assert not names & {"MOVE_ABS", "MOVE_UNTIL_LOAD", "JOG", "HOME", "ENABLE", "DISABLE"}
+# v0.3: 'no motion command from the M1 API' retired at M2 (motion exists); superseded by TC-SW-MAN-006-02
+# (gates refuse, nothing on the wire) and TC-SYS-008-04 (h) (motion response lost → one MOVE_ABS, one move).
 
 
 # ============================================================================================ CONFIRM class

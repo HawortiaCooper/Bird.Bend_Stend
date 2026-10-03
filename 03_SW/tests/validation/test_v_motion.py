@@ -8,8 +8,8 @@ M2/M3 SW motion cases can rely on it, its motion behaviour is checked against th
 Stimuli use the forced wire path (``harness.forced_*``); verdicts and events are read from the wire with
 ``ref_codec``. The same scenarios run against the FW twin at M2 (X, Integrator's ``test_sim_vs_twin.py``).
 
-Part B (pending M2): public-API motion (``backend.motion``), motion gates, hotkey, and the simulator items of
-WP-B12 (K1_WELDED timing, idle disable, load regrow, homing back-off).
+Part A also covers the WP-B12 simulator items already delivered (K1_WELDED timing, idle disable, load regrow).
+Part B (pending M2): public-API motion (``backend.motion``), motion gates and the hotkey.
 
 Verifies: SYS-008, IF-009, SW-MAN-002, SW-MAN-003, SW-MAN-004, SW-MAN-005, SW-LIM-001, SW-STOP-002, SW-STOP-003,
 SW-STOP-004, SAF-SW-004, SAF-SW-005
@@ -245,6 +245,34 @@ def test_tc_sys_008_04_sim_motion_never_duplicated_by_the_link(vbe):
     assert len(d) == 1 and d[0].fields["value"] == 30_000
 
 
+@pytest.mark.req("SYS-008", "SAF-SW-005")
+def test_tc_sys_008_04_sim_limit_wiring_clear_rule_d40(vbe):
+    """D-40 (a): both limit inputs active → FAULT LIMIT_WIRING (immediate stop); FAULT_CLEAR is refused while both
+    are active and accepted once they are no longer **both** active; the input still active keeps acting as a normal
+    limit latch (motion toward it refused, away accepted)."""
+    # Verifies: SYS-008, SAF-SW-005
+    H.forced_enable_home(vbe)
+    H.result(vbe, H.forced_move_abs(vbe, 50_000, 10_000))
+    assert H.until(vbe, lambda: _x_um(vbe) == 50_000 and "MOVING" not in _flags(H.rx(vbe, "DATA")[-1]), 10_000)
+    m0 = H.wire_mark(vbe)
+    H.act(vbe, "limit", name="start", active=True)
+    H.act(vbe, "limit", name="end", active=True)
+    H.advance(vbe, 50)
+    assert [w for w in _ev(vbe, m0, "FAULT_SET") if rc.FAULTS[w.fields["arg"]] == "LIMIT_WIRING"]
+    status, _ = H.forced_outcome(vbe, "FAULT_CLEAR")
+    assert status == "E_CAUSE_ACTIVE"
+    H.act(vbe, "limit", name="end", active=False)
+    H.advance(vbe, 100)
+    status, _ = H.forced_outcome(vbe, "FAULT_CLEAR")
+    assert status == "OK"
+    status, detail = H.forced_outcome(vbe, "MOVE_ABS", {"target_um": 40_000, "v_um_s": 5_000, "a_um_s2": 0},
+                                      motion=True)
+    assert status == "E_STATE" and "LIMIT" in _block_names(detail), (status, _block_names(detail))
+    status, _ = H.forced_outcome(vbe, "MOVE_ABS", {"target_um": 60_000, "v_um_s": 5_000, "a_um_s2": 0}, motion=True)
+    assert status == "OK"
+    H.act(vbe, "limit", name="start", active=False)
+
+
 # ============================================================================================ B — pending M2
 
 M2 = pytest.mark.pending("M2", needs="backend.motion (WP-B12), MotionController, motion gates")
@@ -413,12 +441,12 @@ def test_tc_sw_lim_001_01_targets_outside_sw_limits_refused_jog_bound(lockstep):
 
 
 @M2
-@pytest.mark.req("SAF-SW-005", "SW-STOP-004", "SW-STOP-003")
+@pytest.mark.req("SW-MAN-006", "SAF-SW-005", "SW-STOP-004", "SW-STOP-003")
 @pytest.mark.parametrize("cond", ["not_enabled", "not_homed", "halt", "paused", "estop", "drv_unpowered", "alm"])
-def test_tc_m2_gate_01_move_gate_refuses_and_sends_nothing(lockstep, cond):
-    """Motion gate (SW_design §5.6): one REFUSE item per condition, item code = the generated BLOCK name where the
+def test_tc_sw_man_006_02_move_gate_refuses_and_sends_nothing(lockstep, cond):
+    """TC-SW-MAN-006-02 — motion gate (SW_design §5.6): one REFUSE item per condition, item code = the generated BLOCK name where the
     FW has one; move_to through the API raises and **no MOVE_ABS** reaches the wire."""
-    # Verifies: SAF-SW-005, SW-STOP-004, SW-STOP-003
+    # Verifies: SW-MAN-006, SAF-SW-005, SW-STOP-004, SW-STOP-003
     be = lockstep()
     code = {"not_enabled": "NOT_ENABLED", "not_homed": "NOT_HOMED", "halt": "HALT", "paused": "PAUSED",
             "estop": "ESTOP", "drv_unpowered": "DRV_UNPOWERED", "alm": "DRIVER_ALARM"}[cond]
@@ -528,7 +556,6 @@ def test_tc_sys_008_05_sim_idle_disable(lockstep, pdict):
     assert not [w for w in _ev(be2, m1, "DRIVER_DISABLED") if w.fields["arg"] == 2]
 
 
-@M2
 @pytest.mark.req("SYS-008")
 def test_tc_sys_008_05_sim_load_limit_regrow(lockstep, pdict):
     """WP-B12 sim (SAF-FW-011): LOAD_LIMIT tripped by a stiff spring at the default FW threshold, FAULT_CLEAR accepted while still beyond the threshold;

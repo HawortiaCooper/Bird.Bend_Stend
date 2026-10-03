@@ -30,9 +30,6 @@ def _nvm_call(be, cmd):
 
 
 @pytest.mark.req("SW-CFG-004", "IF-011")
-@pytest.mark.defect("SWD-M2-03")
-@pytest.mark.xfail(strict=True, reason="SWD-M2-03 open (B): heartbeat PING / STATUS poll sent while a SAVE / LOAD / "
-                                       "DEFAULTS is outstanding (D-37 a quiesce not implemented)")
 @pytest.mark.parametrize("cmd", ["SAVE_PARAMS", "LOAD_PARAMS", "DEFAULT_PARAMS"])
 def test_tc_sw_cfg_004_02_nvm_quiesce_only_stop_class_frames(vbe, cmd):
     """SRS v0.5 SW-CFG-004 AC: 'between a SAVE and its response only stop-class frames appear' (also LOAD /
@@ -88,9 +85,6 @@ BASE_FEATURES = ("AFE", "MOTION", "HOMING", "MOVE_UNTIL_LOAD", "NVM")
 
 
 @pytest.mark.req("SAF-SW-005", "IF-008")
-@pytest.mark.defect("SWD-M2-04")
-@pytest.mark.xfail(strict=True, reason="SWD-M2-04 open (B): ALM / PEND / DRV_PWR / PAUSE_BTN indicators are shown "
-                                       "ON/OFF although their GET_INFO feature bit is 0 (D-37 b)")
 def test_tc_saf_sw_005_03_bits_of_a_missing_feature_are_unknown(fb_be):
     """D-37 (b): FEAT_DRV_SIGNALS = 0 and FEAT_BUTTONS = 0 while DATA / STATUS carry DRV_PWR, ALM, PAUSE_BTN = 1 (as
     a non-conforming FW would) → the indicators alm, pend, drv_pwr, pause_btn are UNKNOWN; the motion / enable
@@ -121,9 +115,6 @@ def _moving_frames(be, since):
 
 
 @pytest.mark.req("SW-STOP-001", "IF-005")
-@pytest.mark.defect("SWD-M2-02")
-@pytest.mark.xfail(strict=True, reason="SWD-M2-02 open (B): OBS-M1-R1 — confirmation by PC receive order; a DATA "
-                                       "frame produced before the MOVE_ABS executed confirms a lost STOP (D-37 d)")
 def test_tc_sw_stop_001_04_pre_execution_data_never_confirms_a_lost_stop(lockstep):
     """OBS-M1-R1 / D-37 (d): 8 ms link latency each way; MOVE_ABS 200 mm in flight, STOP pressed 2 ms later and its
     request lost. DATA frames produced by the FW before it executed the MOVE (MOVING = 0) arrive after the STOP
@@ -153,9 +144,6 @@ def test_tc_sw_stop_001_04_pre_execution_data_never_confirms_a_lost_stop(lockste
 
 
 @pytest.mark.req("SW-STOP-002", "IF-005")
-@pytest.mark.defect("SWD-M2-02")
-@pytest.mark.xfail(strict=True, reason="SWD-M2-02 open (B): HALT confirmed by a frame produced before the FW executed "
-                                       "the preceding HALT_CLEAR (D-37 d)")
 def test_tc_sw_stop_002_04_halt_confirmed_only_by_device_time_after_receipt(lockstep):
     """D-37 (d) for HALT: HALT latched → Clear stop (HALT_CLEAR in flight, 8 ms latency) → Pause/Break 1 ms later
     with the HALT request lost. Frames produced before the clear executed still show HALT = 1 and arrive after the

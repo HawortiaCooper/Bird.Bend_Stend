@@ -33,7 +33,7 @@
 # =====================================================================================
 
 schema_version: 1
-icd_version: "0.5"
+icd_version: "0.6"
 proto_major: 1
 proto_minor: 0
 payload_version: 1
@@ -65,6 +65,9 @@ constants:
   - {name: TWIN_TCP_PORT, value: 5760, ctype: u16, desc: "FW host twin serial-over-TCP port (127.0.0.1)"}
   - {name: TWIN_CTL_PORT, value: 5761, ctype: u16, desc: "FW host twin world-control port (JSON lines, tools/README)"}
   - {name: HOME_RELEASE_MAX_UM, value: 10000, ctype: u32, desc: "HOME: START not released within this travel in RELEASE / BACKOFF -> HOME_WIRING (ICD §5.4, OI-FW-23)"}
+  - {name: MEAS_BODY_LEN, value: 64, ctype: u8, desc: "DIAG_MEAS OK body: u32 w[16] (ICD Appendix C)"}
+  - {name: MEAS_STAMPS_PER_PAGE, value: 14, ctype: u8, desc: "DIAG_MEAS STAMPS: stamps per page (w2..w15)"}
+  - {name: MEAS_MAGIC, value: 0x4D454153, ctype: u32, desc: "DIAG_MEAS NOINIT w0 when the .noinit block is valid ('MEAS')"}
   - {name: HOME_SLOW_EXTRA_UM, value: 10000, ctype: u32, desc: "HOME: no START edge within home.backoff_um + this travel in SLOW_APPROACH -> HOME_NOT_FOUND (ICD §5.4, OI-FW-23)"}
 
 commands:
@@ -97,6 +100,7 @@ commands:
     - {name: FAULT_CLEAR, value: 0x3A, req_len: 0, request: "–", response: "`u16 cleared` (FAULT mask §7.6)", retry: VERIFY, retry_text: "VERIFY (priority lane, D-34)", priority: true, srs: "FW-CMD-003, SAF-FW-011, D-34"}
     - {name: PAUSE, value: 0x3B, req_len: 0, request: "–", response: "–", retry: CONFIRM, priority: true, sniffed: true, srs: "SAF-FW-023, D-14, D-26, D-29a"}
     - {name: RESUME, value: 0x3C, req_len: 0, request: "–", response: "–", retry: VERIFY, retry_text: "VERIFY (never auto-retried, §9.3)", priority: false, srs: "SAF-FW-023, D-31"}
+    - {name: DIAG_MEAS, value: 0x3D, req_len: 8, request: "`u8 op, u8 sel, u16 a, u32 b` (meas_op, Appendix C)", response: "`u32 w[16]` (64 B, Appendix C)", retry: VERIFY, retry_text: "per op (meas_op `retry`): RETRY for read ops, VERIFY otherwise", priority: false, srs: "CR-02, D-40c, SYS-009, NFR-007"}
 
 tables:
 
@@ -184,6 +188,7 @@ tables:
       - {name: DRV_UNPOWERED, bit: 8, desc: "drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c)"}
       - {name: DRIVER_ALARM, bit: 9, desc: "ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)"}
       - {name: PAUSED, bit: 10, desc: "PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)"}
+      - {name: MEAS_STATE, bit: 11, desc: "DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c)"}
 
   # ---------------------------------------------------------------- request fields
   - id: stop_mode
@@ -307,6 +312,7 @@ tables:
       - {name: TWIN, bit: 6, desc: "host twin build"}
       - {name: BUTTONS, bit: 7, desc: "PAUSE button input (the STOP/BREAK input is retired, D-36)"}
       - {name: DRV_SIGNALS, bit: 8, desc: "ALM/PEND/DRV_POWER inputs"}
+      - {name: HW_MEAS, bit: 9, desc: "measurement build (HW_MEAS, CR-02 / D-40c): DIAG_MEAS 0x3D executes; 0 = release / twin -> E_INTERNAL NOT_IN_BUILD"}
 
   # ---------------------------------------------------------------- DATA / STATUS bits
   - id: data_flags
@@ -540,6 +546,113 @@ tables:
       - {name: MISSED_EDGE, bit: 1, desc: "at least one DOUT-ready edge was missed before this sample (recovered by hal_hx711_kick or a late edge): the core sets OVERRUN in the next DATA frame"}
 
   # ---------------------------------------------------------------- SW only (not on the wire)
+  # ---------------------------------------------------------------- DIAG_MEAS (Appendix C, D-40c)
+  - id: meas_op
+    kind: enum
+    title: DIAG_MEAS op (request byte 0)
+    icd: "App. C"
+    c_prefix: MEAS_OP_
+    py_name: MeasOp
+    columns: [sel, a, b, retry]
+    items:
+      - {name: INFO, value: 0, desc: "variant, clocks, ring size, stamp overhead", sel: "0", a: "0", b: "0", retry: RETRY}
+      - {name: PROBE_ARM, value: 1, desc: "arm the event-latency probe (MT-3)", sel: "meas_src", a: "bits 0-1 meas_probe_mode, bit 8 event polarity (0 rising, 1 falling), other bits 0", b: "timer prescaler 0…65535", retry: VERIFY}
+      - {name: PROBE_READ, value: 2, desc: "read the probe captures", sel: "0", a: "0", b: "0", retry: RETRY}
+      - {name: COUNTER, value: 3, desc: "independent PUL counter (MT-2): read / reset", sel: "0 read, 1 reset (returns the value before the reset)", a: "0", b: "0", retry: "RETRY (read) / VERIFY (reset)"}
+      - {name: STAMPS, value: 4, desc: "device-time stamp ring (MT-4), newest first", sel: "meas_chan", a: "page 0…1023", b: "0", retry: RETRY}
+      - {name: NOINIT, value: 5, desc: ".noinit block (last PUL, heartbeat, hang start; survives a reset)", sel: "0 read, 1 clear", a: "0", b: "0", retry: "RETRY (read) / VERIFY (clear)"}
+      - {name: STIM_RUN, value: 6, desc: "stimulus series on the J-STIM output (MT-7)", sel: "bit 0 polarity (0 high pulse, 1 low pulse), bits 1-7 hold time 1…127 ms", a: "pulses 1…1000", b: "seed", retry: VERIFY}
+      - {name: HANG, value: 7, desc: "test-image hang injection while moving (IWDG evidence)", sel: "meas_hang_where", a: "duration 0…10000 ms (0 = until the IWDG resets)", b: "0", retry: VERIFY}
+      - {name: STATIC_LEVEL, value: 8, desc: "drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed)", sel: "meas_pin", a: "level 0/1", b: "0", retry: VERIFY}
+      - {name: DWT, value: 9, desc: "DWT section statistics (HW_MEAS_DWT builds; else w0 = 0)", sel: "0 read, 1 reset", a: "section 0…31", b: "0", retry: "RETRY (read) / VERIFY (reset)"}
+
+  - id: meas_src
+    kind: enum
+    title: DIAG_MEAS probe event source (PROBE_ARM sel; J-EVT selector position, FW_test_plan §6.2)
+    icd: "App. C"
+    c_prefix: MEAS_SRC_
+    py_name: MeasSrc
+    items:
+      - {name: ESTOP, value: 0, desc: "E-stop sense PA10"}
+      - {name: LIMIT_START, value: 1, desc: "START limit PB0"}
+      - {name: LIMIT_END, value: 2, desc: "END limit PC1"}
+      - {name: PAUSE, value: 3, desc: "PAUSE button PB6"}
+      - {name: DOUT, value: 4, desc: "HX711 DOUT PB4 (data ready)"}
+      - {name: DRV_PWR, value: 5, desc: "driver-power sense PA7"}
+      - {name: RX, value: 6, desc: "USART2 RX PA3 (start bit of a frame byte)"}
+      - {name: DIR, value: 7, desc: "DIR output node"}
+      - {name: STIM, value: 8, desc: "stimulus output PB8 (self-test)"}
+
+  - id: meas_probe_mode
+    kind: enum
+    title: DIAG_MEAS probe mode (PROBE_ARM a bits 0-1)
+    icd: "App. C"
+    c_prefix: MEAS_MODE_
+    py_name: MeasProbeMode
+    items:
+      - {name: TRIGGER, value: 0, desc: "the first event edge after arming starts the probe counter (single shot)"}
+      - {name: RESET, value: 1, desc: "every event edge restarts the probe counter (last event wins)"}
+      - {name: PWM_INPUT, value: 2, desc: "PUL period and high width per pulse (min/max over the pulses since arming)"}
+
+  - id: meas_probe_flags
+    kind: bitset
+    title: DIAG_MEAS PROBE_READ w0 flags
+    icd: "App. C"
+    c_prefix: MEAS_PF_
+    py_name: MeasProbeFlags
+    width: 16
+    items:
+      - {name: ARMED, bit: 0, desc: "probe armed"}
+      - {name: TRIGGERED, bit: 1, desc: "the event occurred (w1 valid)"}
+      - {name: OVERCAPTURE, bit: 2, desc: "a capture was overwritten before it was read (hardware over-capture)"}
+      - {name: WINDOW_OVERFLOW, bit: 3, desc: "the probe counter overflowed after the event (window 65 536 ticks): later captures invalid"}
+      - {name: EDGE_BEFORE_EVENT, bit: 4, desc: "a PUL edge was captured before the event (CCR = 0 case)"}
+
+  - id: meas_chan
+    kind: enum
+    title: DIAG_MEAS stamp channel (STAMPS sel)
+    icd: "App. C"
+    c_prefix: MEAS_CHAN_
+    py_name: MeasChan
+    items:
+      - {name: EVT, value: 0, desc: "J-EVT edges (TIM8 CH1)"}
+      - {name: PUL, value: 1, desc: "PUL rising edges (TIM8 CH2)"}
+      - {name: DIR, value: 2, desc: "DIR edges (TIM8 CH4)"}
+      - {name: AUX, value: 3, desc: "J-AUX edges (TIM1 CH4)"}
+
+  - id: meas_hang_where
+    kind: enum
+    title: DIAG_MEAS HANG where (HANG sel)
+    icd: "App. C"
+    c_prefix: MEAS_HANG_
+    py_name: MeasHangWhere
+    items:
+      - {name: MAIN, value: 0, desc: "main loop stops kicking the IWDG"}
+      - {name: TICK, value: 1, desc: "the 1 kHz tick hangs"}
+      - {name: ISR1, value: 2, desc: "level-1 ISR storm (software-triggered unused EXTI line, test image only)"}
+
+  - id: meas_pin
+    kind: enum
+    title: DIAG_MEAS STATIC_LEVEL pin (sel)
+    icd: "App. C"
+    c_prefix: MEAS_PIN_
+    py_name: MeasPin
+    items:
+      - {name: PUL, value: 0, desc: "PUL output"}
+      - {name: DIR, value: 1, desc: "DIR output"}
+
+  - id: meas_variant
+    kind: bitset
+    title: DIAG_MEAS INFO w0 variant
+    icd: "App. C"
+    c_prefix: MEAS_VAR_
+    py_name: MeasVariant
+    width: 32
+    items:
+      - {name: MEAS, bit: 0, desc: "HW_MEAS build (MT-2/3/4/7, HANG, STATIC_LEVEL)"}
+      - {name: DWT, bit: 1, desc: "HW_MEAS_DWT build (DWT section statistics)"}
+      - {name: TWIN_MODEL, bit: 2, desc: "the FW host twin's model of DIAG_MEAS (REQ-C-M2-08)"}
+
   - id: retry_class
     kind: enum
     title: SW retry class (§9.3; not on the wire)

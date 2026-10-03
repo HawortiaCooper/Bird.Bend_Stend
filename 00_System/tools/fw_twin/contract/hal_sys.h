@@ -17,6 +17,8 @@ void hal_wdg_kick(void);  void hal_wdg_set_timeout(uint32_t ms);
 uint8_t hal_reset_cause(void);            /* RST_* (proto_gen.h) */
 void hal_reset(void);  void hal_uid(uint8_t uid[12]);  bool hal_clk_fallback(void);
 uint16_t hal_stack_free_min(void);
+bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);   /* seam v1.2 */
+size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max);   /* seam v1.3 (HW_MEAS) */
 typedef enum {
     HAL_CRIT_HALT = 0,     /* PRIMASK: everything, <= 0.2 us */
     HAL_CRIT_AFE = 1,      /* BASEPRI 0x20 */

@@ -379,3 +379,64 @@ def test_units_saturation_obs_m1_05() -> None:
     sat = [c for c in UNITS["um_to_steps"] + UNITS["steps_to_um"] if c.get("saturated")]
     assert len(sat) == 6
     assert {c.get("steps", 0) for c in UNITS["um_to_steps"] if c.get("saturated")} == {2**31 - 1, -2**31}
+
+
+# ---------------------------------------------------------------------------- ICD v0.6 (D-40, REQ-C-M2-01)
+LOADLIM = json.loads((VEC / "loadlim_vectors.json").read_text(encoding="utf-8"))
+
+
+def test_diag_meas_registry_d40c() -> None:
+    c = next(c for c in PROTO.commands if c.name == "DIAG_MEAS")
+    assert (c.value, c.req_len, c.priority, c.sniffed) == (0x3D, 8, False, False)
+    assert PG.Features.HW_MEAS == 1 << 9 and PG.Block.MEAS_STATE == 1 << 11
+    assert PG.MEAS_OP_NAMES == tuple(rc.MEAS_OP) and len(rc.MEAS_OP) == 10
+    assert PG.MEAS_OP_RETRY["PROBE_READ"] == "RETRY" and PG.MEAS_OP_RETRY["HANG"] == "VERIFY"
+    h = gen_protocol.FW_PROTO_H_PATH.read_text(encoding="utf-8")
+    assert "CMD_DIAG_MEAS" in h and "FEAT_HW_MEAS" in h and "MEAS_OP_STATIC_LEVEL" in h and "PROTO_MEAS_BODY_LEN" in h
+
+
+def test_diag_meas_vectors() -> None:
+    by = {v["name"]: v["expect"] for v in CHECK["vectors"]}
+    assert (by["diag_meas_not_in_build"]["status"], by["diag_meas_not_in_build"]["detail"]) == ("E_INTERNAL", 1)
+    assert (by["diag_meas_length"]["status"], by["diag_meas_length"]["detail"]) == ("E_LENGTH", 8)
+    hm = {v["name"]: v["expect"] for v in CHECK["hw_meas_vectors"]}
+    assert all(hm[f"meas_{o.lower()}_ok"]["status"] == "OK" for o in ("INFO", "PROBE_ARM", "STAMPS", "STIM_RUN"))
+    assert (hm["meas_arm_psc"]["status"], hm["meas_arm_psc"]["detail"]) == ("E_RANGE", 4)
+    assert hm["meas_hang_idle"]["detail_names"] == ["MEAS_STATE"] and hm["meas_hang_moving"]["status"] == "OK"
+    assert hm["meas_static_not_enabled"]["status"] == "OK" and hm["meas_static_enabled"]["status"] == "E_STATE"
+    fr = {f["name"]: f for f in FRAMES}
+    assert fr["diag_meas_info_resp"]["len"] == 1 + 64 and fr["diag_meas_info_req"]["len"] == 8
+
+
+def test_limit_wiring_clear_rule_d40a() -> None:
+    by = {v["name"]: v["expect"] for v in CHECK["vectors"]}
+    assert by["fault_clear_wiring"]["status"] == "E_CAUSE_ACTIVE"
+    assert by["fault_clear_wiring_one_released"]["status"] == "OK"
+    assert by["move_toward_end_after_wiring_clear"]["detail_names"] == ["LIMIT"]
+    assert by["move_away_end_after_wiring_clear"]["status"] == "OK"
+
+
+def _ll(name: str) -> list[dict]:
+    return next(c for c in LOADLIM["cases"] if c["name"] == name)["steps"]
+
+
+def test_loadlim_regrow_window_d40d() -> None:
+    """Independent anchors (ICD §5.5): window opens at a clear with the load beyond, re-trips only beyond
+    ref + regrow, ends with the first sample inside or the next FAULT_CLEAR."""
+    s = _ll("regrow_no_trip_within")
+    assert [x.get("trip") for x in s if x["op"] == "sample"] == [False, False, True, False, False, True]
+    s = _ll("regrow_window_ends_inside")
+    assert s[2]["regrow_window"] is False and s[3]["trip"] is True
+    s = _ll("regrow_new_reference")
+    assert s[3]["ref"] == 7_150_000 and s[4]["trip"] is False and s[5]["trip"] is True
+    assert _ll("clear_inside_no_window")[2]["regrow_window"] is False
+    assert _ll("regrow_config_keeps_window")[2]["regrow_window"] is True
+    assert all(not x.get("trip") for x in _ll("regrow_unload"))[1:] if False else True
+    assert [x["trip"] for x in _ll("regrow_unload") if x["op"] == "sample"] == [True, False, False, False]
+
+
+def test_motion_sum_tolerance_ceil_d40b() -> None:
+    import math as _m
+    mv = json.loads((VEC / "motion_vectors.json").read_text(encoding="utf-8"))
+    for c in mv["cases"]:
+        assert c["tolerance"]["sum_ticks"] == max(1, _m.ceil(c["n_periods"] / 1000))

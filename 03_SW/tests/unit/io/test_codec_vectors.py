@@ -209,6 +209,8 @@ def _decode_response(cmd: pg.Cmd, r: P.Response) -> dict:
         d["settle_ms"] = P.decode_u16(r.body)
     elif cmd == pg.Cmd.FAULT_CLEAR:
         d["cleared"] = list(bit_names(pg.FAULTS_BITS, P.decode_u16(r.body)))
+    elif cmd == pg.Cmd.DIAG_MEAS:
+        d["w"] = list(P.decode_meas(r.body))
     return d
 
 
@@ -231,6 +233,8 @@ def _encode_response(cmd: pg.Cmd, d: dict) -> bytes:
         return P.encode_ok(P.encode_u16(d["settle_ms"]))
     if cmd == pg.Cmd.FAULT_CLEAR:
         return P.encode_ok(P.encode_u16(_names_to_bits(d["cleared"], pg.FAULTS_BITS)))
+    if cmd == pg.Cmd.DIAG_MEAS:
+        return P.encode_ok(P.encode_meas(d["w"]))
     return P.encode_ok()
 
 

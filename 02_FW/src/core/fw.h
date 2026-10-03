@@ -140,6 +140,7 @@ typedef struct {
     uint8_t  home_phase;
     bool     pos_uncertain;          /* DS_POS_UNCERTAIN, cleared by HOME */
     bool     ena_on;                 /* ENA output at the enabled level (IO_ENA_DISABLED = !ena_on) */
+    bool     hw_meas;                /* hal_meas_cmd(INFO) answered at boot: FEAT_HW_MEAS (D-40 c) */
     inputs_t in;
     afe_state_t    afe;
     stream_state_t st;

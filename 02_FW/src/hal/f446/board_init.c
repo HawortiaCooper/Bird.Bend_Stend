@@ -29,12 +29,14 @@ void board_init(void)
     gpio_mode(PIN_RATE_PORT, PIN_RATE_BIT, GPIO_MODE_OUT_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
     gpio_write(PIN_TRIP_PORT, PIN_TRIP_BIT, false);                /* never high in release 1 */
     gpio_mode(PIN_TRIP_PORT, PIN_TRIP_BIT, GPIO_MODE_OUT_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
-#if defined(FW_DEBUG_PINS) && FW_DEBUG_PINS
-    gpio_write(GPIOC, PIN_DBG0_BIT, false);
-    gpio_write(GPIOC, PIN_DBG1_BIT, false);
-    gpio_mode(GPIOC, PIN_DBG0_BIT, GPIO_MODE_OUT_, GPIO_PUPD_NONE_, GPIO_SPEED_HIGH_);
-    gpio_mode(GPIOC, PIN_DBG1_BIT, GPIO_MODE_OUT_, GPIO_PUPD_NONE_, GPIO_SPEED_HIGH_);
-#endif
+    /* measurement-header pins: digital input, no pull, in every build (REQ-A-M2-04) */
+    gpio_mode(PIN_MH_PUL_A_PORT, PIN_MH_PUL_A_BIT, GPIO_MODE_IN_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
+    gpio_mode(PIN_MH_PUL_B_PORT, PIN_MH_PUL_B_BIT, GPIO_MODE_IN_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
+    gpio_mode(PIN_MH_DIR_PORT, PIN_MH_DIR_BIT, GPIO_MODE_IN_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
+    gpio_mode(PIN_MH_ENA_PORT, PIN_MH_ENA_BIT, GPIO_MODE_IN_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
+    gpio_mode(PIN_MH_EVT_PORT, PIN_MH_EVT_BIT, GPIO_MODE_IN_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
+    gpio_mode(PIN_MH_AUX_PORT, PIN_MH_AUX_BIT, GPIO_MODE_IN_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
+    gpio_mode(PIN_MH_STIM_PORT, PIN_MH_STIM_BIT, GPIO_MODE_IN_, GPIO_PUPD_NONE_, GPIO_SPEED_LOW_);
     time_init();                                                   /* TIM5 1 MHz, no IRQ yet */
     exti_init();                                                   /* inputs: pull-ups, EXTI routing */
 #if !(defined(FW_AFE_SYNTHETIC) && FW_AFE_SYNTHETIC)
@@ -42,6 +44,11 @@ void board_init(void)
 #endif
     uart_init();                                                   /* RX DMA runs, IRQs later */
     /* PUL / DIR / ENA are configured by hal_step_init() from app_init() (boot step 6) */
+}
+
+/* measurement images (HW_MEAS, meas_f4.c) override this hook; the release image keeps it empty */
+__attribute__((weak)) void meas_start(void)
+{
 }
 
 void board_start(void)
@@ -55,4 +62,5 @@ void board_start(void)
 #endif
     time_start_tick();                                             /* CC1 1 kHz tick (level 4) */
     iwdg_start();                                                  /* run window 32..90 ms */
+    meas_start();                                                  /* HW_MEAS images only (CR-02) */
 }

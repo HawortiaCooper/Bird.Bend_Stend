@@ -6,6 +6,7 @@
 #define HAL_F446_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "stm32f4xx.h"
@@ -33,6 +34,9 @@ void hx711_start(void);
 /* exti.c (E-stop, limits, PAUSE) */
 void exti_init(void);
 void exti_start(void);
+/* meas_f4.c (HW_MEAS images only, CR-02): weak empty default in board_init.c; the seam v1.3 forwarder
+ * hal_meas_cmd() (hal_sys.h) has a weak "not in build" default in sys_f4.c */
+void meas_start(void);
 /* flash_f4.c: an erase / program is running (input callbacks skipped, FW_design §5.11) */
 extern volatile bool g_flash_op;
 static inline bool flash_op_active(void) { return g_flash_op; }

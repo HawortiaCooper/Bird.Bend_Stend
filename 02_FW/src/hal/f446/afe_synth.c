@@ -72,16 +72,10 @@ static int32_t synth_raw(void)
 void EXTI4_IRQHandler(void)
 {
     afe_sample_t s;
-#if defined(FW_DEBUG_PINS) && FW_DEBUG_PINS
-    gpio_write(GPIOC, PIN_DBG1_BIT, true);
-#endif
     s.t_us = s_t_ready;
     s.raw = synth_raw();
     s.pos_steps = hal_step_count();
     s.status = 0u;
     on_afe_sample(&s);
-#if defined(FW_DEBUG_PINS) && FW_DEBUG_PINS
-    gpio_write(GPIOC, PIN_DBG1_BIT, false);
-#endif
 }
 #endif /* FW_AFE_SYNTHETIC */

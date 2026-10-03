@@ -68,7 +68,8 @@ typedef struct {
     vt_t next_tick; bool tick_pending;
     /* ---- inputs ---- */
     uint8_t lvl[IN_COUNT];                   /* electrical levels (1 = pin high) */
-    uint8_t stop_active_level, pause_active_level;   /* enum: 0 OPEN_ACTIVE (high), 1 CLOSED_ACTIVE (low) */
+    uint8_t pause_active_level, alm_active_level;    /* enum: 0 OPEN/HIGH_ACTIVE, 1 CLOSED/LOW_ACTIVE (seam v1.2) */
+    bool pend_auto; vt_t pend_lag_ns;        /* automatic driver PEND model (REQ-C-M2-07) */
     int lim_forced[2];                       /* -1 = position model, else forced level */
     double lim_pos_um[2];                    /* START switch active at x <= pos, END at x >= pos */
     struct { uint8_t id, level; uint32_t t_us; } deferred[64]; unsigned n_deferred;
@@ -79,11 +80,18 @@ typedef struct {
     uint32_t pw_ticks, dir_setup_ticks; bool pul_invert, ena_invert;
     bool step_running, step_high, step_last, step_stop_after, step_uncertain;
     int dir; int32_t count; uint32_t stop_gen;
+    int dir_level;                           /* DIR output, electrical (seam v1.3: +-2 = inverted output) */
+    vt_t last_pul_end;                       /* end of the last completed pulse (PEND model) */
     uint32_t period_cur, period_pre;         /* ticks */
     vt_t step_rise, step_end;
     bool step_fault_next;
     /* ---- world ---- */
-    double spm_world, shift_um;
+    double spm_world, shift_um, x0_um;
+    int64_t wsteps;                          /* world steps integrated from PUL + DIR pin (REQ-C-M2-06) */
+    bool dir_wiring_inv;                     /* DIR wiring / driver SW5 inverted (world) */
+    vt_t loop_load_ns, loop_load_until, main_busy_until;   /* inject loop_load (REQ-C-M2-02) */
+    bool hw_meas;                            /* --hw-meas: model of the HW_MEAS seam (twin_meas.c) */
+    uint32_t ni_magic, ni_last_pul, ni_hang; /* --noinit: DIAG_MEAS .noinit carried over a reset */
     /* ---- AFE model ---- */
     bool afe_on, afe_pd, afe_hold, afe_stall, afe_sck_overrun;
     int afe_rate_sps; uint8_t afe_gain_pulses;
@@ -113,7 +121,17 @@ void tw_edge(const char *pin, int level);
 void tw_step_counted(void);                  /* after every count change: world (limits) update */
 double tw_x_um(void);
 
-/* seam v1.2 (OI-FW-32): declared here until hal_sys.h carries it */
+/* seam v1.2 / v1.3 functions the twin provides (declared here in case A's headers lag behind) */
 bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);
+size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max);
+/* twin_meas.c hooks */
+void tw_meas_init(bool on, uint32_t ni_magic, uint32_t ni_last_pul, uint32_t ni_hang);
+void tw_meas_noinit_out(void);
+void tw_meas_edge(const char *pin, int level);
+void tw_meas_input(uint8_t id, uint8_t level);
+void tw_meas_dout(void);
+void tw_meas_rx(void);
+void tw_meas_stim_edge(uint8_t level);
+void tw_meas_release_static(void);
 
 #endif

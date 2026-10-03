@@ -28,10 +28,11 @@ VOCABULARY: Mapping[str, str] = {
     "alm": "both", "pend": "both", "specimen": "both", "load_offset": "both", "afe": "both",
     "world_shift": "both", "inject": "both", "rx_bytes": "both", "on_frame": "both", "on_event": "both",
     "flash": "T", "iwdg": "T", "clk": "T", "clock": "both", "reset": "both", "query": "both",
+    "driver": "T",                       # v0.6: S variant (DIR wiring inversion, automatic PEND)
 }
 TWIN_ONLY_INJECT = {"isr_storm"}
 #: twin actions the simulator answers in its own variant (README: ``flash`` "T (S: record-level cut)")
-SIM_VARIANTS = frozenset({"flash"})
+SIM_VARIANTS = frozenset({"flash", "driver"})
 RESET_CAUSES = {"pin": pg.ResetCause.PIN, "power": pg.ResetCause.POWER_ON, "iwdg": pg.ResetCause.IWDG,
                 "software": pg.ResetCause.SOFTWARE}
 
@@ -164,6 +165,15 @@ class SimControl:
             a.miss_next = int(miss_next)
         if raw_script is not None:
             a.raw_script.extend(int(r) for r in raw_script)
+
+    def _a_driver(self, dir_wiring_inverted: bool | None = None, pend_auto: bool | None = None,
+                  pend_lag_ms: float | None = None) -> dict[str, Any]:
+        """S variant of the twin's ``driver``: DIR wiring / SW5 inverted in the world (the carriage follows the
+        inverted DIR pin, x stays continuous); PEND is modelled automatically (inactive while pulsing)."""
+        b = self.board
+        if dir_wiring_inverted is not None:
+            b.set_dir_inverted(bool(dir_wiring_inverted))
+        return {"variant": "sim", "pend_auto": True}
 
     def _a_world_shift(self, um: int) -> None:
         self.board.world.x_um_true_offset += int(um)
@@ -313,6 +323,7 @@ class SimScenario:
     params: dict[str, Any] = field(default_factory=dict)
     schedule: list[dict[str, Any]] = field(default_factory=list)
     seed: int = 1
+    features: int | None = None          # INFO feature mask (names or int in the file); None = simulator default
 
     @classmethod
     def load(cls, path: str | Path) -> SimScenario:
@@ -326,11 +337,13 @@ class SimScenario:
         if int(d.get("version", 1)) > 1:
             raise ValueError("scenario made by a newer version")
         return cls(dict(d.get("world", {})), dict(d.get("params", {})), list(d.get("schedule", [])),
-                   int(d.get("seed", 1)))
+                   int(d.get("seed", 1)), parse_features(d["features"]) if "features" in d else None)
 
     def apply(self, board: SimBoard, control: SimControl) -> None:
         """World and AFE before the test; ``params`` written into the board RAM (the in-process simulator has no
         separate harness); ``schedule`` armed relative to now."""
+        if self.features is not None:            # e.g. the M1 FW mask (SW-C-M1-01); bits of absent features → 0
+            board.features = self.features
         w = self.world
         bw = board.world
         for k in ("stroke_um", "start_switch_um", "end_switch_um"):
@@ -363,6 +376,19 @@ class SimScenario:
             action = e
             _delayed(board, t_ms, lambda a=action: control.act(a["action"], **{k: v for k, v in a.items()
                                                                              if k != "action"}))
+
+
+def parse_features(spec: Any) -> int:
+    """Feature mask from an int, a list of names or a comma-separated string of ``FEATURES_BITS`` names."""
+    if isinstance(spec, int):
+        return spec
+    names = spec.split(",") if isinstance(spec, str) else list(spec)
+    mask = 0
+    for n in names:
+        n = str(n).strip().upper()
+        if n:
+            mask |= int(pg.Features[n])
+    return mask
 
 
 def default_scenario() -> SimScenario:

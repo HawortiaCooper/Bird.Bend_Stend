@@ -3,12 +3,12 @@
 | Item | Value |
 |---|---|
 | Doc | `01_HW/wiring.md` |
-| Version | **0.3** — final P1 draft, aligned to SRS v0.3 / ICD v0.3(+v0.4) / D-29…D-33 and the Validator E review (`02_FW/docs/FW_test_plan.md`) |
-| Date | 2026-10-03 |
+| Version | **0.4** — M2: CR-01 (D-36: single red button = E-stop, no STOP/BREAK button; operator panel = E-stop + PAUSE), measurement header MH (CR-02 / D-40 c, §6.1), check-list methods without oscilloscope / logic analyser (D-35 G5) with the C ↔ HG map (REQ-A-M2-02). · 0.3 — final P1 draft, aligned to SRS v0.3 / ICD v0.3(+v0.4) / D-29…D-33 and the Validator E review (`02_FW/docs/FW_test_plan.md`) |
+| Date | 2026-10-04 |
 | Owner | Implementer A (FW) |
 | Binding inputs | SRS v0.3 SYS-001, SYS-005…SYS-009, SYS-011, SAF-FW-005/007, FW-SW-001…004; DECISIONS D-11, D-13, **D-16 (driver = PFDE HBS86H, Leadshine-compatible clone, 24–100 VDC, control inputs 5–24 V)**, D-17, D-18, D-20, D-21, D-22, D-24, D-26, **D-27 (DIP/label)**, **D-28 (R5 defaults accepted)**, **D-29 (b START-only homing, c DRV_PWR / K1_WELDED)**; SRS v0.3 SAF-FW-024/025/026, FW-SW-005, SYS-011; R2 §1, §4, §6; **R5 §1.3 Option A (E-stop power removal), §2.4 (PSU), §3.1 (ALM/PEND), §4 (direct 3.3 V drive), §5.2 (filters, interface board Option A), §5.5 (buttons)** |
 | Related | `01_HW/pinout.md` (pins, NVIC), `02_FW/docs/FW_design.md` |
-| Status | Engineering proposal for a lab stand, **not a certified safety design**; the risk assessment (EN ISO 12100 / ISO 13849-1) stays with the PO (R5 header). The R5 defaults (E-stop Option A, horizontal axis/no brake, SDR-480-48, perfboard buffer → SN74ACT244 shield, STOP NC / PAUSE NO, pin map, TRIP provision) are **accepted by the PO (D-28)**; items still marked **(PO)** concern the driver DIP setup (D-27). |
+| Status | Engineering proposal for a lab stand, **not a certified safety design**; the risk assessment (EN ISO 12100 / ISO 13849-1) stays with the PO (R5 header). The R5 defaults (E-stop Option A, horizontal axis/no brake, SDR-480-48, perfboard buffer → SN74ACT244 shield, PAUSE NO, pin map, TRIP provision) are **accepted by the PO (D-28)**; D-36 replaced the separate STOP/BREAK button by the single red E-stop; items still marked **(PO)** concern the driver DIP setup (D-27). |
 
 Signal pins are given by name; the pin/connector numbers are in `pinout.md` §1.1. All values marked ASSUMED come from R2/R5 and are verified at the hardware gate (§11).
 
@@ -27,7 +27,7 @@ Signal pins are given by name; the pin/connector numbers are in `pinout.md` §1.
                                  │  PUL/DIR/ENA (3.3 V push-pull, common cathode, D-17) ─► HBS86H opto inputs (§2)
                                  │  ALM/PEND ◄─ HBS86H OC opto outputs (§3)
                                  │  DOUT/SCK/RATE ─ HX711 module @ 3.3 V ─ Keli DEF 200 kg (§4)
-                                 │  START/END limit NC (§5) · STOP/BREAK NC · PAUSE NO (§6)
+                                 │  START/END limit NC (§5) · PAUSE NO on the operator panel (§6)
                                  └─ GND = single logic ground (opto return side only, never the 48 V GND / PE) (§9)
  HBS86H ── motor phases A+/A-/B+/B- (shielded) ── 86HS2140 ── encoder cable (separate) ── HBS86H
 ```
@@ -119,15 +119,35 @@ Wiring stages:
 
 ---
 
-## 6. Operator buttons STOP/BREAK and PAUSE (D-14, D-26, R5 §5.5)
+## 6. Operator panel: red E-stop and PAUSE (D-14, D-26, D-36, R5 §5.5)
+
+CR-01 / D-36: there is **no STOP/BREAK button and no STOP input** (PC7 is free and used by the measurement header). The operator panel carries the red mushroom E-stop (§7: NC1 → K1, NC2 → PA10 sense) and the PAUSE button; holding stops come from the PC (GUI STOP, Pause/Break key = HALT).
 
 | Button | Contact | Wiring (input cell) | FW |
 |---|---|---|---|
-| **STOP/BREAK** — red flush pushbutton (**not** a mushroom; must not look like the E-stop, EN ISO 13850), direct-opening contact block | **NC to GND** (confirmed default, A-08, Q-R5-10) | 1 kΩ pull-up, 1 kΩ + 47 nF (τ ≈ 94 µs) → PC7 | open edge = immediate operational stop (holding) + HALT latch (src = button); clear = released + PC HALT_CLEAR (SAF-FW-022) |
 | **PAUSE** — yellow or black momentary button | **NO to GND** (A-08) | 4.7 kΩ pull-up, 1 kΩ + 220 nF (≈ 1.3 ms) → PB6 | press = controlled stop (holding), PAUSED; press while paused = RESUME_REQUEST event only (SAF-FW-023) |
 | **RESET** (blue) | NO | **not an MCU input** — part of the K1 self-hold circuit (§7) | – |
 
 ---
+
+### 6.1 Measurement header MH (CR-02, D-40 c; FW_test_plan v0.3 §6.2) — bench only
+
+A 2 × 8 pin header on the interface board / shield; GND next to every signal; wires ≤ 10 cm; **1 kΩ series resistor at
+the MCU end of every jumper** (a misconfigured pin can never drive a safety node). Taps are taken at the driver-side
+nodes: the MCU pins during the direct 3.3 V bring-up, the SN74ACT244 outputs once the buffer is fitted (SYS-011) — hence
+5 V-tolerant MCU pins only (pinout §1.5). The MH pins are digital inputs without pull in every FW build (never analog),
+so the jumpers may stay fitted; they are used only by the measurement images (`nucleo_f446re_meas` / `_meas_dwt`).
+
+| Jumper | From (tap) | To MCU pin | Purpose |
+|---|---|---|---|
+| J-PUL-A | PUL node | PC7 | probe: last PUL edge after an event, PWM-input period / width, PUL time stamps |
+| J-PUL-B | PUL node | PB7 | independent pulse counter (MT-2) |
+| J-DIR | DIR node | PC9 | DIR edges, DIR setup, per-direction counts |
+| J-ENA | ENA node | PC8 | ENA edge after E-stop / DRV_PWR / ENABLE |
+| J-EVT (one source at a time) | PA10, PB0, PC1, PB6, PB4, PA7, PA3, DIR or PB8 | PC6 | event start of the latency probe (MT-3) and event stamps |
+| J-AUX (selector) | PB4, PB10, PA2, PA7, PA8, PA10, PB8 | PA11 | time stamps of a second signal |
+| J-STIM | PB8 | input connector of E-stop sense / START / END / PAUSE **with the switch unplugged**; the E-stop NC1 → K1 power path stays wired | stimulus series with random phase (MT-7) |
+
 
 ## 7. E-stop with power removal (D-11, SYS-006) — R5 §1.3 **Option A** (accepted, D-28)
 
@@ -205,31 +225,32 @@ Timing defaults stay conservative regardless of the clone's real limits: PUL hig
 
 ## 11. Hardware check list (SYS-009) — run at the first PO-approved hardware gate, before any motion under load
 
-Executed by Validator E with Implementer A; results go into the check-list report. "Budget" = SRS §6 / requirement value.
+Executed by Validator E with Implementer A; results go into the check-list report. "Budget" = SRS §6 / requirement value. **v0.4 (CR-02, D-35 G5): no oscilloscope / logic analyser** — timing comes from the measurement image `HW_MEAS` through the measurement header (§6.1: OC = on-chip timer capture / DMA stamps / independent counter), from the PC (PC) or from a multimeter / caliper / dial indicator; the detailed procedures are the HG items of `FW_test_plan.md` §6 (map in the last column).
 
-| # | Item | Method | Pass criterion / budget | Req. |
+| # | Item | Method | Pass criterion / budget | Req. / HG |
 |---|---|---|---|---|
 | C-01 | Board identity and solder bridges SB13/14 ON, SB62/63 OFF, SB16/50 ON, SB54/55 OFF, SB46/52 OFF, SB51/56 ON (A4/A5 → PC1/PC0) | visual inspection, photo | as `pinout.md` §5 | SYS-007, FW-PLT-002 |
-| C-02 | Clock source | GET_STATUS `CLK_FALLBACK`; PUL frequency at 50 kHz with a counter | no fallback; frequency error ≤ 0.1 % | FW-PLT-002 |
+| C-02 | Clock source | GET_STATUS `CLK_FALLBACK`; PUL frequency at 50 kHz from the HW_MEAS probe (PWM-input period on J-PUL-A) and device clock vs PC over ≥ 600 s | no fallback; frequency error ≤ 0.1 % | FW-PLT-002 / HG-02 |
 | C-03 | VCP link at 921 600 Bd | 10 min streaming soak at 80 Hz + 20 commands/s | 0 sequence gaps, 0 CRC errors (FW and PC counters) | IF-002, NFR-004 |
 | C-04 | Flash erase vs IWDG and E-stop during SAVE | SAVE that forces a sector erase; press the E-stop during the erase | no IWDG reset, SAVE ≤ 2.5 s, NVM valid after reboot; ENA disabled ≤ 1 ms also during the erase (RAM-resident ISR, FW_design §5.11) | FW-NVM-002/003, SAF-FW-019 |
-| C-05 | HX711 at 80 SPS on silicon | logic analyser on DOUT/SCK, 10 000 reads; GET_STATUS measured rate | SCK-high ≤ 50 µs, read ≤ 60 µs, rate within ±1 % of the LA value, timestamp vs DOUT edge ≤ 5 µs | FW-AFE-001/004, FW-TIM-001 |
-| C-06 | Opto drive margin (3.3 V direct bring-up; inputs rated 5–24 V) and later the 5 V buffer | hold PUL and ENA high from a debug build; VOH under load; 100 Ω series shunt → I_LED | bring-up: I_LED ≥ 6 mA and VOH ≥ 3.0 V, else fit the buffer first; **before calibration: buffer fitted (D-28), I_LED ≈ 10–13 mA** | SYS-009, SYS-011, OI-05, D-28 |
-| C-07 | ENA enable/disable and settle | ENABLE/DISABLE commands; shaft holding torque by hand; ALM/PEND levels; LA on ENA vs the first PUL/DIR edge after ENABLE **and after a DRV_PWR return** (K1 RESET) | disabled = shaft free (no load!), enabled = holding; first edge ≥ `motion.ena_settle_ms` (500 ms) after the later of ENABLE and power return | FW-MOT-008, SAF-FW-024, A-04 |
-| C-08 | PUL/DIR timing at the driver terminals | LA at PUL+/DIR+ at 50 kHz, reversals | high ≥ 10 µs, low ≥ 10 µs, DIR setup ≥ 20 µs on every reversal | FW-MOT-001 |
-| C-09 | Step count integrity | 100 moves cross-checked with an external counter / TIM3 counter test build | difference 0 (± 1 only with `pos_uncertain`) | SAF-FW-004 |
-| C-10 | E-stop reaction | scope: NC2 edge at PA10 vs last PUL edge and ENA level, 100 trials; supply at the driver vs time with the MCU held in reset | last PUL edge ≤ 100 µs, ENA disabled ≤ 1 ms; driver supply < 5 V within 100 ms independent of the MCU | SAF-FW-005, SYS-006 |
-| C-11 | Limit / STOP-button reaction | scope: input edge at the MCU pin vs last PUL edge, 100 trials each | ≤ 200 µs | SAF-FW-002, SAF-FW-022 |
-| C-12 | FW load-limit reaction | threshold set just above a known load; DOUT ready of the deciding sample vs last PUL edge | ≤ 200 µs | SAF-FW-002/008 |
-| C-13 | PC STOP/HALT command and Pause/Break key | last byte on the RX line vs last PUL edge; key → last edge | ≤ 2 ms; key → last edge ≤ 100 ms p95 | SAF-FW-002, NFR-003 |
-| C-14 | Hang → IWDG | injected infinite loop (test image) while moving | PUL stops ≤ 100 ms, reset cause IWDG | SAF-FW-019 |
-| C-15 | Reset under load (**D-33 e**, DEF-P1-05) | horizontal axis: spring specimen preloaded in **tension ≥ 98 N (10 kgf)**; MCU reset (NRST, power cycle of the Nucleo only, IWDG test image); dial indicator on the table | axis motion ≤ 0.01 mm (driver keeps holding, D-13); raw change within noise; no PUL edge from reset (LA) | SAF-FW-018 |
+| C-05 | HX711 at 80 SPS on silicon | HW_MEAS: J-EVT = DOUT, J-AUX = PD_SCK; DOUT stamps vs DATA `t_us`, SCK-high via DWT (`_meas_dwt`), 10 000 reads; GET_STATUS measured rate | SCK-high ≤ 50 µs, read ≤ 60 µs, rate within ±1 % of the stamp median, timestamp vs DOUT edge ≤ 5 µs | FW-AFE-001/004, FW-TIM-001 / HG-05 |
+| C-06 | Opto drive margin (3.3 V direct bring-up; inputs rated 5–24 V) and later the 5 V buffer | hold PUL (DIAG_MEAS STATIC_LEVEL, HW_MEAS image) and ENA (DISABLE) at the active level; VOH under load; 100 Ω series shunt → I_LED | bring-up: I_LED ≥ 6 mA and VOH ≥ 3.0 V, else fit the buffer first; **before calibration: buffer fitted (D-28), I_LED ≈ 10–13 mA** | SYS-009, SYS-011, OI-05, D-28 |
+| C-07 | ENA enable/disable and settle | ENABLE/DISABLE commands; shaft holding torque by hand; ALM/PEND levels; J-ENA / J-PUL-A / J-DIR stamps: ENA edge vs the first PUL/DIR edge after ENABLE **and after a DRV_PWR return** (K1 RESET) | disabled = shaft free (no load!), enabled = holding; first edge ≥ `motion.ena_settle_ms` (500 ms) after the later of ENABLE and power return | FW-MOT-008, SAF-FW-024, A-04 / HG-07 |
+| C-08 | PUL/DIR timing at the driver terminals | HW_MEAS probe in PWM-input mode on J-PUL-A at 50 kHz (min high / low), J-DIR edge → next PUL edge on reversals | high ≥ 10 µs, low ≥ 10 µs, DIR setup ≥ 20 µs on every reversal | FW-MOT-001 / HG-08 |
+| C-09 | Step count integrity | 100 moves cross-checked with the independent counter (J-PUL-B, MT-2) | difference 0 (± 1 only with `pos_uncertain`) | SAF-FW-004 / HG-09 |
+| C-10 | E-stop reaction | HW_MEAS probe: J-EVT = PA10 node, last PUL (J-PUL-A) and ENA (J-ENA) edge after the event, 100 trials with the J-STIM stimulus + 10 real presses; driver supply vs time with the MCU held in reset (DMM / PSU indicator) | last PUL edge ≤ 100 µs, ENA disabled ≤ 1 ms; driver unpowered within 100 ms independent of the MCU | SAF-FW-005, SYS-006 / HG-10 |
+| C-11 | Limit reaction | HW_MEAS probe: J-EVT = PB0 / PC1 node vs last PUL edge, 100 stimulus trials + 10 real actuations each | ≤ 200 µs | SAF-FW-002 / HG-11 |
+| C-12 | FW load-limit reaction | threshold set just above a known load; J-EVT = DOUT of the deciding sample vs last PUL edge | ≤ 200 µs | SAF-FW-002/008 / HG-12 |
+| C-13 | PC STOP/HALT command and Pause/Break key | J-EVT = PA3 (RX) start bit of the frame's last byte vs last PUL edge; key → last edge from the PC timestamp and the device-time map | ≤ 2 ms; key → last edge ≤ 100 ms p95 | SAF-FW-002, NFR-003 / HG-13 |
+| C-14 | Hang → IWDG | DIAG_MEAS HANG (main / tick / ISR1) while moving; `.noinit` heartbeat and last-PUL stamps read back after the reset | PUL stops ≤ 100 ms after the hang start, reset cause IWDG | SAF-FW-019 / HG-14 |
+| C-15 | Reset under load (**D-33 e**, DEF-P1-05) | horizontal axis: spring specimen preloaded in **tension ≥ 98 N (10 kgf)**; MCU reset (NRST, power cycle of the Nucleo only, IWDG test image); dial indicator on the table; independent counter (J-PUL-B) | axis motion ≤ 0.01 mm (driver keeps holding, D-13); raw change within noise; no PUL edge from reset (counter 0) | SAF-FW-018 / HG-15 |
 | C-16 | ALM / PEND levels of the PFDE clone, ALM reset | driver powered/unpowered, in position / moving, open- vs closed-loop setting; provoke an ALM (bench, e.g. supply under-voltage); reset by E-stop + RESET (power cycle) and, separately, try the ENA-toggle reset; ALM line chatter (wiggle the connector) | levels recorded, `drv.*_active_level` set; one ALM_CHANGED per change (chatter → at most one pair per `io.release_ms`, ALM is polled); new motion starts refused while ALM active and DRV_PWR on; running moves unaffected; power-cycle reset works, ENA-toggle result recorded | FW-SW-004, SAF-FW-026, D-28, SYS-009 |
-| C-17 | Input wire-break | unplug each NC input (E-stop sense, START, END, STOP) | reads active, stop + flag | SAF-FW-007 |
-| C-18 | Main-loop and ISR budgets | GET_STATUS `loop_max_us`; DWT measurement build at 50 kHz stepping + 80 Hz stream + 20 cmd/s | loop ≤ 1000 µs, step ISR ≤ 2 µs, CPU ≤ 15 %, masked windows ≤ 1 µs, E-stop/STOP ISR ≤ 1 µs | NFR-006, NFR-007 |
+| C-17 | Input wire-break | unplug each NC input (E-stop sense, START, END) and the DRV_PWR aux | reads active / unpowered, stop + flag | SAF-FW-007 / HG-17 |
+| C-18 | Main-loop and ISR budgets | GET_STATUS `loop_max_us`; `_meas_dwt` image (DWT statistics) at 50 kHz stepping + 80 Hz stream + 20 cmd/s; idle-loop counter CPU load | loop ≤ 1000 µs, step ISR ≤ 2 µs, CPU ≤ 15 %, windows masking levels 0–2 ≤ 1 µs, E-stop / limit ISR ≤ 1 µs | NFR-006, NFR-007 / HG-18 |
 | C-19 | Driver DIP sheet | inspection of §10, all 8 switches incl. SW7/SW8 open/closed loop; first travel calibration result vs the expected steps/mm (160 at 800 p/rev, 800 at 4000 p/rev) | recorded | SYS-005, D-27 |
 | C-20 | E-stop circuit and K1 plausibility | wiring inspection of §7 against R5 Option A; press S0 normally; then simulate a welded K1 by bridging the K1 aux contact (driver supply off!) and press S0 | as drawn; normal press → DRIVER_POWER (0) ≤ 25 ms after the drop-out, no fault; bridged aux → FAULT K1_WELDED after `drv.k1_weld_ms` (200 ms), not before; FAULT_CLEAR refused until the bridge is removed | SYS-006, SAF-FW-025 |
 | C-22 | Driver drive through the buffer board (SYS-011) | before the first calibration: inspect the SN74ACT244 board; measure I_LED of PUL/DIR/ENA through it; repeat C-07/C-08 through the board | board installed; I_LED within the driver rating (≈ 10–13 mA); ENA/PUL/DIR timing as C-07/C-08 | SYS-011, SYS-009 |
+| C-24 | Measurement chain self-test and loopback hygiene (CR-02) | J-STIM → J-EVT self-test of the probe and stamps; release image with the jumpers fitted: MH pins digital input without pull | probe / stamps consistent with the stimulus; no MH pin analog | SYS-009 / HG-29, HG-31 |
 | C-23 | DRV_PWR during SAVE (D-33 f) | SAVE forcing a sector erase; open K1 (E-stop) during the erase | after the erase: DRV_PWR reaction ≤ erase time + 25 ms; NVM record valid; no IWDG reset | SAF-FW-024, FW-NVM-003 |
 | C-21 | Driver-power loss without E-stop | during a slow jog, switch off the 48 V PSU (or open K1 via the hold path) with S0 released | stop and ENA disabled ≤ 25 ms after the PA7 change, NOT_ENABLED, HOMED = 0, EVENTs DRIVER_POWER (0) + STOPPED (DRV_POWER_LOST); ENABLE refused until power returns, first pulse ≥ 500 ms after the later of ENABLE and power return; PA7 toggles < 20 ms (bounce) ignored | SAF-FW-024, FW-SW-005, FW-MOT-008 |
 
@@ -237,7 +258,7 @@ Executed by Validator E with Implementer A; results go into the check-list repor
 
 ## 12. Connection inspection list (SYS-001 / SYS-007)
 
-Every connection of SRS §3.1 must appear here with its terminal: PUL/DIR/ENA (§2), ALM/PEND (§3), HX711 + cell (§4), START/END (§5), STOP/PAUSE (§6), E-stop NC1/NC2, K1, RESET, DRV_PWR, KT (§7), 48 V supply, Nucleo supply (§8), grounds/shields (§9), motor + encoder (driver manual), USB to the PC. Terminal numbers are filled in when the panel/shield is built (Stage 1: Nucleo header pins from `pinout.md`).
+Every connection of SRS §3.1 must appear here with its terminal: PUL/DIR/ENA (§2), ALM/PEND (§3), HX711 + cell (§4), START/END (§5), PAUSE and the red E-stop on the operator panel (§6), measurement header MH (§6.1, bench only), E-stop NC1/NC2, K1, RESET, DRV_PWR, KT (§7), 48 V supply, Nucleo supply (§8), grounds/shields (§9), motor + encoder (driver manual), USB to the PC. Terminal numbers are filled in when the panel/shield is built (Stage 1: Nucleo header pins from `pinout.md`).
 
 ---
 
@@ -247,4 +268,5 @@ Every connection of SRS §3.1 must appear here with its terminal: PUL/DIR/ENA (�
 |---|---|---|
 | 0.1 | 2026-10-03 | First draft: direct 3.3 V common-cathode drive (D-17; bring-up only — PFDE HBS86H inputs rated 5–24 V, SN74ACT244 buffer required before calibration, D-28), ALM/PEND cells (semantics vs open/closed loop, D-27), HX711 at 3.3 V with RATE on PB5, NC limits with RC, STOP NC / PAUSE NO, E-stop R5 Option A with sense contact and DRV_PWR (accepted D-28), supplies (SDR-480-48), grounding, 8-switch driver setup sheet, SYS-009 check list. |
 | 0.2 | 2026-10-03 | Aligned to SRS v0.3 / ICD v0.3 / D-29 / D-30:<br>• DRV_PWR (PA7) is **required** (20 ms filter, any-cause power loss → stop / ENA disabled / NOT_ENABLED / not homed ≤ 25 ms; K1_WELDED after `drv.k1_weld_ms` 200 ms);<br>• stale `home.switch` reference removed (START-only homing, D-29 b; END during HOME = HOME_WIRING);<br>• ALM start-block scope (SAF-FW-026) and "ALM is never a step-loss indicator" (D-27);<br>• C-20 now tests K1_WELDED; new C-21 driver-power loss without E-stop. |
+| 0.4 | 2026-10-04 | M2: CR-01 — §6 operator panel = red E-stop + PAUSE, STOP/BREAK button and its PC7 input removed (C-11, C-17 reworded); §6.1 measurement header MH (CR-02, D-40 c); check list without scope / logic analyser (C-02, C-05, C-07…C-15, C-18 re-worded to the HW_MEAS / PC methods), new C-24, C ↔ HG map in the last column (REQ-A-M2-02). |
 | 0.3 | 2026-10-03 | Final P1 round:<br>• C-15 reworded per D-33 e / DEF-P1-05 (horizontal axis, spring specimen ≥ 98 N in tension);<br>• SYS-009 items added per OBS-P1-12: C-07 settle after DRV_PWR return, C-16 ALM reset by power cycle / ENA toggle + chatter, C-22 buffer board, C-23 DRV_PWR during SAVE (C-20/C-21 already cover K1_WELDED and the E-stop/PSU paths);<br>• ALM is polled (OBS-P1-10). Mapping to FW_test_plan HG items: C-15 = HG-15, C-16 = HG-16/24, C-20 = HG-20/22, C-21 = HG-21, C-22 = HG-23, C-23 = HG-04. |

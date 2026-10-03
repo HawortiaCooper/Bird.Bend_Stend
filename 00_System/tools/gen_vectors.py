@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Single generator of the shared protocol vectors (ICD_protocol.md v0.5 §12).
+"""Single generator of the shared protocol vectors (ICD_protocol.md v0.6 §12).
 
 Implements: IF-003, IF-004, IF-006, IF-010, FW-CMD-001, FW-CFG-003, SAF-FW-020
 Writes  00_System/tools/vectors/protocol_vectors.json   (CRC, frames, parser streams)
         00_System/tools/vectors/check_vectors.json      (state + command -> verdict)
         00_System/tools/vectors/units_vectors.json      (um <-> steps, step-rate speed cap; ICD §0.1)
         00_System/tools/vectors/motion_vectors.json     (step periods: ramps, stops, jog changes; ref_motion.py)
+        00_System/tools/vectors/loadlim_vectors.json    (FW load limit sample sequences; ref_loadlim.py)
 
 Usage:
     python gen_vectors.py            # (re)generate both files
@@ -30,6 +31,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 import gen_params  # noqa: E402
 import ref_cmdcheck as cc  # noqa: E402
+import ref_loadlim as rl  # noqa: E402
 import ref_motion as rm  # noqa: E402
 import ref_codec as rc  # noqa: E402
 
@@ -38,6 +40,7 @@ PROTO_PATH = VEC_DIR / "protocol_vectors.json"
 CHECK_PATH = VEC_DIR / "check_vectors.json"
 UNITS_PATH = VEC_DIR / "units_vectors.json"
 MOTION_PATH = VEC_DIR / "motion_vectors.json"
+LOADLIM_PATH = VEC_DIR / "loadlim_vectors.json"
 R = rc.RESP_BIT
 
 
@@ -225,6 +228,24 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
              "FAULT_CLEAR", "OK, body = mask of cleared faults")
     req_resp("PAUSE", 0x61, {}, dict(ok), "PAUSE (GUI Pause): controlled stop + PAUSED latch",
              "OK; PAUSED blocks motion until RESUME or HALT_CLEAR (D-30, D-31)")
+    meas_req = [("INFO", 0, 0, 0), ("PROBE_ARM", 0, 0x0100, 1),
+                ("PROBE_READ", 0, 0, 0), ("COUNTER", 1, 0, 0), ("STAMPS", 1, 3, 0), ("NOINIT", 0, 0, 0),
+                ("STIM_RUN", (20 << 1) | 1, 100, 0xC0FFEE), ("HANG", 2, 500, 0), ("STATIC_LEVEL", 1, 1, 0),
+                ("DWT", 0, 7, 0)]
+    meas_body = {
+        "INFO": [0x1, 180_000_000, 32, 1_000_000, 4096, 120, 0, 90_000_000] + [0] * 8,
+        "PROBE_READ": [0x3, 0, 3_600, 0, 0, 7, 3_900, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "COUNTER": [8000, 12_345_678] + [0] * 14,
+        "STAMPS": [5000, 4096] + list(range(1_000_000, 1_000_000 + 14 * 125, 125))[::-1],
+        "NOINIT": [0x4D454153, 2_000_125, 2_010_000, 0] + [0] * 12,
+    }
+    for i, (op, sel, a, b) in enumerate(meas_req):
+        req_resp("DIAG_MEAS", 0x64 + i, {"op": rc.MEAS_OP.index(op), "sel": sel, "a": a, "b": b},
+                 {**ok, "w": meas_body.get(op, [0] * rc.MEAS_BODY_WORDS)},
+                 f"DIAG_MEAS op {op} (HW_MEAS builds only, ICD Appendix C)",
+                 f"OK, 64-byte body (example values; meanings per Appendix C, op {op})", tag=op.lower())
+    add("diag_meas_not_in_build_nack", C["DIAG_MEAS"] | R, 0x6E, {"status": "E_INTERNAL", "detail": 1},
+        "release / twin build (FEAT_HW_MEAS = 0): DIAG_MEAS -> E_INTERNAL NOT_IN_BUILD, nothing executed")
     req_resp("RESUME", 0x62, {}, dict(ok), "RESUME (GUI Resume, D-31): clears only PAUSED",
              "OK; PAUSED cleared, no motion starts (the SW re-issues the absolute target)")
     add("resume_state_nack", C["RESUME"] | R, 0x63,
@@ -439,12 +460,15 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
     vecs: list[dict[str, Any]] = []
     seq = [0]
 
+    meas_vecs: list[dict[str, Any]] = []
+
     def add(name: str, desc: str, state: dict[str, Any], cmd: str, fields: dict[str, Any] | None = None,
-            payload: bytes | None = None, ftype: int | None = None, srs: tuple[str, ...] = ()) -> None:
+            payload: bytes | None = None, ftype: int | None = None, srs: tuple[str, ...] = (),
+            hw_meas: bool = False) -> None:
         t = rc.CMD[cmd] if ftype is None else ftype
         pl = payload if payload is not None else rc.encode_request(cmd, fields or {})
         st = cc.FwState.from_dict(state)
-        status, detail = model.check(st, t, pl)
+        status, detail = model.check(st, t, pl, hw_meas=hw_meas)
         s = seq[0] & 0xFF
         seq[0] += 1
         exp: dict[str, Any] = {"status": status, "detail": detail}
@@ -457,7 +481,7 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
                 cmd, {"status": status, "detail": detail})).hex().upper()
         if st.paused or cmd in ("PAUSE", "RESUME"):
             exp["paused_after"] = model.paused_after(st, t, pl, status)
-        vecs.append({"name": name, "description": desc, "srs": list(srs), "state": state,
+        (meas_vecs if hw_meas else vecs).append({"name": name, "description": desc, "srs": list(srs), "state": state,
                      "request": {"type": f"0x{t:02X}", "type_name": cmd, "seq": s,
                                  "payload_hex": pl.hex().upper(),
                                  "frame_hex": rc.encode_frame(t, s, pl).hex().upper()},
@@ -728,6 +752,61 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         "FAULT_CLEAR", srs=("SAF-FW-012", "FW-CMD-003"))
     add("fault_clear_k1", "FAULT_CLEAR of K1_WELDED while power still on with E-stop open",
         {"faults": ["K1_WELDED"], "fault_causes": ["K1_WELDED"]}, "FAULT_CLEAR", srs=("R5 §1.5",))
+    LW = ("SAF-FW-014", "D-40a")
+    add("fault_clear_wiring_one_released", "LIMIT_WIRING latched, START released, END still active -> FAULT_CLEAR OK "
+        "(cause = both active; D-40a)", {"faults": ["LIMIT_WIRING"], "limit_end": True}, "FAULT_CLEAR", srs=LW)
+    add("move_toward_end_after_wiring_clear", "after the LIMIT_WIRING clear the still-active END input blocks "
+        "motion toward it (E_STATE LIMIT)", {"limit_end": True}, "MOVE_ABS", dict(mv, target_um=120000), srs=LW)
+    add("move_away_end_after_wiring_clear", "... and motion away from END is accepted", {"limit_end": True},
+        "MOVE_ABS", dict(mv, target_um=90000), srs=LW)
+    add("move_wiring_latched", "LIMIT_WIRING latched (cause gone) -> all motion refused until FAULT_CLEAR",
+        {"faults": ["LIMIT_WIRING"]}, "MOVE_ABS", dict(mv, target_um=90000), srs=LW)
+
+    # --- DIAG_MEAS (D-40c, REQ-C-M2-01): release / twin build = NOT_IN_BUILD
+    MS = ("D-40c", "CR-02")
+    add("diag_meas_not_in_build", "DIAG_MEAS INFO in a release / twin build (FEAT_HW_MEAS = 0) -> E_INTERNAL "
+        "NOT_IN_BUILD, nothing executed", {}, "DIAG_MEAS", {"op": 0, "sel": 0, "a": 0, "b": 0}, srs=MS)
+    add("diag_meas_not_in_build_moving", "DIAG_MEAS HANG while moving, release build -> E_INTERNAL NOT_IN_BUILD",
+        moving, "DIAG_MEAS", {"op": 7, "sel": 0, "a": 100, "b": 0}, srs=MS)
+    add("diag_meas_length", "DIAG_MEAS with 7 bytes -> E_LENGTH 8 (LEN first)", {}, "DIAG_MEAS",
+        payload=bytes(7), srs=MS)
+    # --- HW_MEAS build (separate section hw_meas_vectors: replayed only against a build with FEAT_HW_MEAS)
+    meas_ok = [("INFO", 0, 0, 0), ("PROBE_ARM", 8, 0x0102, 65535), ("PROBE_READ", 0, 0, 0), ("COUNTER", 1, 0, 0),
+               ("STAMPS", 3, 1023, 0), ("NOINIT", 1, 0, 0), ("STIM_RUN", 255, 1000, 0xFFFFFFFF), ("DWT", 1, 31, 0)]
+    for op, sel, a, b in meas_ok:
+        add(f"meas_{op.lower()}_ok", f"HW_MEAS: {op} with its maximum valid arguments -> OK", {}, "DIAG_MEAS",
+            {"op": rc.MEAS_OP.index(op), "sel": sel, "a": a, "b": b}, srs=MS, hw_meas=True)
+    meas_bad = [("op_range", 10, 0, 0, 0, "op 10 -> E_RANGE 0"),
+                ("info_sel", 0, 1, 0, 0, "INFO sel 1 -> E_RANGE 1 (unused fields must be 0)"),
+                ("info_b", 0, 0, 0, 1, "INFO b 1 -> E_RANGE 4"),
+                ("arm_src", 1, 9, 0, 0, "PROBE_ARM source 9 -> E_RANGE 1"),
+                ("arm_mode", 1, 0, 3, 0, "PROBE_ARM mode 3 -> E_RANGE 2"),
+                ("arm_bits", 1, 0, 0x0004, 0, "PROBE_ARM a bit 2 set -> E_RANGE 2"),
+                ("arm_psc", 1, 0, 0, 65536, "PROBE_ARM prescaler 65 536 -> E_RANGE 4"),
+                ("stamps_chan", 4, 4, 0, 0, "STAMPS channel 4 -> E_RANGE 1"),
+                ("stamps_page", 4, 0, 1024, 0, "STAMPS page 1024 -> E_RANGE 2"),
+                ("stim_hold0", 6, 1, 10, 0, "STIM_RUN hold 0 ms -> E_RANGE 1"),
+                ("stim_n0", 6, 2, 0, 0, "STIM_RUN 0 pulses -> E_RANGE 2"),
+                ("stim_n1001", 6, 2, 1001, 0, "STIM_RUN 1001 pulses -> E_RANGE 2"),
+                ("hang_where", 7, 3, 0, 0, "HANG where 3 -> E_RANGE 1"),
+                ("hang_long", 7, 0, 10001, 0, "HANG 10 001 ms -> E_RANGE 2"),
+                ("static_pin", 8, 2, 0, 0, "STATIC_LEVEL pin 2 -> E_RANGE 1"),
+                ("dwt_section", 9, 0, 32, 0, "DWT section 32 -> E_RANGE 2")]
+    for nm, op, sel, a, b, d in meas_bad:
+        add(f"meas_{nm}", f"HW_MEAS: {d}", {}, "DIAG_MEAS", {"op": op, "sel": sel, "a": a, "b": b}, srs=MS,
+            hw_meas=True)
+    add("meas_hang_idle", "HW_MEAS: HANG while idle -> E_STATE MEAS_STATE", {}, "DIAG_MEAS",
+        {"op": 7, "sel": 0, "a": 100, "b": 0}, srs=MS, hw_meas=True)
+    add("meas_hang_moving", "HW_MEAS: HANG while moving -> OK", moving, "DIAG_MEAS",
+        {"op": 7, "sel": 2, "a": 100, "b": 0}, srs=MS, hw_meas=True)
+    add("meas_static_enabled", "HW_MEAS: STATIC_LEVEL while IDLE (enabled) -> E_STATE MEAS_STATE", {}, "DIAG_MEAS",
+        {"op": 8, "sel": 0, "a": 1, "b": 0}, srs=MS, hw_meas=True)
+    add("meas_static_not_enabled", "HW_MEAS: STATIC_LEVEL while NOT_ENABLED (E-stop latched) -> OK",
+        dict(boot, estop_latched=True), "DIAG_MEAS", {"op": 8, "sel": 0, "a": 1, "b": 0}, srs=MS, hw_meas=True)
+    add("meas_read_during_estop", "HW_MEAS: read ops are accepted in every state (E-stop, HALT, fault)",
+        dict(boot, estop_latched=True, halt_latched=True, faults=["STEP_FAULT"]), "DIAG_MEAS",
+        {"op": 3, "sel": 0, "a": 0, "b": 0}, srs=MS, hw_meas=True)
+
     add("fault_clear_gone", "FAULT_CLEAR when all causes gone -> OK",
         {"faults": ["STEP_FAULT", "HOME_NOT_FOUND", "HOME_DRIFT"]}, "FAULT_CLEAR", srs=("FW-CMD-003",))
 
@@ -872,6 +951,8 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
                      "tests)",
                      "state_schema: version of the state keys (state_defaults); keys are only added "
                      "(never renamed or removed) and every addition bumps state_schema (F-B-25)",
+                     "hw_meas_vectors (v0.6): replayed only against a measurement build (FEAT_HW_MEAS = 1, "
+                     "D-40c); release / twin builds replay `vectors` (DIAG_MEAS -> E_INTERNAL NOT_IN_BUILD)",
                      "an implementation passes when, for each vector, the FW in the given state "
                      "answers the request with the expected STATUS and detail and, for a NACK, "
                      "exactly response_frame_hex, without side effects"],
@@ -879,6 +960,7 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         "state_schema": cc.STATE_SCHEMA,
         "state_defaults": {k: v for k, v in cc.FwState().__dict__.items()},
         "vectors": vecs,
+        "hw_meas_vectors": meas_vecs,
     }
 
 
@@ -1042,14 +1124,82 @@ def make_motion(pd: gen_params.Dictionary) -> dict[str, Any]:
         "_comment": ["GENERATED by 00_System/tools/gen_vectors.py from ref_motion.py - do not edit",
                      f"ICD_protocol.md v{rc.ICD_VERSION}; definitions: ref_motion.py docstring (R4 §1.5, ICD §6.5)",
                      "periods = TIM2 step periods in ticks (f_tick = 90 MHz) incl. the fractional carry; the FW "
-                     "(float32) matches each period within tolerance.period_ticks and the sum within "
-                     "tolerance.sum_ticks; the SW simulator (binary64) matches exactly",
+                     "(float32) matches each period within tolerance.period_ticks (±1) and the sum within "
+                     "tolerance.sum_ticks = ±ceil(N/1000) (D-40 b, SRS FW-MOT-003); the SW simulator (binary64) "
+                     "matches exactly",
                      "speeds/accelerations in wire units; derived = steps/s, steps/s^2 with the binary32 "
                      "steps_per_mm (ICD §0.1)",
                      "events.after_step = number of steps already emitted when the event takes effect",
                      "ctrl_stop_paths: ICD §6.5 / FW_design §5.6.4 path selection (CLEAN / ISR / STRETCH)"],
         "icd_version": rc.ICD_VERSION, "param_dict_hash": f"0x{pd.hash:08X}",
         "cases": cases, "ctrl_stop_paths": paths, "planner": plans,
+    }
+
+
+# ======================================================================================
+# load-limit vectors (ICD §5.5 "FW load limit", D-40 d; ref_loadlim.py)
+# ======================================================================================
+def make_loadlim(pd: gen_params.Dictionary) -> dict[str, Any]:
+    by = {p.key: p for p in pd.params}
+    d_lo, d_hi = by["safety.load_raw_min"].default, by["safety.load_raw_max"].default
+    d_rg = by["safety.load_regrow_raw"].default
+    cases: list[dict[str, Any]] = []
+
+    def case(name: str, desc: str, steps: list[tuple], trip_samples: int = 1, lo: int = d_lo, hi: int = d_hi,
+             regrow: int = d_rg, srs=("SAF-FW-008",)) -> None:
+        ll = rl.LoadLim(lo, hi, trip_samples, regrow)
+        out = []
+        for st in steps:
+            if st[0] == "s":
+                trip = ll.sample(st[1])
+                out.append({"op": "sample", "raw": st[1], "trip": trip, "regrow_window": ll.regrow_on})
+            elif st[0] == "clear":
+                ll.fault_clear()
+                out.append({"op": "fault_clear", "regrow_window": ll.regrow_on, "ref": ll.ref})
+            elif st[0] == "config":
+                ll.config(*st[1:])
+                out.append({"op": "config", "load_raw_min": st[1], "load_raw_max": st[2], "trip_samples": st[3],
+                            "regrow": st[4], "regrow_window": ll.regrow_on})
+        cases.append({"name": name, "description": desc, "srs": list(srs),
+                      "init": {"load_raw_min": lo, "load_raw_max": hi, "trip_samples": trip_samples,
+                               "regrow": regrow}, "steps": out})
+
+    hi1, top = d_hi + 1, d_hi + 77_729                     # 7 022 272 / 7 100 000
+    case("trip_first_sample", "raw_max + 1 trips on that sample (trip_samples 1)", [("s", d_hi), ("s", hi1)])
+    case("trip_low_side", "raw_min - 1 trips", [("s", d_lo), ("s", d_lo - 1)])
+    case("trip_samples_3", "3 consecutive violations needed; a sample inside resets the count",
+         [("s", hi1), ("s", hi1), ("s", 0), ("s", hi1), ("s", hi1), ("s", hi1)], trip_samples=3)
+    case("rail_counts", "rail samples count as violations even with thresholds at the cap (SAF-FW-009)",
+         [("s", 7_151_121), ("s", rl.RAW_MAX)], lo=-7_151_121, hi=7_151_121, srs=("SAF-FW-009",))
+    R = ("SAF-FW-011", "D-40d")
+    case("regrow_no_trip_within", "clear at 7 100 000: samples up to ref + regrow do not trip; ref + regrow + 1 "
+         "re-trips immediately (even with trip_samples 3)",
+         [("s", top), ("s", top), ("s", top), ("clear",), ("s", top + d_rg), ("s", top), ("s", top + d_rg + 1)],
+         trip_samples=3, srs=R)
+    case("regrow_unload", "unloading after the clear never trips", [("s", top), ("clear",), ("s", top - 10_000),
+         ("s", top - 50_000), ("s", d_hi + 5)], srs=R)
+    case("regrow_window_ends_inside", "the window ends with the first sample inside the thresholds; after that the "
+         "normal rule applies again", [("s", top), ("clear",), ("s", d_hi - 1_000), ("s", d_hi + 1_000)], srs=R)
+    case("regrow_new_reference", "the next FAULT_CLEAR takes a new reference", [("s", top), ("clear",),
+         ("s", top + 50_000), ("clear",), ("s", top + 50_000 + d_rg), ("s", top + 50_000 + d_rg + 1)], srs=R)
+    case("regrow_low_side", "mirror on the negative side", [("s", -top), ("clear",), ("s", -top - d_rg),
+         ("s", -top - d_rg - 1)], srs=R)
+    case("clear_inside_no_window", "a clear with the last sample inside the thresholds opens no window",
+         [("s", hi1), ("s", 0), ("clear",), ("s", hi1)], srs=R)
+    case("regrow_config_keeps_window", "a threshold change (SET_PARAM) does not end the window",
+         [("s", top), ("clear",), ("config", d_lo, d_hi - 100_000, 1, d_rg), ("s", top + d_rg), ("s", top + d_rg + 1)],
+         srs=R + ("SAF-FW-010",))
+    case("regrow_at_rail", "clear while at the rail: further rail samples do not re-trip (not beyond ref + regrow); "
+         "the window ends inside", [("s", rl.RAW_MAX), ("clear",), ("s", rl.RAW_MAX), ("s", 0), ("s", rl.RAW_MAX)],
+         srs=R + ("SAF-FW-009",))
+    return {
+        "_comment": ["GENERATED by 00_System/tools/gen_vectors.py from ref_loadlim.py - do not edit",
+                     f"ICD_protocol.md v{rc.ICD_VERSION} §5.5 'FW load limit' (D-12, D-40 d); definitions in the "
+                     "ref_loadlim.py docstring",
+                     "steps in order: sample (raw -> trip, regrow_window after the sample), fault_clear (reference "
+                     "= last sample; regrow_window opens if it violates), config (new thresholds, next sample)",
+                     "every implementation (FW pure loadlim, SW simulator) reproduces trip and regrow_window"],
+        "icd_version": rc.ICD_VERSION, "param_dict_hash": f"0x{pd.hash:08X}", "cases": cases,
     }
 
 
@@ -1081,7 +1231,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     pd = gen_params.load()
     outputs = {PROTO_PATH: render(make_protocol(pd)), CHECK_PATH: render(make_check(pd)),
-               UNITS_PATH: render(make_units(pd)), MOTION_PATH: render_motion(make_motion(pd))}
+               UNITS_PATH: render(make_units(pd)), MOTION_PATH: render_motion(make_motion(pd)),
+               LOADLIM_PATH: render(make_loadlim(pd))}
     stale = []
     for path, content in outputs.items():
         old = path.read_text(encoding="utf-8") if path.exists() else None
@@ -1103,7 +1254,8 @@ def main(argv: list[str] | None = None) -> int:
     uv = json.loads(outputs[UNITS_PATH])
     mv = json.loads(outputs[MOTION_PATH])
     print(f"protocol: {len(pv['crc16'])} crc, {len(pv['frames'])} frames, {len(pv['streams'])} streams; "
-          f"check: {len(cv['vectors'])} vectors; units: {len(uv['um_to_steps'])} + "
+          f"check: {len(cv['vectors'])} + {len(cv['hw_meas_vectors'])} HW_MEAS vectors; "
+          f"loadlim: {len(json.loads(outputs[LOADLIM_PATH])['cases'])} cases; units: {len(uv['um_to_steps'])} + "
           f"{len(uv['steps_to_um'])} + {len(uv['rate_cap'])}; motion: {len(mv['cases'])} cases "
           f"({sum(c['n_periods'] for c in mv['cases'])} periods), {len(mv['ctrl_stop_paths'])} stop paths; "
           f"PARAM_DICT_HASH = 0x{pd.hash:08X}")

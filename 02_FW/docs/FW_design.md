@@ -3,8 +3,8 @@
 | Item | Value |
 |---|---|
 | Doc | `02_FW/docs/FW_design.md` |
-| Version | **0.4** — M1 implemented (P2, D-35): code in `02_FW/src`, host suites in `02_FW/test/test_impl_*`; implementation notes and deviations in **§9.6**; seam v1.1 (§8.1); D-36 noted. · 0.3 — final P1 design: ICD v0.3 + the v0.4 deltas (RESUME, TX order, E_INTERNAL codes, boot ENA rule, single-source seams), SRS v0.3 + D-31/D-32/D-33, Validator E review (`FW_test_plan.md` v0.1, DEF-P1-01…07, OBS-P1-01…15); no FW source yet (P2/M1 implements it, §9) |
-| Date | 2026-10-03 |
+| Version | **0.5** — M2 implemented (P2, D-39): ICD **v0.6** / dict 4 aligned (CR-01 STOP button retired, D-37 b feature-bit validity, D-40 a/c/d, seam v1.3 incl. `hal_meas_cmd`), M2 work breakdown and as-built notes in **§9.7**, NFR-007 static ISR budget analysis in **§9.8**, HW_MEAS measurement images (CR-02). · 0.4 — M1 implemented (P2, D-35): code in `02_FW/src`, host suites in `02_FW/test/test_impl_*`; implementation notes and deviations in **§9.6**; seam v1.1 (§8.1); D-36 noted. · 0.3 — final P1 design: ICD v0.3 + the v0.4 deltas (RESUME, TX order, E_INTERNAL codes, boot ENA rule, single-source seams), SRS v0.3 + D-31/D-32/D-33, Validator E review (`FW_test_plan.md` v0.1, DEF-P1-01…07, OBS-P1-01…15); no FW source yet (P2/M1 implements it, §9) |
+| Date | 2026-10-04 |
 | Owner | Implementer A (FW) |
 | Binding inputs | SRS **v0.3** (172 requirements; new SAF-FW-024/025/026, FW-HOM-004, FW-SW-005, SYS-011). `ICD_protocol.md` **v0.3** + the **v0.4 deltas** in progress (§0.3/§0.4) (PROTO 1.0, PAYLOAD 1, dict_version 2, **PARAM_DICT_HASH 0xB046DD01**): STATUS 86 B with `pause_src`, homing only at START, `drv.k1_weld_ms`, the `protocol.yaml` name export (v0.2), and **D-30** (BLOCK bit 10 PAUSED, PAUSED cleared only by HALT_CLEAR, §6.5 clean-halt condition) (v0.3). `params.yaml` dict_version 2. `00_System/tools/README.md` (seams, vectors). DECISIONS D-01…**D-33** (**D-31** = RESUME command 0x3C; **D-32** = PO answers Q25–Q28; **D-33** = Orchestrator decisions on the P1 reviews): **D-27** = PFDE HBS86H clone, now "86 open-loop 6 A", 800 p/rev, no encoder feedback; **D-28** = R5 defaults, ENA settle 500 ms, ALM start-block; **D-29** = P1 reconciliation; **D-30** = PAUSED blocks motion, clean-halt substitution only at a step period > 2 ms **and** a stop distance ≤ 1 step. Research R1–R5. |
 | Machine-readable companions | `00_System/specs/protocol.yaml` → `02_FW/src/gen/proto_gen.h` (names and codes); `params.yaml` → `02_FW/src/gen/params_gen.{h,c}`; `00_System/tools/vectors/protocol_vectors.json` and `check_vectors.json` (oracles, read in place, §8.4) |
@@ -283,7 +283,7 @@ Unchanged from v0.1:
 | 2 | Reset cause: `RCC->CSR` → pure `resetcause()` → `RST_*`, then `RMVF`. Read the fault record from `.noinit` (magic + CRC). | µs |
 | 3 | Stack painting, DWT, all NVIC priorities (pin §4) **before** any IRQ is enabled; TIM5 time base started without IRQ | µs |
 | 4 | `params_set_defaults()` → `nvm_boot()` (ICD §11.3 rules 2–5, §5.11). Session parameters (`nvm: false`) at defaults. | ≤ 2 ms |
-| 5 | **Inputs**: GPIO inputs with internal pull-ups, `SYSCFG->EXTICR`, both edges, then **read initial levels**:<br>• E-stop open → ESTOP latched;<br>• START/END active → status LIMIT_x (input active);<br>• both active → FAULT LIMIT_WIRING;<br>• STOP active (per `io.stop_active_level`) → HALT latched, `halt_src` = `SRC_BUTTON`;<br>• DRV_PWR, ALM, PEND sampled;<br>• E-stop open **and** DRV_PWR present → the K1 timer starts (SAF-FW-007/018). | µs |
+| 5 | **Inputs**: GPIO inputs with internal pull-ups, `SYSCFG->EXTICR`, both edges, then **read initial levels**:<br>• E-stop open → ESTOP latched;<br>• START/END active → status LIMIT_x (input active);<br>• both active → FAULT LIMIT_WIRING;<br>• (v0.5: no STOP input, D-36 / CR-01; a PAUSE button held at boot is not a press);<br>• DRV_PWR, ALM, PEND sampled;<br>• E-stop open **and** DRV_PWR present → the K1 timer starts (SAF-FW-007/018). | µs |
 | 6 | **Outputs** (ODR written before MODER):<br>• **ENA** = disabled level if the E-stop input is open **or** (`drv.pwr_sense_enable` and DRV_PWR reads off), else the "no current" level (= enabled/holding, D-13), per `motion.ena_invert`;<br>• **DIR** = 0;<br>• **PUL**: TIM2 OC1 *forced inactive*, then PA0 → AF1;<br>• **SCK** low; **RATE** per `afe.rate_sps`; TRIP low; LED; unused pins analog. | ≤ 12 ms |
 | 7 | `motion_state` = `MS_NOT_ENABLED`; HOMED = 0; VALID = 0; stream off; `pos_steps` = 0 | – |
 | 8 | Link: USART2 + DMA1 S5/S6, parser, TX classes. EVENT queue: BOOT (arg `RST_*`), CLK_FALLBACK if any, the NVM result (PARAMS_LOADED / PARAMS_DEFAULTED, §5.11). | – |
@@ -385,13 +385,12 @@ The tick never touches flash. Its only UART interaction is the class-D mailbox (
 - Stack: painted at boot; the lowest unpainted word is checked every 100 ms → `stack_free_min` (NFR-005).
 - UID: 12 bytes at 0x1FFF7A10 (ASSUMED, RM0390; verify at WP8).
 
-### 5.2 Inputs: E-stop sense, limits, STOP/BREAK, PAUSE, ALM, PEND, DRV_PWR
+### 5.2 Inputs: E-stop sense, limits, PAUSE, ALM, PEND, DRV_PWR (v0.5: STOP/BREAK input retired, CR-01)
 
 | Input | Pin / EXTI / level | Active | Polarity | HAL fixed reaction (RAM) | Core action (callback / tick) | Release / re-arm | Req. |
 |---|---|---|---|---|---|---|---|
 | E-stop sense | PA10 / 10 / 0 | high (NC open) | **fixed** | `hal_step_abort()` + ENA disabled | ESTOP latch, HOMED/VALID cleared, motion discarded, EVENTs (§5.3) | closed continuously ≥ `io.estop_release_ms` enables ESTOP_CLEAR | SAF-FW-005/006/007, FW-SW-002 |
 | START / END | PB0, PC1 / 0, 1 / 1 | high | **fixed** | `hal_step_stop_now()` (CLEAN), mask own line | capture `hal_step_count()` + t_us; homing edge (§5.5) or LIMIT latch; both active → LIMIT_WIRING | stable inactive ≥ `io.release_ms` → `hal_inputs_rearm()`; latch auto-clear §5.3 | FW-SW-001, SAF-FW-013/014 |
-| STOP/BREAK | PC7 / 7 / 1 | `io.stop_active_level` (default `OPEN_ACTIVE`, NC) | param | CLEAN halt, mask line | HALT latch (`SRC_BUTTON` unless already latched), EVENT STOP_BUTTON(1) | released ≥ `io.release_ms` → re-arm, STOP_BUTTON(0); HALT_CLEAR allowed | SAF-FW-022, FW-SW-003 |
 | PAUSE | PB6 / 6 / 1 | `io.pause_active_level` (default `CLOSED_ACTIVE`, NO) | param | mask line | request flag + t_us → tick (§5.3 PAUSED) | released ≥ `io.release_ms` → re-arm, PAUSE_BUTTON(0) | SAF-FW-023, FW-SW-003 |
 | ALM | PA8 / **polled 1 kHz** (EXTI line 8 not enabled, OBS-P1-10) | `drv.alm_active_level` | param | – | tick: active at the first active sample (start-block is fail-safe), inactive after a stable `io.release_ms`; EVENT ALM_CHANGED once per accepted change; **start-block only** (SAF-FW-026, §5.16) | stable `io.release_ms` | FW-SW-004, SAF-FW-026 |
 | PEND | PA9 / polled | `drv.pend_active_level` | param | – | tick sample → `DS_PEND`; NOT_SETTLED timer | – | FW-SW-004 |
@@ -400,7 +399,7 @@ The tick never touches flash. Its only UART interaction is the class-D mailbox (
 Rules:
 - **Act on the first edge; debounce only the release** (FW-SW-001, R4 §3.4). The HAL masks its own EXTI line after the first active edge, so bounce causes no interrupt storm. The tick re-arms the line after the stable release (`hal_inputs_rearm()`: clear pending, re-read the level). Core logic is idempotent for repeated edges, so the twin need not model masking.
 - **Fixed HAL reaction, then the core.** The safety reaction (TRUNCATE + ENA, or CLEAN) is done by the RAM-resident HAL handler before the core callback. During a flash operation the core callback is **deferred** (pending bit, delivered by the tick afterwards), because core code lives in flash (§5.11). The reaction itself therefore never depends on flash.
-- The HAL needs the STOP polarity to decide "active edge". `hal_inputs_config()` receives `io.stop_active_level` and `io.pause_active_level` at boot and on every change (`params_apply`). The change re-arms the input without generating a press (`params.yaml` text).
+- The HAL needs the PAUSE polarity to decide "active edge". `hal_inputs_config()` receives `io.pause_active_level` and `drv.alm_active_level` (seam v1.3: `stop_active_level` removed, SR-M2-02) at boot and on every change (`params_apply`). The change re-arms the input without generating a press (`params.yaml` text).
 - Limit reaction while idle: the CLEAN halt is a no-op when stopped, and the core only reports/latches the input. An active edge expected by homing (START during FAST_SEEK / SLOW_APPROACH) is routed to the homing machine and does not set LIMIT_START (ICD §5.4).
 - **ALM chatter** (OBS-P1-10): ALM needs no µs reaction (no stop path, D-16), so it is polled, not interrupt-driven. The filter rule above gives at most one ALM_CHANGED pair per `io.release_ms` + 1 ms, whatever the input does. No level-1 interrupt load and no EVENT flood can result. The STOP and PAUSE lines keep mask-after-first-edge + tick re-arm, so a chattering button also produces one interrupt per press.
 - Edge capture accuracy: the level-1 ISR reads `hal_step_count()` ≤ 1 µs after the edge. A pulse that completes in that µs is counted later by the level-2 step ISR (≤ 1 step; at `v_slow` 0.5 mm/s = 80 steps/s the probability is ≈ 1e-4 per homing).
@@ -412,7 +411,7 @@ Rules:
 | Function | Mode | Used by | Action |
 |---|---|---|---|
 | `hal_step_abort()` | **TRUNCATE** | E-stop sense, HardFault/NMI | `OC1M` = force inactive, `CEN` = 0, `UIE` = 0. A pulse in flight (`CNT ≥ CCR1`) is cut and **not counted** → returns true → `DS_POS_UNCERTAIN` (HOMED is cleared by the E-stop anyway). |
-| `hal_step_stop_now()` | **CLEAN** | limits, STOP button, PC STOP/HALT, load limit, AFE fault, MOVE_UNTIL_LOAD, homing edges, step fault, DRV_PWR lost, slow controlled stop (D-29 d / D-30) | If `CNT ≥ CCR1 − guard` (pulse running or starting within 0.5 µs) → `OPM` = 1: the counter stops in hardware at the update that ends **this** pulse, and the update ISR counts it. Else → force inactive, `CEN` = 0. **No runt, no uncounted pulse.** |
+| `hal_step_stop_now()` | **CLEAN** | limits, PC STOP/HALT, load limit, AFE fault, MOVE_UNTIL_LOAD, homing edges, step fault, DRV_PWR lost, slow controlled stop (D-29 d / D-30) | If `CNT ≥ CCR1 − guard` (pulse running or starting within 0.5 µs) → `OPM` = 1: the counter stops in hardware at the update that ends **this** pulse, and the update ISR counts it. Else → force inactive, `CEN` = 0. **No runt, no uncounted pulse.** |
 
 The last PUL edge after a CLEAN stop comes ≤ `pulse_high` + 0.5 µs after the call: ≤ 10.5 µs at the default and ≤ 100.5 µs at the maximum, inside every SAF-FW-002 budget. **Start-then-recheck** (unchanged from v0.1): a start captures `hal_step_stop_gen()`, checks the gates, sets `CEN`, re-reads `stop_gen`, and aborts if it changed. The first edge comes ≥ `dir_setup` after `CEN`.
 
@@ -423,7 +422,6 @@ The last PUL edge after a CLEAN stop comes ≤ `pulse_high` + 0.5 µs after the 
 | E-stop sense opens | HAL reaction + core | TRUNCATE | disabled | ESTOP → `io.estop_release_ms` closed + ESTOP_CLEAR, then ENABLE + HOME | cleared | cleared (`SC_ESTOP`) | ESTOP_SET, STOPPED(`SC_ESTOP`)*, VALID_CLEARED*, DRIVER_DISABLED(`DD_ESTOP`)*, MOVE_DONE(`MD_STOPPED`)* |
 | PC STOP | cmd + sniffer | CLEAN / controlled (`mode`) | kept | none | kept | cleared (`SC_PC_STOP` / `SC_PC_STOP_CONTROLLED`) | STOPPED*, VALID_CLEARED*, MOVE_DONE* |
 | PC HALT | cmd + sniffer | CLEAN | kept | HALT (`SRC_PC` unless already latched) → HALT_CLEAR | kept | cleared (`SC_PC_HALT`) | HALT_SET (first only), STOPPED*, VALID_CLEARED*, MOVE_DONE* |
-| STOP/BREAK button | HAL + core | CLEAN | kept | HALT (`SRC_BUTTON`) → released ≥ `io.release_ms` + HALT_CLEAR | kept | cleared (`SC_STOP_BUTTON`) | STOP_BUTTON(1), HALT_SET, STOPPED*, VALID_CLEARED*, MOVE_DONE* |
 | PAUSE button / PC PAUSE | tick / cmd + sniffer | controlled | kept | PAUSED (`pause_src`) **blocks every new motion start** (`BLOCK_PAUSED`, D-30) → cleared by **RESUME** (`PCLR_RESUME`, refused while HALT/ESTOP/fault is latched, D-31) or by HALT_CLEAR (`PCLR_HALT_CLEAR`). Button press while PAUSED → RESUME_REQUEST only (the PC decides; the FW never resumes); PC PAUSE while PAUSED → OK, no event. | kept | cleared (`SC_PAUSE_BUTTON` / `SC_PC_PAUSE`) | (PAUSE_BUTTON(1)), PAUSED (0→1 only), STOPPED*, VALID_CLEARED*, MOVE_DONE* |
 | limit switch while moving | HAL + core | CLEAN | kept | LIMIT_x → auto: input released (stable inactive) for `io.release_ms` (**D-33 h**); while latched only motion **away** from the switch is accepted (`BLOCK_LIMIT` toward it) | kept | cleared (`SC_LIMIT_START/END`) | LIMIT_SET, STOPPED, VALID_CLEARED*, MOVE_DONE; later LIMIT_CLEARED |
 | both limits active | ISR (other pin read) + tick | CLEAN | kept | FAULT LIMIT_WIRING → both released + FAULT_CLEAR | kept | cleared (`SC_LIMIT_WIRING`) | FAULT_SET(3), STOPPED*, … |
@@ -449,7 +447,7 @@ The last PUL edge after a CLEAN stop comes ≤ `pulse_high` + 0.5 µs after the 
 - If any latched fault other than LOAD_LIMIT has its cause present → `ST_E_CAUSE_ACTIVE`, detail = mask of those faults, **nothing cleared**.
 - Else all faults are cleared, the OK body is the cleared mask, and EVENT FAULT_CLEARED(mask) is sent. For LOAD_LIMIT the value at clear is stored for the regrow rule (SAF-FW-011).
 
-**HALT_CLEAR**: with HALT latched, refused while the STOP button is active (detail `PROTO_DETAIL_CAUSE_INPUT`) or released < `io.release_ms` (detail = ms missing). Otherwise HALT is cleared (EVENT HALT_CLEARED, `halt_src` = `SRC_NONE`), and PAUSED is cleared too (`PCLR_HALT_CLEAR`, `pause_src` = `SRC_NONE`). A HALT terminates the sequence, and clears never start motion (D-31). HALT_CLEAR with HALT not latched → OK, and PAUSED is still cleared if set.
+**HALT_CLEAR**: never refused since ICD v0.5 (D-36: no STOP-button cause). HALT is cleared (EVENT HALT_CLEARED, `halt_src` = `SRC_NONE`), and PAUSED is cleared too (`PCLR_HALT_CLEAR`, `pause_src` = `SRC_NONE`). A HALT terminates the sequence, and clears never start motion (D-31). HALT_CLEAR with HALT not latched → OK, and PAUSED is still cleared if set.
 
 **RESUME** (D-31, 0x3C, LEN 0; checks in ICD §4.4 order):
 - **Refused** with `ST_E_STATE` while HALT is latched, ESTOP is latched or its input is open, or any FAULT is latched. The detail is the BLOCK mask of exactly those bits (`BLOCK_HALT`, `BLOCK_ESTOP`, `BLOCK_FAULT`).
@@ -873,7 +871,7 @@ The frame (26 B incl. CRC) goes to TX class D. If the UART is idle, the ISR star
 | `DF_HALT` | latch | `DS_AFE_SETTLING` | settle counter |
 | `DF_FAULT` | any FAULT | `DS_AFE_RATE_MISMATCH` | `afe_rate` |
 | `DF_OVERRUN` | drop / miss since the last sent frame | `DS_LINK_WDG` | tick |
-| | | `DS_STOP_BTN`, `DS_PAUSE_BTN`, `DS_ALM`, `DS_PEND` | input states after polarity |
+| | | `DS_PAUSE_BTN`, `DS_ALM`, `DS_PEND` (`DS_STOP_BTN` retired: 0) | input states after polarity; 0 while their feature bit is 0 (D-37 b) |
 | | | `DS_POS_UNCERTAIN` | abort/step fault, cleared by HOME |
 | | | `DS_NO_AFE_DATA` | fallback frame |
 | | | `DS_DRV_PWR` | drvmon (1 when sense disabled) |
@@ -883,7 +881,7 @@ The frame (26 B incl. CRC) goes to TX class D. If the UART is idle, the ISR star
 | EVENT | Emitted by | MS | EVENT | Emitted by | MS |
 |---|---|---|---|---|---|
 | BOOT | app_init | M1 | DRIVER_ENABLED / DISABLED | motion_sm, drvmon, safety | M2 |
-| STOPPED, MOVE_DONE | motion_sm | M2 | STOP_BUTTON, PAUSE_BUTTON | debounce/latches | M2 |
+| STOPPED, MOVE_DONE | motion_sm | M2 | PAUSE_BUTTON (STOP_BUTTON retired) | debounce/latches | M2 |
 | ESTOP_SET / CLEARED | latches | M2 / M1 | ALM_CHANGED, DRIVER_POWER, NOT_SETTLED | drvmon | M2 |
 | HALT_SET / CLEARED | latches | M1 | AFE_REINIT | afe | M2 |
 | PAUSED / PAUSE_CLEARED (`PCLR_RESUME`, `PCLR_HALT_CLEAR`) / RESUME_REQUEST | latches | M1 / M1 / M2 | AFE_RATE_MISMATCH, AFE_STALE | afe_rate, tick | M1 |
@@ -927,7 +925,7 @@ The frame (26 B incl. CRC) goes to TX class D. If the UART is idle, the ISR star
 | `limits.*`, `home.*` | used at the next command / homing |
 | `safety.load_raw_min/max`, `load_trip_samples`, `load_regrow_raw` | copied into the ISR `loadlim` state under `CRIT_DATA` |
 | `safety.zero_raw`, `release_band_raw`, `idle_disable_s`, `link_timeout_ms` | read at use (tick/cmd) |
-| `io.stop_active_level`, `io.pause_active_level` | `hal_inputs_config()`; re-arm without a press; an active STOP is then reported and HALT_CLEAR is refused |
+| `io.pause_active_level`, `drv.alm_active_level` | `hal_inputs_config()`; re-arm without a press (`io.stop_active_level` retired in dict 4) |
 | `drv.alm_active_level`, `drv.pend_active_level` | applied by the tick's polling filter (ALM/PEND are polled) |
 | `io.release_ms`, `io.estop_release_ms`, `drv.pend_*`, `drv.k1_weld_ms` | read at use (tick) |
 
@@ -953,7 +951,7 @@ ISR entry ≈ 12 cycles (67 ns); 180 MHz = 5.6 ns/cycle. All values are design e
 |---|---|---|---|---|
 | E-stop edge → last PUL edge | EXTI entry ≤ 0.2 µs (+ ≤ 0.2 µs `CRIT_HALT`) + TRUNCATE ≤ 0.1 µs (RAM) | **≤ 0.5 µs** | ≤ 100 µs | SAF-FW-005 (a) |
 | E-stop edge → ENA disabled | same HAL handler | ≤ 0.6 µs | ≤ 1 ms | SAF-FW-005 (b) |
-| Limit / STOP-button edge → last PUL edge | level-1 entry + E-stop ISR ≤ 0.5 + other level-1 ≤ 1 + CLEAN ≤ PW + 0.5 µs | ≤ 12 µs (PW 10 µs); ≤ 103 µs at PW max | ≤ 200 µs | SAF-FW-002/022 |
+| Limit edge → last PUL edge | level-1 entry + E-stop ISR ≤ 0.5 + other level-1 ≤ 1 + CLEAN ≤ PW + 0.5 µs | ≤ 12 µs (PW 10 µs); ≤ 103 µs at PW max | ≤ 200 µs | SAF-FW-002 |
 | HX711 data-ready → last PUL edge (load limit, MOVE_UNTIL_LOAD) | entry ≤ 4 µs + read ≤ 50 µs + compare ≤ 0.5 µs + CLEAN ≤ PW + 0.5 µs | ≤ 65 µs | ≤ 200 µs | SAF-FW-002/008 |
 | STOP/HALT last byte → last PUL edge | sniffer at the next tick ≤ 1 ms + tick latency ≤ 60 µs + CLEAN ≤ 10.5 µs (the dispatcher in parallel) | ≤ 1.1 ms | ≤ 2 ms | SAF-FW-002 |
 | Trigger → start of controlled deceleration (link wdg, PAUSE button/PC, dead-man, STOP 1, JOG 0) | detection ≤ 1 ms + §5.6.4 path (ISR: ≤ 1 ms; stretch: ≤ PW; halt only at P > 2 ms and d ≤ 1 step: immediate) | ≤ 2 ms | ≤ 2 ms | SAF-FW-003, D-29 d, D-30 |
@@ -1036,7 +1034,7 @@ void     core_tick_1ms(void);                                         /* Δ call
 /* hal_step.h */
 typedef struct { uint32_t pw_ticks, dir_setup_ticks; bool pul_invert, ena_invert; } hal_step_cfg_t;
 uint32_t hal_step_init(const hal_step_cfg_t *cfg);                    /* Δ returns f_tick (90 MHz target) */
-void     hal_step_set_dir(int dir);                                   /* only while stopped */
+void     hal_step_set_dir(int dir);                                   /* only while stopped; v1.3: +-1, +-2 = DIR inverted */
 void     hal_step_start(uint32_t first_period_ticks);                 /* first edge >= dir_setup after the call */
 void     hal_step_set_period(uint32_t ticks);                         /* preload: period after the running one */
 void     hal_step_set_period_now(uint32_t ticks);                     /* Δ stretch running period (§5.6.4) */
@@ -1052,7 +1050,7 @@ typedef struct { uint32_t period; bool last; bool stop; } step_next_t;
 step_next_t step_isr(void);                                           /* callback, level 2, per completed pulse */
 /* hal_inputs.h  — ids = ICD IO bit indices 0..7 */
 uint16_t hal_inputs_raw(void);                                        /* electrical levels (1 = pin high) */
-typedef struct { uint8_t stop_active_level, pause_active_level, alm_active_level; } hal_in_cfg_t; /* = README */
+typedef struct { uint8_t pause_active_level, alm_active_level; } hal_in_cfg_t; /* v1.3: STOP input retired */
 void     hal_inputs_config(const hal_in_cfg_t *c);                    /* Δ polarity for the fixed reactions */
 void     hal_inputs_rearm(uint8_t id);                                /* Δ re-enable a self-masked line */
 void     on_input_edge(uint8_t id, bool level, uint32_t t_us);        /* callback, level 0/1, AFTER the HAL's
@@ -1075,6 +1073,8 @@ void hal_wdg_kick(void);  void hal_wdg_set_timeout(uint32_t ms);
 uint8_t hal_reset_cause(void);            /* RST_* (target: pure resetcause on RCC->CSR) */
 void hal_reset(void);  void hal_uid(uint8_t uid[12]);  bool hal_clk_fallback(void);
 uint16_t hal_stack_free_min(void);        /* Δ */
+bool   hal_fault_record(uint32_t *pc, uint32_t *cfsr);                /* v1.2: HardFault record, once */
+size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max); /* v1.3: DIAG_MEAS, 0 = not in build */
 /* critical sections (seam v1.1, adopted by the Integrator in tools/README): HALT = PRIMASK,
    AFE/MOTION = BASEPRI 0x20, DATA = 0x30, TICK = 0x40; no-ops in the twin */
 typedef enum { HAL_CRIT_HALT = 0, HAL_CRIT_AFE = 1, HAL_CRIT_MOTION = 2, HAL_CRIT_DATA = 3, HAL_CRIT_TICK = 4 } hal_crit_level_t;
@@ -1204,6 +1204,79 @@ $env:PATH = "C:\Program Files\JetBrains\CLion 2025.3.2\bin\mingw\bin;$env:PATH" 
 | 15 | Native env | `build_src_filter` pure + gen + core | also `+<../test/common_impl/>`: the fake seams are linked into every native suite (core needs every seam). Validator E suites in the same env either reuse them or get a separate env (**OI-FW-34**) |
 
 **Evidence (2026-10-03):** `pio test -e native` 19 suites / 94 test cases green twice (509 check vectors, 164 frame vectors, 11 streams, 280 units values consumed in place); `pio run -e nucleo_f446re` SUCCESS: flash 24 676 B, RAM 6 536 B static (10 968 B incl. the 4 KB stack reserve); `check_map.py` M-1…M-4 PASS (NVM hole empty, 7 handler slots, no allocator/printf, RamFunc in RAM), negative control (`--slot`) fails as expected; debug image SUCCESS.
+
+### 9.7 M2 work breakdown (sensor & motion, D-39) and as-built notes (v0.5)
+
+**Scope.** SRS v0.5.1 M2 requirements on the FW side: SAF-FW-001…021, -023…026 (-022 withdrawn), FW-AFE-001…005, FW-MOT-001…005/007…009 (-006 = M4), FW-HOM-001…004, FW-SW-001…005, FW-STR-005/006, FW-TIM-001, FW-CMD-003, NFR-006/007; CR-01 (ICD v0.5), D-37 b, D-40 a/c/d (ICD v0.6). MOVE_UNTIL_LOAD stays NOT_IN_BUILD (FEAT_MOVE_UNTIL_LOAD = 0). No STOP-button input (D-36).
+
+| WP | Content | Files (02_FW) | Host tests | Seams needed | State |
+|---|---|---|---|---|---|
+| M2-WP0 | ICD v0.5/v0.6 alignment: CR-01 (STOP_BTN, `stop_btn_*` ctx fields, HALT_CLEAR never refused, HALT source PC only), dict 4 (47 params), check vectors schema 2 (keys kept, never set), D-37 b feature-bit validity, DIAG_MEAS check rules | `pure/cmd_check.*`, `pure/flags.*`, `pure/latches.*`, `pure/proto.h`, `pure/payload.*`, `core/status.c`, `tools/gen_test_vectors.py` | `_check` (507 + 29 hw_meas vectors), `_flags`, `_latch_m1`, `_payload`, `_names`, `_smoke` | v1.3 `hal_in_cfg_t` (SR-M2-02) | done |
+| M2-WP1 | pure motion: exact ramp (ref_motion.py definitions), stop-path rule, extend-only stretch, CLEAN/TRUNCATE decisions, planner | `pure/ramp.*`, `pure/stepgen.h` | `_ramp` (motion_vectors 9 cases / 28 paths / 3 plans, TV-M spot values) | – | done |
+| M2-WP2 | pure safety: input filters, driver monitor, load limit (D-40 d), homing phases, HX711 math + sequence (TS @37c8747) | `pure/inputs.h`, `pure/drvmon.*`, `pure/loadlim.*`, `pure/homing.*`, `pure/hx711_math.*`, `pure/hx711_seq.h` | `_m2pure` (+ loadlim_vectors 12 cases), `_hx711` (20 000 words × 3 gains vs a device model) | – | done |
+| M2-WP3 | core motion executor | `core/motion.c` | `_motion` (fake step timer with twin semantics) | v1.3 `hal_step_set_dir` ±2 (SR-M2-01) | done |
+| M2-WP4 | core inputs / supervision | `core/safety.c` | `_safety`, `_homing` (switch world) | – | done |
+| M2-WP5 | AFE core: load limit in the sample ISR, status bits, re-init, kick, stale → AFE_FAULT | `core/afe.c` | `_safety` | v1.2 AFES_* semantics | done |
+| M2-WP6 | target HAL: TIM2 step generator, EXTI inputs (RAM handlers), HX711 shim (EXTI4/PB4, SCK PB10, RATE PB5), HardFault record, boot order | `hal/f446/step_tim2.c`, `exti.c`, `hx711_f4.c`, `sys_f4.c`, `board_init.c`, `flash_f4.c` (`g_flash_op`), `tools/check_map.py` (12 slots, 9 RamFuncs) | release build + check_map | v1.2 `hal_fault_record` | done |
+| M2-WP7 | CR-02 measurement images (REQ-A-M2-03): `nucleo_f446re_meas` / `_meas_dwt`, `hal/f446/meas_f4.c`, DIAG_MEAS forwarder, measurement-header pins | `hal/f446/meas_f4.c`, `include/board_pins.h`, `platformio.ini`, `tools/build_info.py`, `core/build_id.c` | `_check` hw_meas vectors; object comparison release ↔ meas | v1.3 `hal_meas_cmd` | done except DWT stats (OI-FW-37) |
+| M2-WP8 | twin / integration evidence, docs (this §, pinout v0.4, wiring v0.4) | – | twin build via `build.py`; Integrator's integration suite | – | done |
+
+**Order / parallelism.** WP0 first (vectors gate the native build); WP1/WP2 pure and independent; WP3 needs WP1, WP4/WP5 need WP2 + WP3; WP6 needs WP3–WP5 (core API); WP7 after WP6.
+
+**As-built notes and deviations (v0.5)**
+
+| # | Item | Design | As implemented (rationale) |
+|---|---|---|---|
+| 1 | motion_sm / stepgen_core | pure modules | the executor is `core/motion.c` (seam calls are inseparable from the state); the decisions are pure (`ramp`, `stepgen.h`, `homing`) and the executor is host-tested on the fake seams with the twin's step-timer semantics |
+| 2 | Ramp | float32, integer virtual indices | definitions of `ref_motion.py` (OI-ICD-09): real-valued virtual indices for speed-up (k0 = v²/2α) and slow-down (R), stop r0 = ceil(v²/2a_stop) computed in binary64, r = min(r_move, r0), c = max(c_last, D_s(r)); motion_vectors.json max period deviation 1 tick |
+| 3 | Step completion | step ISR finalises at N | the timer stops by OPM at the last pulse; `step_isr()` is not called for the final update (twin semantics); the tick sees `!hal_step_running()` ≤ 1 ms later and sends MOVE_DONE. A stop short of the planned end with no recorded cause for 3 ticks → STEP_FAULT (internal inconsistency guard) |
+| 4 | Missed update (STEP_FAULT) | UIF set again at ISR exit | the core checks that the count advanced by exactly one step per `step_isr()` call; the target HAL adds the missed step when the update ISR enters > 1.5 periods after the previous one (DWT), so the same check fires (twin: `inject step_fault`) |
+| 5 | Controlled stop paths | §5.6.4 | ISR path: `ramp_stop(extra = 1)`, preload of c_dec1 at the next update (≤ 1 ms + P); stretch path: running + preloaded periods regenerated (`set_period_now(c1)` + preload c2); clean halt when P > 2 ms and d ≤ 1 step. Ramp edits are computed on a copy outside CRIT_MOTION and committed in ≤ ~0.5 µs if the step ISR did not advance meanwhile (`ramp_commit`, NFR-007). Stop distance = ceil(d) + ≤ 1 committed step |
+| 6 | DIR polarity | – | `hal_step_set_dir(±2)` = DIR inverted (`motion.dir_invert`); adopted as seam v1.3 (SR-M2-01) |
+| 7 | Jog reversal | decel to 0, restart | one motion (one MOVE_DONE): decel with the jog accel (no STOPPED), restart in the new direction at standstill; un-homed bound origin = the restart point |
+| 8 | Limit latch | design §5.3 | an active START/END edge latches LIMIT_x also while idle (reported + latched, D-33 h release rule); a START edge expected by homing never latches; END during homing latches LIMIT_END and gives HOME_WIRING. The twin does not mask lines: a bounce on leaving an active switch re-stops the motion (safe side; target masks after the first edge) |
+| 9 | Homing release / backoff | §5.5 | segment end = origin + HOME_RELEASE_MAX; on a stable release (`io.release_ms`) the end moves to pos + backoff; a stop by a START bounce edge re-issues the same segment (origin kept) |
+| 10 | Load-limit trip in the ISR | record → tick | the ISR stops (CLEAN), sets FAULT LOAD_LIMIT and clears VALID at the sample time so the deciding DATA frame already carries them; the tick emits FAULT_SET(raw), STOPPED, VALID_CLEARED; a FAULT_CLEAR folds a pending record first (no lost FAULT_SET). Regrow window = D-40 d (loadlim_vectors.json) |
+| 11 | E-stop POS_UNCERTAIN | TRUNCATE result | the core cannot see `hal_step_abort()`'s result from the HAL reaction: POS_UNCERTAIN is set whenever the E-stop hit a running motion (conservative; HOMED is cleared anyway) |
+| 12 | ENA output state | – | `g_fw.ena_on` (IO_ENA_DISABLED); boot rule ENA disabled if E-stop open or (sense on and DRV_PWR off) (ICD §6.4); DRIVER_DISABLED only when the state was not NOT_ENABLED, plus a PC DISABLE that releases the boot holding level |
+| 13 | Input callbacks during flash ops | deferred by the HAL | the RAM handlers skip `on_input_edge()` while `g_flash_op` is set; the tick's level checks pick the state up after the operation (E-stop open and not latched → trip; PAUSE active and not pressed → press; limits → backup stop) |
+| 14 | HX711 | TS shim | ported to EXTI4 (own vector), DWT-measured SCK high (> 50 µs or DOUT not high → AFES_SCK_OVERRUN → core re-init + AFE_REINIT + settle), kick flag → AFES_MISSED_EDGE → OVERRUN; settle = exactly `afe.settle_discard` samples (FW-AFE-003). The synthetic source stays only in the bring-up image `nucleo_f446re_synth` (FEAT_AFE_SYNTHETIC) |
+| 15 | Debug markers | PC8/PC9 | retired (no scope, CR-02): the pins are J-ENA / J-DIR of the measurement header |
+| 16 | HW_MEAS | FW_test_plan §6.3 | `meas_f4.c` only (+ weak defaults `meas_start()` / `hal_meas_cmd()` in the release image); objects of core / pure / safety handlers are byte-identical between `nucleo_f446re` and `nucleo_f446re_meas` (only `build_id.c.o` and `meas_f4.c.o` differ; the build id moved into its own object for that). One shared hook: the RAM flag `g_meas_static` (STATIC_LEVEL release at `hal_step_start` / `hal_ena_set`), always 0 in the release image. `_meas_dwt` = `_meas` + build suffix until the DWT statistics exist (OI-FW-37) |
+| 17 | NOT_SETTLED | after the last pulse | started at every MOVE_DONE in IDLE when `drv.pend_timeout_ms` ≠ 0; cancelled by PEND, ALM, power loss or a new motion |
+
+**Seam / ICD requests (to the Integrator) — status:** SR-M2-01 `hal_step_set_dir` ±2 and SR-M2-02 `hal_in_cfg_t` without `stop_active_level`: adopted in seam v1.3. v1.2 `hal_fault_record` and v1.3 `hal_meas_cmd`: implemented. OI-ICD-10 (Appendix C word layouts): confirmed with the deviations listed in OI-FW-38.
+
+**New open items (v0.5)**
+
+| ID | Item | Addressee |
+|---|---|---|
+| OI-FW-35 | Twin: after a HAL fixed-reaction halt inside an update (limit edge at the counted step) the twin still calls `step_isr()` once while stopped; harmless for this core (it ignores calls while not running), noted as a semantic difference to the target | Integrator |
+| OI-FW-36 | Validator suites not yet on ICD v0.6: `02_FW/test/twin/test_val_m2_oracles.py` asserts `icd_version == "0.5"`, `test_val_twin_link.py` asserts 26 commands (27 with DIAG_MEAS) | Validator E |
+| OI-FW-37 | `HW_MEAS_DWT` DWT section statistics (op 9) and the per-ISR / per-CRIT stamps are not implemented yet (w0 = 0; INFO variant = MEAS only) — needed for HG-18 / TC-NFR-007-01 | A (before the HW gate) |
+| OI-FW-38 | Appendix C confirmation (OI-ICD-10): implemented as written; facts the FW fixes: INFO w4 = 2048 stamps per channel (RAM), w7 = 10 MHz stimulus clock; PROBE_READ w1 = 0 (counter starts at the event), w5 = PUL stamps since arming, TRIGGERED = probe counter running (trigger / reset mode); STIM_RUN delay span = the running step period (TIM2 ARR), else 1 ms; STATIC_LEVEL acts only with the step timer stopped. ASSUMED until HG-29: DMA2 stream / channel map and DMA2 reading TIM5->CNT on APB1 | Integrator, Validator E |
+| OI-FW-39 | Stop distance of a controlled stop on the ISR path is ceil(v²/2a) + 1 step already preloaded (≤ the SAF-FW-003 ± 1 step only when counted from the commit) — confirm the counting reference for TC-SAF-FW-003-01 | Validator E |
+| OI-FW-40 | Target-only items of M2 (C1): ISR durations, RAM-handler latency during flash ops, HX711 timing, DMA map — all +H, open under D-06 | Orchestrator (HW gate) |
+
+### 9.8 NFR-007 static ISR budget analysis (release image, 2026-10-04)
+
+Method: `arm-none-eabi-objdump -d` of `firmware.elf`, instruction count per function; estimate = 1 cycle per instruction + 3 per call + 14 per VSQRT/VDIV, ×1.5 for code in SRAM (`.RamFunc`, S-bus fetch), 180 MHz; the count is the **whole body** (all branches), so it is an upper bound of a loop-free path. ISR entry/exit +12/+10 cycles. Script: kept in the role scratchpad (`isr_budget.py`), to be confirmed by DWT at HG-18.
+
+| Function / window | Region | Insns | Upper bound | Budget | Note |
+|---|---|---|---|---|---|
+| `EXTI15_10_IRQHandler` (E-stop) incl. `hal_step_abort` + `halt_hw` + `hal_ena_set` | RAM | 29 + 30 + 22 + 24 | ≈ 0.95 µs (PUL stop after ≈ 0.4 µs) | ≤ 1 µs ISR; PUL ≤ 100 µs | SAF-FW-005; core callback (`on_input_edge`, flash, ≈ 0.5 µs) follows |
+| `EXTI0/1` + `limit_line` + `hal_step_stop_now` | RAM | 12 + 27 + 36 (+22) | ≈ 0.8 µs | ≤ 1 µs | SAF-FW-002 limit path ≤ 1 µs + PW |
+| `EXTI9_5` (PAUSE) | RAM | 32 | ≈ 0.27 µs | ≤ 1 µs | |
+| `TIM2_IRQHandler` + `step_isr` + `ramp_next` | flash | 92 + 45 + 164 (9 VSQRT/VDIV) | ≈ 2.4 µs if every branch ran; typical cruise path ≈ 0.6 µs, accel / decel path ≈ 1.1 µs | ≤ 2 µs | the bound counts the accel, reduction and decel-to-end terms together, which never all bind; measure at HG-18 (R-02 FPU stacking) |
+| Step CPU at 50 kHz | – | – | ≤ 1.2 µs × 50 kHz ≈ 6 % | ≤ 15 % | |
+| `CRIT_HALT` (PRIMASK) in `hal_step_stop_now` / `abort` / `set_period_now` | RAM / flash | ≤ 36 | ≤ 0.35 µs | ≤ 1 µs (masks 0–2) | |
+| `CRIT_MOTION` (BASEPRI 0x20) in `ramp_commit` (struct copy + ≤ 2 register writes), `hw_start` | flash | ≈ 40–60 per section | ≤ 0.5 µs | ≤ 1 µs (masks 2) | ramp math moved outside the section in v0.5 |
+| `CRIT_AFE` (HX711 SCK high) | flash | macro body | ≈ 0.6 µs | ≤ 1 µs (masks 2) | |
+| `EXTI4_IRQHandler` + `on_afe_sample` (+ DATA frame) | flash | 129 + 102 (+ stream) | read ≈ 45 µs (bit-bang) + ≈ 3 µs | ≤ 60 µs | FW-AFE-001 |
+| `TIM5_IRQHandler` → `core_tick_1ms` (`safety_tick` 481 insns, …) | flash | – | ≈ 10–20 µs typical | – (level 4) | |
+
+Result: every budget met by the static estimate except that the step-ISR **upper bound** (all branches summed) exceeds 2 µs; the realistic paths are ≤ 1.2 µs. Confirmation by DWT on target (HG-18, OI-FW-37 for the DWT build).
+
 
 ### 9.5 Later milestones (outline)
 - **M2** (sensor & motion): `hx711_shim`, `exti`, `step_tim2`, debounce, drvmon, loadlim, ramp/planner, stepgen_core, motion_sm, homing, the full latches. Feature bits AFE, MOTION, HOMING, BUTTONS, DRV_SIGNALS.
@@ -1337,7 +1410,7 @@ Requirement IDs = **SRS v0.3**. Coverage: **SAF-FW 26/26, FW 49/49, NFR-005…00
 | **OI-FW-30** | SRS v0.4 wording for D-33 e/f/g/h (SAF-FW-018 test, SAF-FW-024/025 bounds incl. the flash-op extension, SAF-FW-017 stale, SAF-FW-013 release-only), NFR-007 "windows masking levels 0–2" (OBS-P1-04), SAF-FW-012 with H5 | SRS v0.4 | Orchestrator |
 | **OI-FW-31** | Twin vocabulary (DEF-P1-03): FW-side needs are only the seam call log and edge log the twin keeps itself; no FW debug hook is required | informational; twin extension is the Integrator's | Integrator |
 | **OI-FW-32** | BOOT EVENT value/value2 = HardFault record (ICD §6.4): the record exists in `.noinit` but the seam has no accessor | add `bool hal_fault_record(uint32_t *pc, uint32_t *cfsr)` to `hal_sys.h` (seam v1.2) in M2 | Integrator (seam), A |
-| **OI-FW-33** | D-36 / CR-01: STOP-button input retired; `hal_in_cfg_t.stop_active_level`, `io.stop_active_level`, STOP_BTN and HALT source BUTTON stay until ICD v0.5 | the FW drops them when the generated names change; no STOP input path exists in the code | Integrator, A |
+| ~~OI-FW-33~~ | D-36 / CR-01 | **closed v0.5**: ICD v0.5 / dict 4 retired the names; FW aligned (cmd_check, flags, latches, seam v1.3 `hal_in_cfg_t`) | – |
 | **OI-FW-34** | native env links `test/common_impl/fake_hal.c` into every suite | Validator E suites reuse the fakes or get their own env | Validator E |
 | R-01 | ST-LINK VCP at 921 600 Bd unproven (A-18; D-36 frees PC7, so a USART6 fallback no longer clashes with STOP) | soak C-03; a fallback UART needs a pin re-plan | Orchestrator |
 | R-02 | FPU lazy stacking in the step ISR | measure at C-18; fallback integer ramp (R4 §1.5) | Implementer A |
@@ -1350,6 +1423,7 @@ Requirement IDs = **SRS v0.3**. Coverage: **SAF-FW 26/26, FW 49/49, NFR-005…00
 |---|---|---|
 | 0.1 | 2026-10-03 | First design for the P1 gate: architecture, build + reuse matrix, boot/safe state, scheduling and NVIC plan, CLEAN/TRUNCATE stop primitive, TIM2 PWM2 + OPM, motion/homing machines, inputs, HX711 reuse, load limit in the ISR, two TX classes, stop sniffer, NVM log in sectors 1+2 with RAM-resident safety ISRs, IWDG, budgets, seams, traceability 74/74, OI-FW-01…16; D-16/D-27/D-28 incorporated. |
 | 0.2 | 2026-10-03 | Aligned to ICD v0.1 + v0.2 deltas and `params.yaml` dict 2:<br>• **§0 conformance rules**: names only from `proto_gen.h` / `params_gen.h`, vectors as oracles, Appendix A rename table;<br>• the Integrator's 8 seams adopted with Δ list (§8.1);<br>• STOP 9 B / HALT 8 B / PAUSE 8 B sniffer with the motion-only fast path and in-order protocol semantics (§5.9.3);<br>• **D-29** a PAUSE command + `pause_src`, b START-only homing, c K1_WELDED (`drv.k1_weld_ms`) + DRV_PWR-lost semantics (drvmon), d slow controlled stop paths incl. CLEAN halt > 2 ms, e speed split at command time;<br>• D-27 driver facts (§5.16: no step-loss detection, ALM only report + start-block);<br>• `cmd_check` context mirrors `FwState`; `param_rules` H1–H4 with `check_vectors.json` as oracle; Unity pre-script reading vectors in place with a hash/version gate (§8.4);<br>• DATA built in the sample ISR + one-frame DMA + D-first wire order (FW-STR-002 ≤ 1.9 ms, OI-FW-02 closed);<br>• non-blocking NVM quiesce; HAL fixed input reaction in RAM with deferred core callbacks; RAM vector table answer kept;<br>• STATUS 86 B; reset-cause precedence; core in C11; link watchdog refreshed only by command frames;<br>• **M1 work breakdown** (§9); traceability re-mapped with ICD sections and milestones; OI-FW-01/02/04–08/10–12/14/15 closed, OI-FW-17…27 new.<br>Same day, second pass after **ICD v0.2 (hash 0xB046DD01), SRS v0.3 and D-30**:<br>• PAUSED blocks every new motion start (`BLOCK_PAUSED`, incl. jog refreshes) and is cleared only by HALT_CLEAR;<br>• clean-halt substitution only at P > 2 ms **and** d ≤ 1 step, otherwise period stretch + planned deceleration (v0.1 OI-FW-07 "1 ms" withdrawn);<br>• ALM start-block limited to new starts (SAF-FW-026);<br>• DRV_PWR 20 ms stability filter, reaction ≤ 23 ms for any cause, event rules per ICD §6.2 (SAF-FW-024, FW-SW-005);<br>• K1_WELDED tagged SAF-FW-025, HOME_DRIFT FW-HOM-004;<br>• traceability re-mapped to SRS v0.3 (79/79 + SYS-011);<br>• `proto_gen.h` (ICD v0.2) is the name source;<br>• OI-FW-26/27 added.<br>Third pass after **ICD v0.3**: BLOCK bit 10 PAUSED; PAUSE_CLEARED arg 1 unused; **OI-ICD-07 answered** in §5.6.4 (the running period is reprogrammed immediately, extend-only, with a race guard); OI-FW-26 reduced to the SRS side. |
+| 0.5 | 2026-10-04 | **M2 implemented** (D-39): §9.7 work breakdown + as-built deviations, §9.8 NFR-007 static ISR budget analysis; CR-01 in §3.2/§5.2/§5.3/§5.14/§5.15 (STOP/BREAK input and HALT_CLEAR refusal removed); seam v1.2/v1.3 in §8.1 (`hal_fault_record`, `hal_meas_cmd`, `hal_step_set_dir` ±2, `hal_in_cfg_t` without `stop_active_level`); OI-FW-33 closed, OI-FW-35…40 new (§9.7). |
 | 0.4 | 2026-10-03 | M1 implemented (WP0–WP7): §9.6 implementation notes and deviations (hold by TYPE/SEQ, seam v1.1 with the critical-section API and the README semantics, synchronous LOAD/DEFAULT, EVENT flush and stale verdict suspended during SAVE, M1 input-derived state and driver power "not confirmed", synthetic AFE through the EXTI4 vector, VALID settle, BOOT record → OI-FW-32); §0.4 names confirmed by ICD v0.4.1; §8.1 seam updated to v1.1; D-36 (no STOP-button input path, PC7 free); OI-FW-32…34 new. |
 | 0.3 | 2026-10-03 | Final P1 round: D-31, D-32, D-33 and the Validator E review (`FW_test_plan.md`).<br>• **RESUME 0x3C** (D-31): clears only PAUSED; refused while HALT/ESTOP/fault is latched; no-op if not PAUSED; not sniffed. HALT_CLEAR clears HALT + PAUSED.<br>• **DEF-P1-01 / D-33 a**: H5 `afe.timeout_ms ≥ 2 × period`, default 250 ms; stale timer re-armed on reconfiguration.<br>• **DEF-P1-04**: c1 premise withdrawn (≥ 45 µs possible); **sniffed-stop hold** parks motion starts from earlier frames until the stop frame is dispatched.<br>• **DEF-P1-06 / D-33 f**: DRV_PWR bound op time + 25 ms during flash ops; K1 latency (k1, k1 + 2 ms].<br>• **DEF-P1-07**: dispatcher back-pressure (R reserve 168 B); flood behaviour defined.<br>• **D-33 g**: idle counter restarts while stale. **D-33 h**: limit latch clears on release only.<br>• **OBS-P1-10**: ALM polled with first-sample/stable-release filter, EXTI line 8 off. **OBS-P1-04**: masked-window reading. **OBS-P1-12**: wiring check list (wiring v0.3).<br>• D-32: MOVE_UNTIL_LOAD bound = soft limit allowed, no FW change.<br>• §0.4 provisional ICD v0.4 names; seam single source = `tools/README.md` (DEF-P1-02).<br>• Traceability updated; OI-FW-24/26/27 closed, OI-FW-28…31 new. |
 

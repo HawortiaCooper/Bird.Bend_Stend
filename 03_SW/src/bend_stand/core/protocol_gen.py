@@ -1,6 +1,6 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.5, PROTO 1.0, PAYLOAD 1)
+Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.6, PROTO 1.0, PAYLOAD 1)
 Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
 
 Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes and
@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from enum import IntEnum, IntFlag
 from types import MappingProxyType
 
-ICD_VERSION = '0.5'
+ICD_VERSION = '0.6'
 PROTO_MAJOR = 1
 PROTO_MINOR = 0
 PAYLOAD_VERSION = 1
@@ -47,6 +47,9 @@ DETAIL_CAUSE_INPUT = 0xFFFF  # E_CAUSE_ACTIVE detail of ESTOP_CLEAR / HALT_CLEAR
 TWIN_TCP_PORT = 5760  # FW host twin serial-over-TCP port (127.0.0.1)
 TWIN_CTL_PORT = 5761  # FW host twin world-control port (JSON lines, tools/README)
 HOME_RELEASE_MAX_UM = 0x2710  # HOME: START not released within this travel in RELEASE / BACKOFF -> HOME_WIRING (ICD §5.4, OI-FW-23)
+MEAS_BODY_LEN = 64  # DIAG_MEAS OK body: u32 w[16] (ICD Appendix C)
+MEAS_STAMPS_PER_PAGE = 14  # DIAG_MEAS STAMPS: stamps per page (w2..w15)
+MEAS_MAGIC = 0x4D454153  # DIAG_MEAS NOINIT w0 when the .noinit block is valid ('MEAS')
 HOME_SLOW_EXTRA_UM = 0x2710  # HOME: no START edge within home.backoff_um + this travel in SLOW_APPROACH -> HOME_NOT_FOUND (ICD §5.4, OI-FW-23)
 
 
@@ -137,10 +140,11 @@ class Block(IntFlag):
     DRV_UNPOWERED = 0x0100
     DRIVER_ALARM = 0x0200
     PAUSED = 0x0400
+    MEAS_STATE = 0x0800
 
 
-BLOCK_BITS: tuple[str, ...] = ('ESTOP', 'HALT', 'FAULT', 'NOT_ENABLED', 'NOT_HOMED', 'LIMIT', 'AFE_STALE', 'AFE_SATURATED', 'DRV_UNPOWERED', 'DRIVER_ALARM', 'PAUSED')
-BLOCK_DESC: Mapping[str, str] = MappingProxyType({'ESTOP': 'ESTOP latched or E-stop sense input open (also evaluated by RESUME)', 'HALT': 'HALT latched (PC: HALT command / Pause-Break key) (also evaluated by RESUME)', 'FAULT': 'any FAULT latched (§7.6) (also evaluated by RESUME)', 'NOT_ENABLED': 'motion state NOT_ENABLED (ENABLE never done, or DISABLE / E-stop / idle disable / driver power loss since)', 'NOT_HOMED': 'MOVE_ABS, MOVE_UNTIL_LOAD or JOG with a bound while not homed', 'LIMIT': 'motion toward an active or latched limit switch (direction = sign(target − x) or sign(v)); only motion away is accepted while latched (D-33h)', 'AFE_STALE': 'no HX711 sample for afe.timeout_ms', 'AFE_SATURATED': 'last HX711 sample at a rail', 'DRV_UNPOWERED': "drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c)", 'DRIVER_ALARM': 'ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)', 'PAUSED': 'PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)'})
+BLOCK_BITS: tuple[str, ...] = ('ESTOP', 'HALT', 'FAULT', 'NOT_ENABLED', 'NOT_HOMED', 'LIMIT', 'AFE_STALE', 'AFE_SATURATED', 'DRV_UNPOWERED', 'DRIVER_ALARM', 'PAUSED', 'MEAS_STATE')
+BLOCK_DESC: Mapping[str, str] = MappingProxyType({'ESTOP': 'ESTOP latched or E-stop sense input open (also evaluated by RESUME)', 'HALT': 'HALT latched (PC: HALT command / Pause-Break key) (also evaluated by RESUME)', 'FAULT': 'any FAULT latched (§7.6) (also evaluated by RESUME)', 'NOT_ENABLED': 'motion state NOT_ENABLED (ENABLE never done, or DISABLE / E-stop / idle disable / driver power loss since)', 'NOT_HOMED': 'MOVE_ABS, MOVE_UNTIL_LOAD or JOG with a bound while not homed', 'LIMIT': 'motion toward an active or latched limit switch (direction = sign(target − x) or sign(v)); only motion away is accepted while latched (D-33h)', 'AFE_STALE': 'no HX711 sample for afe.timeout_ms', 'AFE_SATURATED': 'last HX711 sample at a rail', 'DRV_UNPOWERED': "drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c)", 'DRIVER_ALARM': 'ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)', 'PAUSED': 'PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)', 'MEAS_STATE': 'DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c)'})
 BLOCK_RETIRED: frozenset[str] = frozenset()
 
 
@@ -273,10 +277,11 @@ class Features(IntFlag):
     TWIN = 0x00000040
     BUTTONS = 0x00000080
     DRV_SIGNALS = 0x00000100
+    HW_MEAS = 0x00000200
 
 
-FEATURES_BITS: tuple[str, ...] = ('AFE', 'AFE_SYNTHETIC', 'MOTION', 'HOMING', 'MOVE_UNTIL_LOAD', 'NVM', 'TWIN', 'BUTTONS', 'DRV_SIGNALS')
-FEATURES_DESC: Mapping[str, str] = MappingProxyType({'AFE': 'real HX711', 'AFE_SYNTHETIC': 'M1 placeholder samples', 'MOTION': 'step generation', 'HOMING': 'HOME command', 'MOVE_UNTIL_LOAD': 'MOVE_UNTIL_LOAD command', 'NVM': 'SAVE/LOAD_PARAMS', 'TWIN': 'host twin build', 'BUTTONS': 'PAUSE button input (the STOP/BREAK input is retired, D-36)', 'DRV_SIGNALS': 'ALM/PEND/DRV_POWER inputs'})
+FEATURES_BITS: tuple[str, ...] = ('AFE', 'AFE_SYNTHETIC', 'MOTION', 'HOMING', 'MOVE_UNTIL_LOAD', 'NVM', 'TWIN', 'BUTTONS', 'DRV_SIGNALS', 'HW_MEAS')
+FEATURES_DESC: Mapping[str, str] = MappingProxyType({'AFE': 'real HX711', 'AFE_SYNTHETIC': 'M1 placeholder samples', 'MOTION': 'step generation', 'HOMING': 'HOME command', 'MOVE_UNTIL_LOAD': 'MOVE_UNTIL_LOAD command', 'NVM': 'SAVE/LOAD_PARAMS', 'TWIN': 'host twin build', 'BUTTONS': 'PAUSE button input (the STOP/BREAK input is retired, D-36)', 'DRV_SIGNALS': 'ALM/PEND/DRV_POWER inputs', 'HW_MEAS': 'measurement build (HW_MEAS, CR-02 / D-40c): DIAG_MEAS 0x3D executes; 0 = release / twin -> E_INTERNAL NOT_IN_BUILD'})
 FEATURES_RETIRED: frozenset[str] = frozenset()
 
 
@@ -532,6 +537,129 @@ AFE_SAMPLE_STATUS_DESC: Mapping[str, str] = MappingProxyType({'SCK_OVERRUN': 'th
 AFE_SAMPLE_STATUS_RETIRED: frozenset[str] = frozenset()
 
 
+class MeasOp(IntEnum):
+    """DIAG_MEAS op (request byte 0) (ICD App. C)."""
+
+    INFO = 0
+    PROBE_ARM = 1
+    PROBE_READ = 2
+    COUNTER = 3
+    STAMPS = 4
+    NOINIT = 5
+    STIM_RUN = 6
+    HANG = 7
+    STATIC_LEVEL = 8
+    DWT = 9
+
+
+MEAS_OP_NAMES: tuple[str, ...] = ('INFO', 'PROBE_ARM', 'PROBE_READ', 'COUNTER', 'STAMPS', 'NOINIT', 'STIM_RUN', 'HANG', 'STATIC_LEVEL', 'DWT')
+MEAS_OP_DESC: Mapping[str, str] = MappingProxyType({'INFO': 'variant, clocks, ring size, stamp overhead', 'PROBE_ARM': 'arm the event-latency probe (MT-3)', 'PROBE_READ': 'read the probe captures', 'COUNTER': 'independent PUL counter (MT-2): read / reset', 'STAMPS': 'device-time stamp ring (MT-4), newest first', 'NOINIT': '.noinit block (last PUL, heartbeat, hang start; survives a reset)', 'STIM_RUN': 'stimulus series on the J-STIM output (MT-7)', 'HANG': 'test-image hang injection while moving (IWDG evidence)', 'STATIC_LEVEL': 'drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed)', 'DWT': 'DWT section statistics (HW_MEAS_DWT builds; else w0 = 0)'})
+MEAS_OP_RETIRED: frozenset[str] = frozenset()
+MEAS_OP_SEL: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'meas_src', 'PROBE_READ': '0', 'COUNTER': '0 read, 1 reset (returns the value before the reset)', 'STAMPS': 'meas_chan', 'NOINIT': '0 read, 1 clear', 'STIM_RUN': 'bit 0 polarity (0 high pulse, 1 low pulse), bits 1-7 hold time 1…127 ms', 'HANG': 'meas_hang_where', 'STATIC_LEVEL': 'meas_pin', 'DWT': '0 read, 1 reset'})
+MEAS_OP_A: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'bits 0-1 meas_probe_mode, bit 8 event polarity (0 rising, 1 falling), other bits 0', 'PROBE_READ': '0', 'COUNTER': '0', 'STAMPS': 'page 0…1023', 'NOINIT': '0', 'STIM_RUN': 'pulses 1…1000', 'HANG': 'duration 0…10000 ms (0 = until the IWDG resets)', 'STATIC_LEVEL': 'level 0/1', 'DWT': 'section 0…31'})
+MEAS_OP_B: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'timer prescaler 0…65535', 'PROBE_READ': '0', 'COUNTER': '0', 'STAMPS': '0', 'NOINIT': '0', 'STIM_RUN': 'seed', 'HANG': '0', 'STATIC_LEVEL': '0', 'DWT': '0'})
+MEAS_OP_RETRY: Mapping[str, str] = MappingProxyType({'INFO': 'RETRY', 'PROBE_ARM': 'VERIFY', 'PROBE_READ': 'RETRY', 'COUNTER': 'RETRY (read) / VERIFY (reset)', 'STAMPS': 'RETRY', 'NOINIT': 'RETRY (read) / VERIFY (clear)', 'STIM_RUN': 'VERIFY', 'HANG': 'VERIFY', 'STATIC_LEVEL': 'VERIFY', 'DWT': 'RETRY (read) / VERIFY (reset)'})
+
+
+class MeasSrc(IntEnum):
+    """DIAG_MEAS probe event source (PROBE_ARM sel; J-EVT selector position, FW_test_plan §6.2) (ICD App. C)."""
+
+    ESTOP = 0
+    LIMIT_START = 1
+    LIMIT_END = 2
+    PAUSE = 3
+    DOUT = 4
+    DRV_PWR = 5
+    RX = 6
+    DIR = 7
+    STIM = 8
+
+
+MEAS_SRC_NAMES: tuple[str, ...] = ('ESTOP', 'LIMIT_START', 'LIMIT_END', 'PAUSE', 'DOUT', 'DRV_PWR', 'RX', 'DIR', 'STIM')
+MEAS_SRC_DESC: Mapping[str, str] = MappingProxyType({'ESTOP': 'E-stop sense PA10', 'LIMIT_START': 'START limit PB0', 'LIMIT_END': 'END limit PC1', 'PAUSE': 'PAUSE button PB6', 'DOUT': 'HX711 DOUT PB4 (data ready)', 'DRV_PWR': 'driver-power sense PA7', 'RX': 'USART2 RX PA3 (start bit of a frame byte)', 'DIR': 'DIR output node', 'STIM': 'stimulus output PB8 (self-test)'})
+MEAS_SRC_RETIRED: frozenset[str] = frozenset()
+
+
+class MeasProbeMode(IntEnum):
+    """DIAG_MEAS probe mode (PROBE_ARM a bits 0-1) (ICD App. C)."""
+
+    TRIGGER = 0
+    RESET = 1
+    PWM_INPUT = 2
+
+
+MEAS_PROBE_MODE_NAMES: tuple[str, ...] = ('TRIGGER', 'RESET', 'PWM_INPUT')
+MEAS_PROBE_MODE_DESC: Mapping[str, str] = MappingProxyType({'TRIGGER': 'the first event edge after arming starts the probe counter (single shot)', 'RESET': 'every event edge restarts the probe counter (last event wins)', 'PWM_INPUT': 'PUL period and high width per pulse (min/max over the pulses since arming)'})
+MEAS_PROBE_MODE_RETIRED: frozenset[str] = frozenset()
+
+
+class MeasProbeFlags(IntFlag):
+    """DIAG_MEAS PROBE_READ w0 flags (ICD App. C)."""
+
+    ARMED = 0x0001
+    TRIGGERED = 0x0002
+    OVERCAPTURE = 0x0004
+    WINDOW_OVERFLOW = 0x0008
+    EDGE_BEFORE_EVENT = 0x0010
+
+
+MEAS_PROBE_FLAGS_BITS: tuple[str, ...] = ('ARMED', 'TRIGGERED', 'OVERCAPTURE', 'WINDOW_OVERFLOW', 'EDGE_BEFORE_EVENT')
+MEAS_PROBE_FLAGS_DESC: Mapping[str, str] = MappingProxyType({'ARMED': 'probe armed', 'TRIGGERED': 'the event occurred (w1 valid)', 'OVERCAPTURE': 'a capture was overwritten before it was read (hardware over-capture)', 'WINDOW_OVERFLOW': 'the probe counter overflowed after the event (window 65 536 ticks): later captures invalid', 'EDGE_BEFORE_EVENT': 'a PUL edge was captured before the event (CCR = 0 case)'})
+MEAS_PROBE_FLAGS_RETIRED: frozenset[str] = frozenset()
+
+
+class MeasChan(IntEnum):
+    """DIAG_MEAS stamp channel (STAMPS sel) (ICD App. C)."""
+
+    EVT = 0
+    PUL = 1
+    DIR = 2
+    AUX = 3
+
+
+MEAS_CHAN_NAMES: tuple[str, ...] = ('EVT', 'PUL', 'DIR', 'AUX')
+MEAS_CHAN_DESC: Mapping[str, str] = MappingProxyType({'EVT': 'J-EVT edges (TIM8 CH1)', 'PUL': 'PUL rising edges (TIM8 CH2)', 'DIR': 'DIR edges (TIM8 CH4)', 'AUX': 'J-AUX edges (TIM1 CH4)'})
+MEAS_CHAN_RETIRED: frozenset[str] = frozenset()
+
+
+class MeasHangWhere(IntEnum):
+    """DIAG_MEAS HANG where (HANG sel) (ICD App. C)."""
+
+    MAIN = 0
+    TICK = 1
+    ISR1 = 2
+
+
+MEAS_HANG_WHERE_NAMES: tuple[str, ...] = ('MAIN', 'TICK', 'ISR1')
+MEAS_HANG_WHERE_DESC: Mapping[str, str] = MappingProxyType({'MAIN': 'main loop stops kicking the IWDG', 'TICK': 'the 1 kHz tick hangs', 'ISR1': 'level-1 ISR storm (software-triggered unused EXTI line, test image only)'})
+MEAS_HANG_WHERE_RETIRED: frozenset[str] = frozenset()
+
+
+class MeasPin(IntEnum):
+    """DIAG_MEAS STATIC_LEVEL pin (sel) (ICD App. C)."""
+
+    PUL = 0
+    DIR = 1
+
+
+MEAS_PIN_NAMES: tuple[str, ...] = ('PUL', 'DIR')
+MEAS_PIN_DESC: Mapping[str, str] = MappingProxyType({'PUL': 'PUL output', 'DIR': 'DIR output'})
+MEAS_PIN_RETIRED: frozenset[str] = frozenset()
+
+
+class MeasVariant(IntFlag):
+    """DIAG_MEAS INFO w0 variant (ICD App. C)."""
+
+    MEAS = 0x00000001
+    DWT = 0x00000002
+    TWIN_MODEL = 0x00000004
+
+
+MEAS_VARIANT_BITS: tuple[str, ...] = ('MEAS', 'DWT', 'TWIN_MODEL')
+MEAS_VARIANT_DESC: Mapping[str, str] = MappingProxyType({'MEAS': 'HW_MEAS build (MT-2/3/4/7, HANG, STATIC_LEVEL)', 'DWT': 'HW_MEAS_DWT build (DWT section statistics)', 'TWIN_MODEL': "the FW host twin's model of DIAG_MEAS (REQ-C-M2-08)"})
+MEAS_VARIANT_RETIRED: frozenset[str] = frozenset()
+
+
 class RetryClass(IntEnum):
     """SW retry class (§9.3; not on the wire) (ICD §9.3)."""
 
@@ -575,6 +703,7 @@ class Cmd(IntEnum):
     FAULT_CLEAR = 0x3A
     PAUSE = 0x3B
     RESUME = 0x3C
+    DIAG_MEAS = 0x3D
 
 
 CMD_REQ_LEN: Mapping[Cmd, int] = MappingProxyType({
@@ -604,6 +733,7 @@ CMD_REQ_LEN: Mapping[Cmd, int] = MappingProxyType({
     Cmd.FAULT_CLEAR: 0,
     Cmd.PAUSE: 0,
     Cmd.RESUME: 0,
+    Cmd.DIAG_MEAS: 8,
 })
 CMD_RETRY: Mapping[Cmd, RetryClass] = MappingProxyType({
     Cmd.PING: RetryClass.RETRY,
@@ -632,6 +762,7 @@ CMD_RETRY: Mapping[Cmd, RetryClass] = MappingProxyType({
     Cmd.FAULT_CLEAR: RetryClass.VERIFY,
     Cmd.PAUSE: RetryClass.CONFIRM,
     Cmd.RESUME: RetryClass.VERIFY,
+    Cmd.DIAG_MEAS: RetryClass.VERIFY,
 })
 # JOG 0 is RETRY class (CMD_RETRY gives the JOG != 0 class)
 CMD_PRIORITY: frozenset[Cmd] = frozenset({Cmd.STOP, Cmd.HALT, Cmd.HALT_CLEAR, Cmd.ESTOP_CLEAR, Cmd.FAULT_CLEAR, Cmd.PAUSE})
@@ -667,6 +798,14 @@ TABLES: Mapping[str, type] = MappingProxyType({
     'params_defaulted_reason': ParamsDefaultedReason,
     'limit_id': LimitId,
     'afe_sample_status': AfeSampleStatus,
+    'meas_op': MeasOp,
+    'meas_src': MeasSrc,
+    'meas_probe_mode': MeasProbeMode,
+    'meas_probe_flags': MeasProbeFlags,
+    'meas_chan': MeasChan,
+    'meas_hang_where': MeasHangWhere,
+    'meas_pin': MeasPin,
+    'meas_variant': MeasVariant,
     'retry_class': RetryClass,
     'command': Cmd,
 })

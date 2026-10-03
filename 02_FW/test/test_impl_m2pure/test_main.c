@@ -15,6 +15,7 @@
 #include "params_gen.h"
 #include "proto_gen.h"
 #include "stepgen.h"
+#include "vec_loadlim.h"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -77,6 +78,39 @@ static void test_loadlim_trip_rails_regrow(void)
     TEST_ASSERT_FALSE(loadlim_check(&l, 900, false));
     loadlim_config(&l, -800, 800, 1u, 100);
     TEST_ASSERT_TRUE(loadlim_check(&l, 900, false));
+}
+
+static void test_loadlim_vectors(void)          /* loadlim_vectors.json (ref_loadlim.py, D-40 d) */
+{
+    uint32_t k, j;
+    TEST_ASSERT_TRUE(VEC_LOADLIM_N >= 10u);
+    for (k = 0u; k < VEC_LOADLIM_N; k++) {
+        const vec_ll_t *c = &VEC_LOADLIM[k];
+        loadlim_t l;
+        int32_t last = 0;
+        bool last_sat = false;
+        loadlim_init(&l, c->lo, c->hi, c->trip_samples, c->regrow);
+        for (j = 0u; j < c->n; j++) {
+            const vec_llstep_t *st = &c->steps[j];
+            if (st->op == 0u) {
+                bool sat = hx711_raw_at_rail(st->a);
+                bool trip = loadlim_check(&l, st->a, sat);
+                last = st->a;
+                last_sat = sat;
+                if (st->trip >= 0) {
+                    TEST_ASSERT_EQUAL_MESSAGE(st->trip != 0, trip, c->name);
+                }
+            } else if (st->op == 1u) {
+                loadlim_on_clear(&l, last, last_sat);
+                TEST_ASSERT_EQUAL_INT32_MESSAGE(st->ref, l.ref, c->name);
+            } else {
+                loadlim_config(&l, st->a, st->b, st->trip_samples, st->regrow);
+            }
+            if (st->window >= 0) {
+                TEST_ASSERT_EQUAL_MESSAGE(st->window != 0, l.regrow_on, c->name);
+            }
+        }
+    }
 }
 
 /* ---------------- drvmon ---------------- */
@@ -257,6 +291,7 @@ int main(void)
     RUN_TEST(test_halt_decision_grid);
     RUN_TEST(test_stretch_extend_only);
     RUN_TEST(test_loadlim_trip_rails_regrow);
+    RUN_TEST(test_loadlim_vectors);
     RUN_TEST(test_drvmon_filter_and_k1);
     RUN_TEST(test_alm_filter_chatter);
     RUN_TEST(test_release_filter_and_button);

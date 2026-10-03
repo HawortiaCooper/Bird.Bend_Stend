@@ -31,7 +31,7 @@ static void test_req_len_lookup(void)
             TEST_ASSERT_TRUE(PROTO_TYPE_IS_CMD(t));
         }
     }
-    TEST_ASSERT_EQUAL_UINT32(26u, defined);
+    TEST_ASSERT_EQUAL_UINT32(27u, defined);                 /* ICD v0.6: + DIAG_MEAS 0x3D */
     TEST_ASSERT_EQUAL_INT16(17, proto_req_len(CMD_MOVE_UNTIL_LOAD));
     TEST_ASSERT_EQUAL_INT16(-1, proto_req_len(0x3Fu));
 }

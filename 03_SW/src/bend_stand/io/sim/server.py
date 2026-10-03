@@ -2,7 +2,8 @@
 stream on ``tcp://127.0.0.1:<port>`` (default 5770, endpoint ``tcp://127.0.0.1:5770``) and the shared
 vocabulary-v2 control port (JSON lines, default 5771, same format as the twin's 5761).
 
-``python -m bend_stand.io.sim.server [--port 5770] [--ctl 5771] [--scenario file.simscn.json]``
+``python -m bend_stand.io.sim.server [--port 5770] [--ctl 5771] [--scenario file.simscn.json]
+[--features AFE_SYNTHETIC,NVM]`` (``--features`` selects the INFO feature mask, e.g. the M1 FW's, SW-C-M1-01)
 
 One data client at a time; the board keeps running between clients (like a powered board on an unplugged USB).
 Only loopback addresses are bound.
@@ -21,7 +22,7 @@ from typing import Any
 from bend_stand.core.clock import MONOTONIC
 from bend_stand.core.errors import TransportError
 from bend_stand.io.sim.board import SimBoard, SimConfig
-from bend_stand.io.sim.control import SimControl, SimScenario, default_scenario
+from bend_stand.io.sim.control import SimControl, SimScenario, default_scenario, parse_features
 from bend_stand.io.sim.models import Hx711Model
 from bend_stand.io.transport import TcpTransport, Transport
 
@@ -80,8 +81,10 @@ class SwitchableTransport(Transport):
 
 class SimServer:
     def __init__(self, port: int = 5770, ctl_port: int = 5771, scenario: str | None = None,
-                 host: str = "127.0.0.1") -> None:
+                 host: str = "127.0.0.1", features: str | int | None = None) -> None:
         sc = SimScenario.load(scenario) if scenario else default_scenario()
+        if features is not None:
+            sc.features = parse_features(features)
         self.transport = SwitchableTransport()
         self.board = SimBoard(MONOTONIC, self.transport, config=SimConfig(seed=sc.seed), afe=Hx711Model(seed=sc.seed))
         self.control = SimControl(self.board)
@@ -150,8 +153,10 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wrappe
     ap.add_argument("--port", type=int, default=5770)
     ap.add_argument("--ctl", type=int, default=5771)
     ap.add_argument("--scenario", default=None)
+    ap.add_argument("--features", default=None, help="INFO feature mask: names (comma-separated) or an integer")
     a = ap.parse_args(argv)
-    srv = SimServer(a.port, a.ctl, a.scenario)
+    feats = int(a.features, 0) if a.features and a.features.strip()[0].isdigit() else a.features
+    srv = SimServer(a.port, a.ctl, a.scenario, features=feats)
     srv.start()
     print(f"simulator on tcp://127.0.0.1:{srv.port} (control {srv.ctl_port}); Ctrl+C to stop", flush=True)
     try:

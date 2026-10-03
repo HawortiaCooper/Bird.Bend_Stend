@@ -22,6 +22,27 @@ import numpy as np
 
 from bend_stand.core import protocol_gen as pg
 
+# --------------------------------------------------------------------------------------------- fast flags
+
+
+class IntBits:
+    """Plain-``int`` view of a generated ``IntFlag`` (``IntBits(pg.DataFlags).MOVING`` → ``2``): bit tests with
+    ``int & int`` instead of the much slower ``IntFlag`` operators on the hot paths (status rebuild, simulator)."""
+
+    def __init__(self, flag_enum: Any) -> None:
+        for m in flag_enum.__members__.values():
+            object.__setattr__(self, m.name, int(m))
+
+
+INT_DF = IntBits(pg.DataFlags)
+INT_DS = IntBits(pg.DataStatus)
+INT_FA = IntBits(pg.Faults)
+INT_IO = IntBits(pg.IoBits)
+INT_SYS = IntBits(pg.SysFlags)
+INT_FE = IntBits(pg.Features)
+INT_BLOCK = IntBits(pg.Block)
+
+
 # --------------------------------------------------------------------------------------------- link
 
 

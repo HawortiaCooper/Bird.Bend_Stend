@@ -388,3 +388,44 @@ def test_tc_sys_003_01_tv_u_units():
     assert units.n_to_kgf(1.0) == pytest.approx(0.10197162129779283, rel=1e-12)
     assert units.FS_N == pytest.approx(200 * 9.80665, rel=1e-12)
     assert 2e-3 / 200 * 2**23 * 256 == pytest.approx(21474.83648, rel=1e-12)
+
+
+# --------------------------------------------------------------------------------------------- motion (ICD v0.5)
+
+MV = json.loads((VEC / "motion_vectors.json").read_text(encoding="utf-8")) if (VEC / "motion_vectors.json").exists() \
+    else {"cases": [], "planner": [], "ctrl_stop_paths": []}
+F_TICK = 90_000_000.0
+
+
+@pytest.mark.req("SYS-008", "IF-010")
+@pytest.mark.parametrize("case", [c for c in MV["cases"] if not c["events"]], ids=lambda c: c["name"])
+def test_tc_sys_008_06_ramp_periods_equal_motion_vectors(case):
+    """ICD v0.5 motion vectors (Integrator's ``ref_motion.py``): the SW ramp (used by the simulator, binary64) must
+    reproduce every step period of the event-free cases **exactly** (vector comment: 'the SW simulator matches
+    exactly')."""
+    # Verifies: SYS-008, IF-010
+    from bend_stand.calc import motion
+
+    d = case["derived"]
+    got = motion.ramp_periods(case["n_steps"], case["f_tick"], d["v_steps_s"], d["a_steps_s2"], d["d_steps_s2"])
+    assert len(got) == case["n_periods"] and sum(got) == case["sum_ticks"]
+    assert got == case["periods"]
+
+
+@pytest.mark.req("SYS-008", "IF-010")
+def test_tc_sys_008_06_planner_and_ctrl_stop_paths_equal_motion_vectors():
+    """Trapezoid planner (kind, n_acc / n_cruise / n_dec, v_peak, t) and the controlled-stop path selection
+    (CLEAN / ISR / STRETCH, ICD §6.5, D-30) of the production ``calc.motion`` equal every motion vector."""
+    # Verifies: SYS-008, IF-010
+    from bend_stand.calc import motion
+
+    assert MV["planner"] and MV["ctrl_stop_paths"]
+    for v in MV["planner"]:
+        p = motion.plan_trapezoid(v["n_steps"], v["v_steps_s"], v["a_steps_s2"], v["d_steps_s2"])
+        for k in ("kind", "n_acc", "n_cruise", "n_dec"):
+            assert p[k] == v[k], (k, p, v)
+        assert p["v_peak"] == pytest.approx(v["v_peak"], rel=1e-12) and p["t"] == pytest.approx(v["t"], rel=1e-12)
+    for v in MV["ctrl_stop_paths"]:
+        a_steps = v["a_stop_um_s2"] * f_ref.f32(v["steps_per_mm"]) / 1000.0
+        path, d = motion.ctrl_stop_path(v["p_ticks"], F_TICK, a_steps)
+        assert path == v["path"] and d == pytest.approx(v["d_steps"], rel=1e-12), (v, path, d)

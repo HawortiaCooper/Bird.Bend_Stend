@@ -52,6 +52,11 @@ void app_init(void)
     }
     fw_event(nvm_ev, nvm_arg, 0, 0);
 
+    {
+        uint8_t req[CMD_REQ_LEN_DIAG_MEAS] = {0};             /* op INFO: does this build have HW_MEAS? */
+        uint8_t resp[PROTO_MEAS_BODY_LEN];
+        g_fw.hw_meas = hal_meas_cmd(req, sizeof req, resp, sizeof resp) == PROTO_MEAS_BODY_LEN;
+    }
     link_init();
     motion_init();                                   /* step HAL: PUL idle, DIR, ENA "no current" */
     safety_init();                                   /* boot inputs, ENA boot rule (ICD §6.4) */

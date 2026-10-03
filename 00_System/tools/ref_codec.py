@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reference codec (test oracle) for the Bird Bend Stand PC <-> FW protocol.
 
-Implements: ICD_protocol.md v0.5 (PROTO_VERSION 1.0, PAYLOAD_VERSION 1);
+Implements: ICD_protocol.md v0.6 (PROTO_VERSION 1.0, PAYLOAD_VERSION 1);
             IF-002, IF-003, IF-004, IF-006, IF-009, FW-STR-003
 Origin: framing, CRC and parser follow Thrust_Stand_HAW/00_System/tools/ref_codec.py @9473c68
         (copied and trimmed, D-02); message set and payloads are bend-stand specific.
@@ -19,7 +19,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any
 
-ICD_VERSION = "0.5"
+ICD_VERSION = "0.6"
 
 # ======================================================================================
 # constants (ICD §2, §3)
@@ -46,7 +46,7 @@ CMD: dict[str, int] = {
     "STREAM_START": 0x20, "STREAM_STOP": 0x21, "SET_VALID": 0x22,
     "ENABLE": 0x30, "DISABLE": 0x31, "HOME": 0x32, "MOVE_ABS": 0x33, "JOG": 0x34,
     "MOVE_UNTIL_LOAD": 0x35, "STOP": 0x36, "HALT": 0x37, "HALT_CLEAR": 0x38,
-    "ESTOP_CLEAR": 0x39, "FAULT_CLEAR": 0x3A, "PAUSE": 0x3B, "RESUME": 0x3C,
+    "ESTOP_CLEAR": 0x39, "FAULT_CLEAR": 0x3A, "PAUSE": 0x3B, "RESUME": 0x3C, "DIAG_MEAS": 0x3D,
 }
 CMD_NAME = {v: k for k, v in CMD.items()}
 ASYNC = {"DATA": 0xC0, "EVENT": 0xC1}
@@ -60,14 +60,14 @@ REQ_FMT: dict[str, str] = {
     "STREAM_START": "<", "STREAM_STOP": "<", "SET_VALID": "<B",
     "ENABLE": "<", "DISABLE": "<", "HOME": "<B", "MOVE_ABS": "<iII", "JOG": "<iIi",
     "MOVE_UNTIL_LOAD": "<iIIiB", "STOP": "<B", "HALT": "<", "HALT_CLEAR": "<",
-    "ESTOP_CLEAR": "<", "FAULT_CLEAR": "<", "PAUSE": "<", "RESUME": "<",
+    "ESTOP_CLEAR": "<", "FAULT_CLEAR": "<", "PAUSE": "<", "RESUME": "<", "DIAG_MEAS": "<BBHI",
 }
 REQ_FIELDS: dict[str, tuple[str, ...]] = {
     "REBOOT": ("magic",), "GET_ALL_PARAMS": ("page",), "GET_PARAM": ("id",),
     "SET_VALID": ("valid",), "HOME": ("flags",),
     "MOVE_ABS": ("target_um", "v_um_s", "a_um_s2"), "JOG": ("v_um_s", "a_um_s2", "bound_um"),
     "MOVE_UNTIL_LOAD": ("bound_um", "v_um_s", "a_um_s2", "raw_stop", "cmp"),
-    "STOP": ("mode",),
+    "STOP": ("mode",), "DIAG_MEAS": ("op", "sel", "a", "b"),
 }
 REQ_LEN = {k: struct.calcsize(v) for k, v in REQ_FMT.items()}
 
@@ -87,12 +87,12 @@ DATA_STATUS = ["PAUSED", "LIMIT_START", "LIMIT_END", "LOAD_LIMIT", "AFE_STALE", 
 FAULTS = ["LOAD_LIMIT", "AFE_FAULT", "STEP_FAULT", "LIMIT_WIRING", "HOME_NOT_FOUND",
           "HOME_WIRING", "K1_WELDED", "HOME_DRIFT"]
 BLOCK = ["ESTOP", "HALT", "FAULT", "NOT_ENABLED", "NOT_HOMED", "LIMIT", "AFE_STALE",
-         "AFE_SATURATED", "DRV_UNPOWERED", "DRIVER_ALARM", "PAUSED"]
+         "AFE_SATURATED", "DRV_UNPOWERED", "DRIVER_ALARM", "PAUSED", "MEAS_STATE"]
 IO = ["ESTOP_OPEN", "LIMIT_START", "LIMIT_END", "", "PAUSE_BTN", "ALM", "PEND",   # 3 retired (D-36)
       "DRV_PWR", "ENA_DISABLED", "RATE_80"]
 SYS_FLAGS = ["CLK_FALLBACK", "CFG_DIRTY", "STREAM_ON", "REBOOT_PENDING", "NVM_DEFAULTED"]
 FEATURES = ["AFE", "AFE_SYNTHETIC", "MOTION", "HOMING", "MOVE_UNTIL_LOAD", "NVM", "TWIN",
-            "BUTTONS", "DRV_SIGNALS"]
+            "BUTTONS", "DRV_SIGNALS", "HW_MEAS"]
 
 MOTION_STATE = ["NOT_ENABLED", "ENABLING", "IDLE", "MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD",
                 "HOMING", "STOPPING"]
@@ -123,6 +123,9 @@ STOP_CAUSE: dict[str, int] = {
 STOP_CAUSE_NAME = {v: k for k, v in STOP_CAUSE.items()}
 MOVE_DONE_REASON = ["TARGET", "LOAD_THRESHOLD", "BOUND", "SOFT_LIMIT", "JOG_ZERO", "STOPPED"]
 HOME_FAIL_REASON = {1: "NOT_FOUND", 2: "WIRING", 3: "ABORTED"}
+MEAS_OP = ["INFO", "PROBE_ARM", "PROBE_READ", "COUNTER", "STAMPS", "NOINIT", "STIM_RUN", "HANG",
+           "STATIC_LEVEL", "DWT"]
+MEAS_BODY_WORDS = 16                    # DIAG_MEAS OK body: u32 w[16] (ICD Appendix C)
 
 # param wire types (ICD §7.5): code -> (name, struct fmt, size)
 PTYPE = {1: ("u8", "<B", 1), 2: ("i8", "<b", 1), 3: ("u16", "<H", 2), 4: ("i16", "<h", 2),
@@ -399,6 +402,8 @@ def encode_response(name: str, d: dict[str, Any]) -> bytes:
         body = struct.pack("<H", d["settle_ms"])
     elif name == "FAULT_CLEAR":
         body = struct.pack("<H", names_to_bits(d["cleared"], FAULTS))
+    elif name == "DIAG_MEAS":
+        body = struct.pack(f"<{MEAS_BODY_WORDS}I", *d["w"])
     else:
         body = b""
     return b"\x00" + body
@@ -430,6 +435,10 @@ def decode_response(name: str, b: bytes) -> dict[str, Any]:
         d["settle_ms"] = struct.unpack_from("<H", body)[0]
     elif name == "FAULT_CLEAR":
         d["cleared"] = bits_to_names(struct.unpack_from("<H", body)[0], FAULTS)
+    elif name == "DIAG_MEAS":
+        if len(body) != 4 * MEAS_BODY_WORDS:
+            raise ValueError("DIAG_MEAS body must be 64 bytes")
+        d["w"] = list(struct.unpack(f"<{MEAS_BODY_WORDS}I", body))
     return d
 
 

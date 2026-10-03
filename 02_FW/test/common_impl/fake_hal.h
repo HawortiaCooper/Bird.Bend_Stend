@@ -85,6 +85,8 @@ extern bool     fake_flash_fail_program;           /* program returns false (no 
 /* AFE / outputs / sys recorders */
 extern uint32_t fake_hx_kicks;
 extern bool     fake_fault_valid;
+extern bool     fake_meas_on;                       /* hal_meas_cmd answers 64 (HW_MEAS build) */
+extern uint8_t  fake_meas_last_op;
 extern uint32_t fake_fault_pc, fake_fault_cfsr;
 void fake_sample_st(uint32_t t_us, int32_t raw, uint8_t status);
 extern uint8_t  fake_hx_gain_pulses;

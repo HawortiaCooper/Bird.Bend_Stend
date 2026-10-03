@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference command-acceptance model (test oracle) for ICD_protocol.md v0.5 §4-§6.
+"""Reference command-acceptance model (test oracle) for ICD_protocol.md v0.6 §4-§6.
 
 Implements: FW-CMD-001 (check order), FW-CFG-003 (SET_PARAM checks), SAF-FW-020 (motion
 gating), SAF-FW-006/-021/-022, FW-CMD-003, FW-MOT-004/-005/-008/-009 (acceptance only).
@@ -183,7 +183,8 @@ class Model:
         return st.paused
 
     # ---- main -------------------------------------------------------------------------
-    def check(self, st: FwState, ftype: int, payload: bytes) -> tuple[str, int]:
+    def check(self, st: FwState, ftype: int, payload: bytes, hw_meas: bool = False) -> tuple[str, int]:
+        """hw_meas: the build has FEAT_HW_MEAS (measurement build, D-40c); release / twin = False."""
         # (1) TYPE
         if ftype not in rc.CMD_NAME:
             return "E_UNKNOWN_CMD", ftype
@@ -243,6 +244,8 @@ class Model:
             return "OK", 0
         if name == "HALT_CLEAR":
             return "OK", 0      # D-36 (v0.5): no STOP button -> HALT_CLEAR is never refused
+        if name == "DIAG_MEAS":
+            return self._check_meas(st, req, moving, hw_meas)
         if name == "RESUME":
             # D-31: clears only PAUSED; refused while ESTOP (latched or input open), HALT or any
             # FAULT is latched; no other BLOCK bit is evaluated; never E_BUSY (no motion start)
@@ -263,6 +266,39 @@ class Model:
         if name in MOTION_CMDS:
             return self._check_motion(st, name, req, payload, moving)
         return "OK", 0   # PING, GET_INFO, GET_STATUS, STREAM_*, HALT
+
+    @staticmethod
+    def _check_meas(st: FwState, r: dict[str, Any], moving: bool, hw_meas: bool) -> tuple[str, int]:
+        """DIAG_MEAS (ICD Appendix C, D-40c): not in build -> E_INTERNAL NOT_IN_BUILD (after LEN); then op /
+        sel / a / b in payload order (offsets 0 / 1 / 2 / 4); then MEAS_STATE for HANG / STATIC_LEVEL."""
+        if not hw_meas:
+            return "E_INTERNAL", 1
+        op, sel, a, b = r["op"], r["sel"], r["a"], r["b"]
+        if op > 9:
+            return "E_RANGE", 0
+        name = rc.MEAS_OP[op]
+        # (sel ok, a ok, b ok) per op
+        rules = {
+            "INFO": (sel == 0, a == 0, b == 0),
+            "PROBE_ARM": (sel <= 8, (a & 0x3) <= 2 and (a & ~0x0103) == 0, b <= 0xFFFF),
+            "PROBE_READ": (sel == 0, a == 0, b == 0),
+            "COUNTER": (sel <= 1, a == 0, b == 0),
+            "STAMPS": (sel <= 3, a <= 1023, b == 0),
+            "NOINIT": (sel <= 1, a == 0, b == 0),
+            "STIM_RUN": ((sel >> 1) >= 1, 1 <= a <= 1000, True),
+            "HANG": (sel <= 2, a <= 10000, b == 0),
+            "STATIC_LEVEL": (sel <= 1, a <= 1, b == 0),
+            "DWT": (sel <= 1, a <= 31, b == 0),
+        }[name]
+        for ok, off in zip(rules, (1, 2, 4)):
+            if not ok:
+                return "E_RANGE", off
+        meas_state = rc.names_to_bits(["MEAS_STATE"], rc.BLOCK)
+        if name == "HANG" and not moving:
+            return "E_STATE", meas_state
+        if name == "STATIC_LEVEL" and st.motion_state != "NOT_ENABLED":
+            return "E_STATE", meas_state
+        return "OK", 0
 
     def _check_motion(self, st: FwState, name: str, req: dict[str, Any], payload: bytes,
                       moving: bool) -> tuple[str, int]:

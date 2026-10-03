@@ -40,6 +40,7 @@ static inline void cc_setup(const vec_check_t *v, params_t *p, cmd_ctx_t *c)
     c->alm_active = v->alm_active;
     c->nvm_record_valid = v->nvm_record_valid;
     c->paused = v->paused;
+    c->hw_meas = v->hw_meas;
 }
 
 #endif /* CHECK_CTX_H */

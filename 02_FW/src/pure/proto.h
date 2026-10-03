@@ -75,6 +75,7 @@ static inline int16_t proto_req_len(uint8_t type)
     case CMD_FAULT_CLEAR:      return (int16_t)CMD_REQ_LEN_FAULT_CLEAR;
     case CMD_PAUSE:            return (int16_t)CMD_REQ_LEN_PAUSE;
     case CMD_RESUME:           return (int16_t)CMD_REQ_LEN_RESUME;
+    case CMD_DIAG_MEAS:        return (int16_t)CMD_REQ_LEN_DIAG_MEAS;
     default:                   return -1;
     }
 }

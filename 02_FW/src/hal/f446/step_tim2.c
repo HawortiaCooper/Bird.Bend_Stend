@@ -40,8 +40,11 @@ static volatile uint32_t s_t_upd;        /* DWT at the previous update */
 static uint32_t s_pw = 900u, s_dir_setup = 1800u, s_guard = 45u, s_f = 90000000u;
 static bool     s_ena_inv;
 static bool     s_init;
+/* HW_MEAS STATIC_LEVEL hold (meas_f4.c sets it; always 0 in the release image): released at the next
+ * motion start / ENA change (ICD v0.6 Appendix C op 8) */
+volatile uint8_t g_meas_static;
 
-static inline void oc1m(uint32_t m)
+static inline __attribute__((always_inline)) void oc1m(uint32_t m)
 {
     TIM2->CCMR1 = (TIM2->CCMR1 & ~TIM_CCMR1_OC1M) | m;
 }
@@ -57,6 +60,10 @@ RAMFUNC static void halt_hw(void)
 
 RAMFUNC void hal_ena_set(bool enabled)
 {
+    if (g_meas_static != 0u) {
+        g_meas_static = 0u;
+        oc1m(OC1M_FORCE_INACTIVE);
+    }
     /* LED current (pin high) = driver disabled; motion.ena_invert swaps (boot value) */
     bool high = (!enabled) != s_ena_inv;
     PIN_ENA_PORT->BSRR = high ? (1u << PIN_ENA_BIT) : (1u << (PIN_ENA_BIT + 16u));
@@ -111,6 +118,7 @@ void hal_step_start(uint32_t first)
 {
     uint32_t ccr = (first > s_pw) ? first - s_pw : 1u;
     uint32_t per;
+    g_meas_static = 0u;                              /* PWM2 below replaces any STATIC_LEVEL */
     if (ccr < s_dir_setup) {
         ccr = s_dir_setup;                           /* first edge >= dir_setup after CEN */
     }
@@ -208,9 +216,6 @@ void TIM2_IRQHandler(void)
     uint32_t now = dwt_cycles();
     uint32_t el = now - s_t_upd;
     step_next_t r;
-#if defined(FW_DEBUG_PINS) && FW_DEBUG_PINS
-    gpio_write(GPIOC, PIN_DBG0_BIT, true);
-#endif
     if ((TIM2->SR & TIM_SR_UIF) == 0u) {
         return;
     }
@@ -239,7 +244,4 @@ void TIM2_IRQHandler(void)
             }
         }
     }
-#if defined(FW_DEBUG_PINS) && FW_DEBUG_PINS
-    gpio_write(GPIOC, PIN_DBG0_BIT, false);
-#endif
 }

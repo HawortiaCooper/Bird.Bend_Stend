@@ -45,7 +45,7 @@ void tw_out(const char *fmt, ...)
 
 uint32_t tw_fw_us(vt_t t) { return (uint32_t)(T.t0_us + (uint32_t)((t - T.boot_ns) / 1000ull)); }
 
-void tw_edge(const char *pin, int level) { tw_out("E %llu %s %d", (unsigned long long)T.now, pin, level); }
+void tw_edge(const char *pin, int level) { tw_out("E %llu %s %d", (unsigned long long)T.now, pin, level); tw_meas_edge(pin, level); }
 
 void tw_flash_save(void)
 {
@@ -57,14 +57,16 @@ void tw_flash_save(void)
 
 void tw_reset(const char *cause)
 {
-    tw_out("Z %s %llu", cause, (unsigned long long)T.now);
+    tw_meas_noinit_out();                     /* .noinit survives the reset (DIAG_MEAS model) */
+    tw_out("Z %s %llu %.6f", cause, (unsigned long long)T.now, tw_x_um());   /* world x persists */
     fflush(stdout);
     tw_flash_save();
     exit(0);
 }
 
 /* ------------------------------------------------------------------ world */
-double tw_x_um(void) { return (double)T.count * 1000.0 / T.spm_world + T.shift_um; }
+/* world position: integrated from PUL + DIR pin (independent of the FW counter, REQ-C-M2-06) */
+double tw_x_um(void) { return T.x0_um + (double)T.wsteps * 1000.0 / T.spm_world + T.shift_um; }
 
 static uint8_t limit_level(int k)
 {
@@ -79,6 +81,7 @@ static void set_input(uint8_t id, uint8_t level)
     if (T.lvl[id] == level) return;
     T.lvl[id] = level;
     tw_out("I %llu %u %u", (unsigned long long)T.now, id, level);
+    tw_meas_input(id, level);
     twin_input_edge(id, level);
 }
 
@@ -135,7 +138,10 @@ static void afe_conversion(void)
     if (T.afe_miss_next) { T.afe_miss_next--; deliver = false; missed = true; }
     if (T.afe_drop_every && T.afe_conv_n % T.afe_drop_every == 0u) { deliver = false; missed = true; }
     uint32_t t_us = tw_fw_us(T.now);
-    tw_out("S %llu %lu %ld %d", (unsigned long long)T.now, (unsigned long)t_us, (long)raw, deliver);
+    tw_meas_dout();
+    /* S <t> <fw_t_us> <raw> <delivered> <gain_pulses> <sps>  (REQ-C-M2-05: gain / channel per conversion) */
+    tw_out("S %llu %lu %ld %d %u %d", (unsigned long long)T.now, (unsigned long)t_us, (long)raw, deliver,
+           (unsigned)T.afe_gain_pulses, T.afe_rate_sps);
     if (!deliver) { if (missed) T.afe_missed_flag = true; return; }
     T.pend_sample.t_us = t_us; T.pend_sample.raw = raw; T.pend_sample.pos = T.count;
     /* afe_sample_t.status (tools/README seam semantics, protocol.yaml afe_sample_status):
@@ -183,6 +189,7 @@ static void rx_byte(uint8_t b)
 {
     T.rx_ring[T.rx_wr % RX_RING] = b;
     T.rx_wr++;
+    tw_meas_rx();
     if (T.rx_wr - T.rx_rd > RX_RING) { T.rx_overruns++; T.rx_rd = T.rx_wr - RX_RING; }
 }
 
@@ -202,6 +209,7 @@ static vt_t next_event(void)
     if (T.step_running) t = min_t(t, T.step_high ? T.step_end : T.step_rise);
     if (T.wdg_armed) t = min_t(t, T.wdg_deadline);
     if (T.storm_until > T.now) t = min_t(t, T.storm_until);
+    if (T.main_busy_until > T.now) t = min_t(t, T.main_busy_until);
     return t;
 }
 
@@ -260,6 +268,9 @@ static void run_main(void)
     T.in_main = true; T.time_calls = 0;
     app_loop();
     T.in_main = false;
+    /* inject loop_load: this pass consumes loop_load_ns of virtual time; ISRs keep running meanwhile, the
+     * next pass starts when it is over (REQ-C-M2-02) */
+    if (T.loop_load_ns && T.now < T.loop_load_until) T.main_busy_until = T.now + T.loop_load_ns;
     /* interrupts that became pending during a stall inside the pass */
     if (T.sample_pending) deliver_sample();
     if (T.tick_pending) { T.tick_pending = false; if (T.now >= T.hang_tick_until) core_tick_1ms(); }
@@ -279,7 +290,7 @@ static void run_until(vt_t until)
         if (t > until) { if (until > T.now) T.now = until; return; }
         if (t > T.now) T.now = t;
         dispatch_now();
-        loop_due = true;
+        loop_due = T.now >= T.main_busy_until;
     }
 }
 
@@ -335,6 +346,11 @@ static void cmd_world(char *args)
         if (sscanf(a, "%15s %ld", w, &n) == 2) { if (!strcmp(w, "word")) T.cut_after_word = n; else if (!strcmp(w, "erase")) T.cut_in_erase = n; }
     }
     else if (!strcmp(key, "lsi")) { double v; if (sscanf(a, "%lf", &v) == 1 && v > 1000.0) T.lsi_hz = v; }
+    else if (!strcmp(key, "dirwiring")) { int v; if (sscanf(a, "%d", &v) == 1) T.dir_wiring_inv = v != 0; }
+    else if (!strcmp(key, "x")) { double v; if (sscanf(a, "%lf", &v) == 1) { T.x0_um = v - T.shift_um; T.wsteps = 0; update_limits(); } }
+    else if (!strcmp(key, "pendauto")) { unsigned long long lag; int on; if (sscanf(a, "%d %llu", &on, &lag) == 2) { T.pend_auto = on != 0; T.pend_lag_ns = lag; } }
+    else if (!strcmp(key, "loopload")) { unsigned long long per, until; if (sscanf(a, "%llu %llu", &per, &until) == 2) { T.loop_load_ns = per; T.loop_load_until = until; } }
+    else if (!strcmp(key, "stimedge")) { int v; if (sscanf(a, "%d", &v) == 1) tw_meas_stim_edge((uint8_t)(v != 0)); }
     else if (!strcmp(key, "faultrec")) {                    /* seam v1.2: planted HardFault record */
         unsigned long pc, cf;
         if (sscanf(a, "%lx %lx", &pc, &cf) == 2) { T.fault_rec_valid = true; T.fault_rec_pc = (uint32_t)pc; T.fault_rec_cfsr = (uint32_t)cf; }
@@ -363,6 +379,8 @@ static void cmd_query(void)
     tw_out("Y fw_t_us %lu", (unsigned long)tw_fw_us(T.now));
     tw_out("Y x_um_true %.3f", tw_x_um());
     tw_out("Y pos_steps %ld", (long)T.count);
+    tw_out("Y world_steps %lld", (long long)T.wsteps);
+    tw_out("Y dir_level %d", T.dir_level);
     tw_out("Y step_running %d", T.step_running);
     tw_out("Y pos_uncertain %d", T.step_uncertain);
     tw_out("Y stop_gen %lu", (unsigned long)T.stop_gen);
@@ -408,6 +426,7 @@ static void init_defaults(void)
     /* electrical idle levels: E-stop closed (low), limits inactive (low), STOP not modelled (D-36: low),
      * PAUSE NO released (high), ALM OK (low), PEND in position (high), DRV_PWR present (low) */
     T.lvl[IN_PAUSE] = 1; T.lvl[IN_PEND] = 1;
+    T.dir_level = -1;
     memcpy(T.uid, "TWIN-UID-001", 12);
     strcpy(T.flash_path, "flash.bin");
 }
@@ -426,12 +445,18 @@ int main(int argc, char **argv)
         else if (!strcmp(k, "--uid")) { for (int j = 0; j < 12 && v[2 * j] && v[2 * j + 1]; j++) T.uid[j] = (uint8_t)(hexval(v[2 * j]) << 4 | hexval(v[2 * j + 1])); }
         else if (!strcmp(k, "--hse-fail")) T.hse_fail = atoi(v) != 0;
         else if (!strcmp(k, "--lsi")) T.lsi_hz = atof(v);
+        else if (!strcmp(k, "--hw-meas")) T.hw_meas = atoi(v) != 0;
+        else if (!strcmp(k, "--noinit")) {                 /* "<magic_hex>:<last_pul>:<hang>" (DIAG_MEAS model) */
+            unsigned long mg, lp, hg;
+            if (sscanf(v, "%lx:%lu:%lu", &mg, &lp, &hg) == 3) { T.ni_magic = (uint32_t)mg; T.ni_last_pul = (uint32_t)lp; T.ni_hang = (uint32_t)hg; }
+        }
         else if (!strcmp(k, "--fault-rec")) {          /* "<pc_hex>:<cfsr_hex>" (seam v1.2) */
             unsigned long pc, cf;
             if (sscanf(v, "%lx:%lx", &pc, &cf) == 2) { T.fault_rec_valid = true; T.fault_rec_pc = (uint32_t)pc; T.fault_rec_cfsr = (uint32_t)cf; }
         }
         else if (!strcmp(k, "--seed")) T.rng = strtoull(v, NULL, 0) | 1u;
     }
+    tw_meas_init(T.hw_meas, T.ni_magic, T.ni_last_pul, T.ni_hang);
     memset(T.flash, 0xFF, sizeof T.flash);
     FILE *f = fopen(T.flash_path, "rb");
     if (f) { size_t n = fread(T.flash, 1, FLASH_SIZE, f); (void)n; fclose(f); }

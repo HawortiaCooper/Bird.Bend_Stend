@@ -6,6 +6,8 @@
 #include <string.h>
 #include <unity.h>
 
+#include "le.h"
+
 #include "frame.h"
 #include "payload.h"
 #include "vec_frames.h"
@@ -56,6 +58,12 @@ static void cmp_req(const cmd_req_t *e, const cmd_req_t *a, const char *name)
         break;
     case CMD_STOP:
         TEST_ASSERT_EQUAL_UINT8_MESSAGE(e->u.stop.mode, a->u.stop.mode, name);
+        break;
+    case CMD_DIAG_MEAS:
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(e->u.meas.op, a->u.meas.op, name);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(e->u.meas.sel, a->u.meas.sel, name);
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(e->u.meas.a, a->u.meas.a, name);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(e->u.meas.b, a->u.meas.b, name);
         break;
     default:
         break;
@@ -126,6 +134,12 @@ static uint16_t build_resp(const vec_resp_t *v, uint8_t *pl)
         pl[0] = ST_OK;
         pl[1] = (uint8_t)v->num; pl[2] = (uint8_t)(v->num >> 8);
         return 3u;
+    case RB_MEAS:                                /* DIAG_MEAS OK body: u32 w[16] (hal_meas_cmd output) */
+        pl[0] = ST_OK;
+        for (i = 0u; i < 16u; i++) {
+            le_put32(&pl[1u + 4u * i], v->w[i]);
+        }
+        return (uint16_t)(1u + PROTO_MEAS_BODY_LEN);
     default:
         TEST_FAIL_MESSAGE("unknown body kind");
         return 0u;

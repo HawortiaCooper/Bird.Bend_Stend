@@ -2,12 +2,12 @@
 
 | Doc | ICD_protocol |
 |---|---|
-| Version | **0.5 — M1 gate / CR-01** (change history §15) |
+| Version | **0.6 — M2 entry (D-40, Validator E M2 requests)** (change history §15) |
 | Date | 2026-10-03 |
 | Owner | Implementer C — Integrator (changes only with a version bump + change-history entry, IF-001) |
-| Implements | SRS v0.5: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34, D-36, D-37; SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
+| Implements | SRS v0.5: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34, D-36, D-37, D-40; FW_test_plan v0.3 §6.4 / §8.4 (REQ-C-M2-01…11); SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
 | Protocol | **PROTO_VERSION 1.0**, **PAYLOAD_VERSION 1**, dictionary `params.yaml` dict_version 4 (hash in Appendix A) |
-| Machine-readable companions | `00_System/specs/protocol.yaml` (names and codes, §0.3, Appendix B), `00_System/specs/params.yaml` (parameters, Appendix A), `00_System/tools/ref_codec.py` (codec oracle), `ref_cmdcheck.py` (acceptance oracle), `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (§12) |
+| Machine-readable companions | `00_System/specs/protocol.yaml` (names and codes, §0.3, Appendix B), `00_System/specs/params.yaml` (parameters, Appendix A), `00_System/tools/ref_codec.py` (codec oracle), `ref_cmdcheck.py` (acceptance oracle), `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json`, `vectors/motion_vectors.json`, `vectors/loadlim_vectors.json` (§12) |
 | Origin | framing, CRC, parser, PARAM_ENTRY, NVM and versioning rules follow Thrust_Stand_HAW `00_System/specs/ICD_protocol.md` @9473c68 (trimmed per R3 §1.6) |
 
 ---
@@ -218,6 +218,7 @@ Generated from `protocol.yaml` `commands` (C `CMD_*`, `CMD_REQ_LEN_*`; Python `C
 | `0x3A` | FAULT_CLEAR | – (0) | `u16 cleared` (FAULT mask §7.6) | VERIFY (priority lane, D-34) | priority | FW-CMD-003, SAF-FW-011, D-34 |
 | `0x3B` | PAUSE | – (0) | – | CONFIRM | priority / sniffed | SAF-FW-023, D-14, D-26, D-29a |
 | `0x3C` | RESUME | – (0) | – | VERIFY (never auto-retried, §9.3) | – | SAF-FW-023, D-31 |
+| `0x3D` | DIAG_MEAS | `u8 op, u8 sel, u16 a, u32 b` (meas_op, Appendix C) (8) | `u32 w[16]` (64 B, Appendix C) | per op (meas_op `retry`): RETRY for read ops, VERIFY otherwise | – | CR-02, D-40c, SYS-009, NFR-007 |
 
 <!-- END GENERATED protocol:commands -->
 
@@ -285,7 +286,8 @@ Generated from `protocol.yaml` table `block` (C `BLOCK_*`, Python `Block`).
 | 8 | `DRV_UNPOWERED` | drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c) |
 | 9 | `DRIVER_ALARM` | ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging) |
 | 10 | `PAUSED` | PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31) |
-| 11–15 | — | reserved (0) |
+| 11 | `MEAS_STATE` | DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c) |
+| 12–15 | — | reserved (0) |
 
 <!-- END GENERATED protocol:block -->
 
@@ -293,7 +295,8 @@ ENABLE evaluates only bits 0 and 8. HOME evaluates all bits except 4 and 5 (the 
 switches, FW-HOM-001). JOG 0 is never refused by state. Bit 10 PAUSED (D-30) refuses MOVE_ABS,
 MOVE_UNTIL_LOAD, HOME and every JOG ≠ 0 — including a refresh of a running jog and a JOG arriving while
 STOPPING (E_STATE is checked before E_BUSY, §4.4). **RESUME** evaluates only bits 0 ESTOP, 1 HALT and 2
-FAULT (D-31); its detail carries just those bits.
+FAULT (D-31); its detail carries just those bits. Bit 11 MEAS_STATE is used only by DIAG_MEAS (HANG needs a
+running motion, STATIC_LEVEL needs NOT_ENABLED; Appendix C).
 
 **ALM start-block (bit 9 DRIVER_ALARM; SAF-FW-026, D-28, D-16)** — applies **only to new motion starts**:
 MOVE_ABS, MOVE_UNTIL_LOAD, HOME, and JOG ≠ 0 while the motion state is not JOG. It does **not** apply to a
@@ -305,6 +308,8 @@ DRV_UNPOWERED, not DRIVER_ALARM (A-20).
 ### 4.4 Check order (defines which NACK wins; FW-CMD-001)
 1. **TYPE** defined → else `E_UNKNOWN_CMD`.
 2. **LEN** → `E_LENGTH`.
+2a. **Not in this build** → `E_INTERNAL` NOT_IN_BUILD (detail 1), nothing executed: DIAG_MEAS without
+   FEAT_HW_MEAS (release and twin builds, D-40c); commands of a later milestone whose feature bit is 0.
 3. **Arguments** (no state needed except the current parameter values, position and load):
    `E_PARAM_ID` → `E_TYPE` → `E_RANGE` (fields in payload order).
 4. **State**, in this order: `E_STATE` (BLOCK mask) → `E_BUSY` → `E_CAUSE_ACTIVE` → `E_CONFIRM` → `E_CONFIG`.
@@ -511,11 +516,37 @@ required (SAF-FW-006). Nothing latched → OK.
 
 **FAULT_CLEAR** — clears all latched faults whose cause is gone; if any latched fault (other than
 LOAD_LIMIT) still has its cause present → `E_CAUSE_ACTIVE` (detail = FAULT mask of those) and **nothing** is
-cleared. LOAD_LIMIT is always clearable so the operator can unload; afterwards the FW re-trips immediately if
-the violation grows by more than `safety.load_regrow_raw` beyond the value at clear (SAF-FW-011). Causes:
-AFE_FAULT — AFE stale or last sample saturated; LIMIT_WIRING — both limit inputs active; K1_WELDED — E-stop
+cleared. LOAD_LIMIT is always clearable so the operator can unload (regrow window below). Causes:
+AFE_FAULT — AFE stale or last sample saturated; LIMIT_WIRING — both limit inputs active **at the same time**:
+FAULT_CLEAR is accepted as soon as they are no longer both active; an input that is still active keeps acting
+as a normal limit latch (motion toward it refused, BLOCK LIMIT; D-40a, SAF-FW-014); K1_WELDED — E-stop
 sense open while driver power present (any duration); STEP_FAULT, HOME_NOT_FOUND, HOME_WIRING, HOME_DRIFT — none (clearable
 at once). OK body = mask of the cleared faults; EVENT FAULT_CLEARED (arg = that mask).
+
+**FW load limit and regrow window (normative; SAF-FW-008…011, D-12, D-40d; oracle `ref_loadlim.py`, vectors
+`loadlim_vectors.json`)** —
+- Every HX711 sample is a **violation** when raw > `safety.load_raw_max`, raw < `safety.load_raw_min` or the sample
+  is at a rail (SAF-FW-009). `safety.load_trip_samples` consecutive violations trip (immediate stop, LOAD_LIMIT);
+  a sample inside the thresholds resets the count. Threshold changes act from the next sample and keep the count.
+- At an accepted FAULT_CLEAR of LOAD_LIMIT the **reference** = the last sample (raw). If that sample is a violation
+  the **regrow window** opens: a violating sample re-trips **immediately** (no trip-sample count) only if it lies more
+  than `safety.load_regrow_raw` beyond the reference on its side (raw > max and raw > ref + regrow, or raw < min and
+  raw < ref − regrow); any other violating sample is ignored (unloading allowed) and does not count.
+- The window **ends** with the first sample inside the thresholds (the normal rule applies from the next sample) or
+  with the next FAULT_CLEAR (new reference). A threshold change does not end it. A clear with the last sample
+  inside the thresholds opens no window.
+
+### 5.6 Diagnostics: DIAG_MEAS (D-40c, CR-02; FW_test_plan §6)
+**DIAG_MEAS** (0x3D, LEN 8: `u8 op, u8 sel, u16 a, u32 b`; OK body `u32 w[16]`, 64 B) exists only in the
+**measurement build** (`HW_MEAS`, INFO feature bit 9 **FEAT_HW_MEAS**). The release image and the twin (without its
+HW_MEAS model) answer `E_INTERNAL` NOT_IN_BUILD after the LEN check, nothing executed (§4.4 step 2a). In a HW_MEAS
+build: op ≤ 9 and the per-op `sel` / `a` / `b` rules of Appendix C (unused fields must be 0) → else `E_RANGE` with
+the field offset (0 / 1 / 2 / 4); HANG while not moving or STATIC_LEVEL while not NOT_ENABLED → `E_STATE` MEAS_STATE;
+read ops are accepted in every state. DIAG_MEAS starts no motion and changes no parameter, latch or safety reaction;
+it is not sniffed, goes on the normal lane, refreshes the link watchdog like every command, and is answered ≤ 10 ms.
+Retry class per op (Appendix C): RETRY for read ops, VERIFY for ARM / STIM / HANG / STATIC / resets. The core forwards
+the validated request to seam v1.3 `hal_meas_cmd()` (tools/README); `HW_MEAS` code lives only in `hal/f446/meas*.c`
+and the safety handlers / core stay byte-identical to the release image (TC-SYS-009-02). Word layouts: **Appendix C**.
 
 ---
 
@@ -554,8 +585,8 @@ NOT_ENABLED.
 | PC HALT | immediate | kept | HALT (PC) → HALT_CLEAR | kept | cleared | HALT_SET, STOPPED |
 | physical PAUSE button / PC PAUSE | controlled (if moving) | kept | PAUSED (`pause_src` BUTTON / PC): new motion refused (BLOCK PAUSED); cleared **only** by RESUME or HALT_CLEAR (D-30, D-31, §5.5); button press while PAUSED → RESUME_REQUEST only | kept | cleared | PAUSE_BUTTON (button only), PAUSED (arg = source), STOPPED (PAUSE_BUTTON / PC_PAUSE) |
 | limit switch while moving | immediate (≤ 200 µs) | kept | LIMIT_x → auto-clear when the input has been released continuously for `io.release_ms`; while latched only motion **away** from the switch is accepted (BLOCK LIMIT toward it) (D-33h) | kept | cleared | LIMIT_SET, STOPPED, LIMIT_CLEARED |
-| both limit inputs active | immediate | kept | fault LIMIT_WIRING → both released + FAULT_CLEAR | kept | cleared | FAULT_SET, STOPPED |
-| FW load limit / rail sample | immediate (≤ 200 µs after DRDY) | kept | fault LOAD_LIMIT → FAULT_CLEAR (always; re-trip on regrow) | kept | cleared | FAULT_SET, STOPPED |
+| both limit inputs active | immediate | kept | fault LIMIT_WIRING → inputs no longer both active + FAULT_CLEAR; a still-active input then acts as a LIMIT latch (D-40a) | kept | cleared | FAULT_SET, STOPPED |
+| FW load limit / rail sample | immediate (≤ 200 µs after DRDY) | kept | fault LOAD_LIMIT → FAULT_CLEAR (always; regrow window until a sample is inside the thresholds or the next FAULT_CLEAR, §5.5, D-40d) | kept | cleared | FAULT_SET, STOPPED |
 | AFE stale while moving | immediate | kept | fault AFE_FAULT → fresh samples + FAULT_CLEAR | kept | cleared | AFE_STALE, FAULT_SET, STOPPED |
 | link watchdog (moving) | controlled | kept | LINK_WDG status → next valid frame | kept | cleared | LINK_WDG, STOPPED, LINK_RESTORED |
 | jog dead-man | controlled | kept | none | kept | **unchanged** | STOPPED (JOG_DEADMAN) |
@@ -671,7 +702,8 @@ Generated from `protocol.yaml` table `features` (C `FEAT_*`, Python `Features`).
 | 6 | `TWIN` | host twin build |
 | 7 | `BUTTONS` | PAUSE button input (the STOP/BREAK input is retired, D-36) |
 | 8 | `DRV_SIGNALS` | ALM/PEND/DRV_POWER inputs |
-| 9–31 | — | reserved (0) |
+| 9 | `HW_MEAS` | measurement build (HW_MEAS, CR-02 / D-40c): DIAG_MEAS 0x3D executes; 0 = release / twin -> E_INTERNAL NOT_IN_BUILD |
+| 10–31 | — | reserved (0) |
 
 <!-- END GENERATED protocol:features -->
 
@@ -986,7 +1018,7 @@ backend must let the FW watchdog trip). With the 1000 ms default ≥ 3 heartbeat
 
 | Class | Commands | Rule |
 |---|---|---|
-| RETRY | PING, GET_INFO, GET_STATUS, GET_PARAM, GET_ALL_PARAMS, SET_PARAM, STREAM_START, STREAM_STOP, SET_VALID, JOG 0 | response timeout 100 ms (GET_INFO at connect 200 ms); ≤ 2 retries, each with a **new SEQ** and the **newest** value the SW wants at that moment (latest wins; a retry superseded by a newer command is dropped); a late response to an abandoned SEQ is ignored |
+| RETRY | DIAG_MEAS read ops (Appendix C); PING, GET_INFO, GET_STATUS, GET_PARAM, GET_ALL_PARAMS, SET_PARAM, STREAM_START, STREAM_STOP, SET_VALID, JOG 0 | response timeout 100 ms (GET_INFO at connect 200 ms); ≤ 2 retries, each with a **new SEQ** and the **newest** value the SW wants at that moment (latest wins; a retry superseded by a newer command is dropped); a late response to an abandoned SEQ is ignored |
 | CONFIRM | STOP, HALT, PAUSE | priority path; repeated every 50 ms until confirmed — STOP: ACK or `MOVING = 0`; HALT: ACK or HALT flag; PAUSE: ACK or PAUSED — ≤ 20 attempts in 1 s; works with the stream off (§9.4) |
 | ONCE_PRIORITY | — (unused since v0.4.1, D-34; code kept) | — |
 | VERIFY | MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0, RESUME, ENABLE, DISABLE, SAVE/LOAD/DEFAULT_PARAMS, REBOOT; **HALT_CLEAR, ESTOP_CLEAR, FAULT_CLEAR** (D-34; still written on the priority lane, §2.4) | **never retried automatically.** After a timeout (100 ms; SAVE/LOAD/DEFAULT 3000 ms + wire time of the TX backlog; REBOOT: reconnect after EVENT BOOT or 3 s) the SW sends GET_STATUS and decides from `motion_state`, `target_um`, latches, `sys_flags.CFG_DIRTY` / `nvm_record_seq` whether the command was executed (clears: the latch bits `flags.HALT` / `flags.ESTOP` / STATUS `faults` and `status.PAUSED`; a NACK detail is shown verbatim). JOG ≠ 0 refreshes are a stream of new commands every ≤ 100 ms (newest speed); a lost one is covered by the next refresh and by the FW dead-man. |
@@ -1137,7 +1169,14 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
     cruise / acceleration / near the end (stop sized `r0 = ceil(v²/2a_stop)`, never faster than the current
     period, so the deceleration never exceeds `motion.a_stop_um_s2`), JOG on-the-fly speed changes (speed-up
     resumes the accel index from the exact current speed), the §6.5 stop-path rule (CLEAN / ISR / STRETCH) and
-    the planner; FW float32 tolerance ±1 tick per period, sum ±N/1000 ticks; the SW simulator matches exactly.
+    the planner; FW float32 tolerance ±1 tick per period, sum **±ceil(N/1000)** ticks (D-40b; SRS FW-MOT-003
+    aligned); the SW simulator matches exactly.
+  - `vectors/loadlim_vectors.json` (v0.6, D-40d; definitions in `ref_loadlim.py`): FW load-limit sample sequences
+    (trip, trip samples, rails, regrow window open / unload / end inside / new reference / config / at the rail)
+    with `trip` and `regrow_window` after every step.
+  - `check_vectors.json` `hw_meas_vectors` (v0.6): DIAG_MEAS acceptance in a HW_MEAS build (op / field ranges,
+    MEAS_STATE); the main `vectors` hold the release / twin verdict (NOT_IN_BUILD) and the LIMIT_WIRING clear rule
+    (D-40a).
 - `00_System/tools/gen_params.py` — dictionary generator (§11.1); also runs `gen_protocol.py` (protocol name
   registry `protocol.yaml` → `proto_gen.h`, `protocol_gen.py`, generated ICD tables, §0.3).
 - FW host tests and SW pytest MUST (a) decode every vector frame to `decoded`, (b) re-encode `decoded` to the
@@ -1173,6 +1212,7 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 | D-31 (RESUME 0x3C) | §3.2, §4.3, §5.5, §6.3, §9.3, App. B |
 | D-36 / CR-01 (no physical holding STOP) | §5.5, §6.2, §6.3, §6.4, §7.6, §8, App. A/B |
 | D-37 (a) / (b) / (c) / (d) | §2.4 + §9.1 / §7.6 / §2.4 / §9.4 |
+| D-40 (a) / (b) / (c) / (d) | §5.5 + §6.2 / §12 / §5.6 + App. C / §5.5 |
 | D-33 (a) / (f) / (g) / (h) / (k) | §11.4 + App. A / §6.2 / §6.2 + §7.2 / §6.2 / §9.3 |
 | OI-FW-17 / 18 / 19 / 20 / 21 / 22 / 23 | `tools/README.md` seams / §2.4 / §2 / §0.1 + §12 / §4.2 + §6.4 / §6.4 / §5.4 |
 | GF-01 / GF-08 / OI-FW-11 | §5.5, §7.2 / §0.3, App. B / §0.3, App. B |
@@ -1207,12 +1247,15 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 | SD-15 | **CR-01 / D-36 + D-37 SRS deltas** (SRS v0.5): SAF-FW-022 withdrawn; FW-SW-003 STOP part removed; HALT source PC only; `io.stop_active_level` retired; IF-011/NFR-008 SAVE exemption (D-37a); status-bit validity by feature bit (D-37b); STOP confirmation ordered by device time (D-37d). | Orchestrator: SRS v0.5 (applied in parallel). |
 | OBS-M1-01…05 | **Closed (v0.5):** SAVE exemption §2.4 (01); twin RX during flash stalls fixed (02, `tools/README.md`); LOAD sends no EVENT on failure §5.2 / §11.3 (03); unit-conversion saturation §0.1 (05). | — |
 | IF-C-M1-02 | **Closed (v0.5):** §7.6 feature-dependent bits. Follow-ups: A sends DRV_PWR = 0 while FEAT_DRV_SIGNALS = 0 also with `drv.pwr_sense_enable` = false; B's simulator masks the bits by its feature mask. | A, B |
-| OI-ICD-09 | **Ramp definition for stops / JOG changes (M2, to A):** A's in-progress `pure/ramp.c` matches every position-move case of `motion_vectors.json` within ±1 tick, but differs by one virtual-index step in the controlled-stop cases (stop sized with `floor` of a float32 index: e.g. 1 279 instead of 1 280 steps at 12 800 steps/s, a = 64 000 steps/s²; the deceleration then exceeds `a_stop`) and after a JOG speed-up (resumes at integer index `floor(k0) + 2` instead of the exact current speed: the first period after the change is one ramp step short). | A: align `ramp_stop()` (ceil, index in binary64) and `ramp_set_speed()` speed-up (exact `k0`) to `ref_motion.py`, or bring a counter-proposal to the Integrator (vectors change only by agreement). |
+| OI-ICD-09 | **Closed (v0.6):** A aligned `ramp_stop()` / `ramp_set_speed()` (REQ-A-M2-06); Validator E dry run 9/9 + 28/28, Integrator differential re-run 2026-10-04. | — |
+| OI-ICD-10 | **DIAG_MEAS word layouts (Appendix C) to be confirmed by A** while building the HW_MEAS env (REQ-A-M2-03): clocks, ring sizes and the per-op words are the Integrator's proposal from FW_test_plan §6.3/§6.4; a change is an ICD 0.6.x revision with regenerated vectors. | A, Validator E |
+| SD-16 | **D-40 SRS deltas:** SAF-FW-014 (LIMIT_WIRING clear rule, aligned in SRS), FW-MOT-003 (±ceil(N/1000), aligned), SAF-FW-011 regrow window end (§5.5), CR-02 DIAG_MEAS / FEAT_HW_MEAS (SYS-009, NFR-007 HW-gate evidence). | Orchestrator: SRS v0.5.x |
 
 ## 15. Change history
 
 | ICD | Date | PROTO / PAYLOAD / dict | Change |
 |---|---|---|---|
+| 0.6 | 2026-10-04 | 1.0 / 1 / 4 | **D-40 / Validator E M2 requests.** REQ-C-M2-01: command **DIAG_MEAS 0x3D** (LEN 8, 64-byte body, 10 ops, Appendix C), INFO feature bit 9 **FEAT_HW_MEAS**, BLOCK bit 11 **MEAS_STATE**, §4.4 step 2a NOT_IN_BUILD, §5.6, tables `meas_*` in `protocol.yaml`, seam v1.3 `hal_meas_cmd()` (+ SR-M2-01 `hal_step_set_dir` ±2 encoding, SR-M2-02 `hal_in_cfg_t` without `stop_active_level`). D-40a LIMIT_WIRING clear rule (§5.5, §6.2, vectors). D-40b sum tolerance ±ceil(N/1000) stated (§12). D-40d load-limit regrow window (§5.5) + `ref_loadlim.py` / `loadlim_vectors.json`. Twin: REQ-C-M2-02 `inject loop_load`, -05 conversions carry gain / rate, -06 world x from PUL + DIR pin (`driver dir_wiring_inverted`, x persists across resets), -07 automatic PEND, -08 DIAG_MEAS model (`--hw-meas`), -09 `stop=` removed, -10 `log_max` 1 000 000 + `query clear`. OI-ICD-09 closed; OI-ICD-10, SD-16 added. Dictionary unchanged. |
 | 0.5 | 2026-10-04 | 1.0 / 1 / 4 | **CR-01 / D-36** (one red button = E-stop with power cut; no physical holding STOP): DATA/STATUS `status` bit 9 and `io` bit 3 STOP_BTN, EVENT 22 STOP_BUTTON and stop cause 4 STOP_BUTTON **retired** (reserved, never reused; generated identifiers kept and marked RETIRED for compatibility, `RETIRED_MASK`); HALT source PC only; `io.stop_active_level` (0x0603) retired → **dict_version 4, 47 parameters**; SAF-FW-022 path removed (§5.5 HALT/HALT_CLEAR, §6.2 row, §6.3, §6.4); HALT_CLEAR never refused. **D-37**: (a) SAVE exemption + SW quiesce during SAVE (§2.4, §9.1); (b) feature-dependent status/IO bits sent as 0 and invalid while the feature bit is 0 (§7.6, `protocol.yaml` `feature:`, Python `<ID>_FEATURE`); (c) RESUME on the normal lane (§2.4); (d) STOP confirmation by device time (§9.4). **Queue**: OBS-M1-03 LOAD failure sends no EVENT (§5.2, §11.3); OBS-M1-05 µm/steps saturation (§0.1, `units_vectors.json` saturation cases); ESTOP_CLEAR with the input open but no latch = `E_CAUSE_ACTIVE` 0xFFFF (vector); `state_schema` stays 2 (STOP-button keys kept, ignored, never set); seam semantics + `afe_sample_t.status` bits + seam v1.2 `hal_fault_record()` in `tools/README.md`; OBS-M1-02 twin RX during flash stalls fixed; vocabulary: STOP-button inputs removed. **M2 start**: `motion_vectors.json` + `ref_motion.py` (§12), OI-ICD-09. |
 | 0.4.1 | 2026-10-03 | 1.0 / 1 / 3 | **D-34**: HALT_CLEAR, ESTOP_CLEAR, FAULT_CLEAR move from ONCE_PRIORITY to retry class **VERIFY** (never auto-retried; still on the SW priority lane; lost response resolved by GET_STATUS) — `protocol.yaml` retry class, §3.2 (generated), §9.3 table + rationale; ONCE_PRIORITY kept as an unused code. OI-ICD-08 closed (D-34); OI-ICD-06 closed (SRS v0.4 SAF-FW-024: STOPPED only when a move was ended). No wire, layout or dictionary change (hash unchanged). |
 | 0.4 | 2026-10-03 | 1.0 / 1 / 3 | Final P1 round. **D-31** RESUME 0x3C (clears only PAUSED; E_STATE ESTOP/HALT/FAULT; retry class VERIFY; not sniffed; PAUSE_CLEARED arg 3); HALT_CLEAR clears HALT + PAUSED; §5.5, §6.3 RESUME row, §9.3 rationale. **D-33** (a) `afe.timeout_ms` default 250 ms, min 25, hard rule **H5** (dict_version 3); (f) DRV_PWR / K1 timing bounds; (g) no idle disable while stale; (h) limit latch clear rule; (k) PAUSED refusal = expected outcome. **FW_design**: OI-FW-18 wire order DATA > responses > EVENT + drop order (§2.4); OI-FW-19 sniffer STOP/HALT/PAUSE (`sniffed` in `protocol.yaml`, `CMD_IS_SNIFFED`); OI-FW-20 µm↔steps arithmetic (§0.1) + `units_vectors.json`, motion vectors planned M2; OI-FW-21 `internal_detail` (NOT_IN_BUILD, INVARIANT) + HardFault record in BOOT; OI-FW-22 boot ENA disabled with DRV_PWR off; OI-FW-23 homing bounds (constants `HOME_RELEASE_MAX_UM`, `HOME_SLOW_EXTRA_UM`); OI-FW-17 / DEF-P1-02 seam v1 = FW_design §8.1 in `tools/README.md`. **DEF-P1-03** twin world-control/observation vocabulary v2 (`tools/README.md`, M1 subset marked, shared with the SW simulator). **F-B-28** MOVE_UNTIL_LOAD bound = position → E_RANGE 0; **F-B-25** `state_schema` 2. OI-ICD-07 closed; SD-14, OI-ICD-08 added. Vectors: RESUME / H5 / F-B-28 / BOOT-HardFault / E_INTERNAL cases; generator asserts valid vector states. |
@@ -1320,6 +1363,14 @@ Generated from `protocol.yaml` — the single source of protocol names and codes
 | `params_defaulted_reason` | enum | App. B | `PDEF_*`, `proto_params_defaulted_reason_t` | `ParamsDefaultedReason` |
 | `limit_id` | enum | App. B | `LIM_*`, `proto_limit_id_t` | `LimitId` |
 | `afe_sample_status` | bitset | App. B | `AFES_*` | `AfeSampleStatus` |
+| `meas_op` | enum | App. B | `MEAS_OP_*`, `proto_meas_op_t` | `MeasOp` |
+| `meas_src` | enum | App. B | `MEAS_SRC_*`, `proto_meas_src_t` | `MeasSrc` |
+| `meas_probe_mode` | enum | App. B | `MEAS_MODE_*`, `proto_meas_probe_mode_t` | `MeasProbeMode` |
+| `meas_probe_flags` | bitset | App. B | `MEAS_PF_*` | `MeasProbeFlags` |
+| `meas_chan` | enum | App. B | `MEAS_CHAN_*`, `proto_meas_chan_t` | `MeasChan` |
+| `meas_hang_where` | enum | App. B | `MEAS_HANG_*`, `proto_meas_hang_where_t` | `MeasHangWhere` |
+| `meas_pin` | enum | App. B | `MEAS_PIN_*`, `proto_meas_pin_t` | `MeasPin` |
+| `meas_variant` | bitset | App. B | `MEAS_VAR_*` | `MeasVariant` |
 | `retry_class` | enum | App. B | — | `RetryClass` |
 
 ### B.1 Constants
@@ -1352,6 +1403,9 @@ Generated from `protocol.yaml` — the single source of protocol names and codes
 | `TWIN_TCP_PORT` | 5760 | u16 | FW host twin serial-over-TCP port (127.0.0.1) |
 | `TWIN_CTL_PORT` | 5761 | u16 | FW host twin world-control port (JSON lines, tools/README) |
 | `HOME_RELEASE_MAX_UM` | 0x2710 | u32 | HOME: START not released within this travel in RELEASE / BACKOFF -> HOME_WIRING (ICD §5.4, OI-FW-23) |
+| `MEAS_BODY_LEN` | 64 | u8 | DIAG_MEAS OK body: u32 w[16] (ICD Appendix C) |
+| `MEAS_STAMPS_PER_PAGE` | 14 | u8 | DIAG_MEAS STAMPS: stamps per page (w2..w15) |
+| `MEAS_MAGIC` | 0x4D454153 | u32 | DIAG_MEAS NOINIT w0 when the .noinit block is valid ('MEAS') |
 | `HOME_SLOW_EXTRA_UM` | 0x2710 | u32 | HOME: no START edge within home.backoff_um + this travel in SLOW_APPROACH -> HOME_NOT_FOUND (ICD §5.4, OI-FW-23) |
 
 ### B.2 Asynchronous frame TYPEs (FW → PC)
@@ -1519,7 +1573,104 @@ Generated from `protocol.yaml` table `afe_sample_status` (C `AFES_*`, Python `Af
 | 1 | `MISSED_EDGE` | at least one DOUT-ready edge was missed before this sample (recovered by hal_hx711_kick or a late edge): the core sets OVERRUN in the next DATA frame |
 | 2–7 | — | reserved (0) |
 
-### B.18 SW retry class (§9.3; not on the wire)
+### B.18 DIAG_MEAS op (request byte 0)
+
+Generated from `protocol.yaml` table `meas_op` (C `MEAS_OP_*`, Python `MeasOp`).
+
+| Code | Name | Meaning | `sel` | `a` | `b` | `retry` |
+|---|---|---|---|---|---|---|
+| 0 | `INFO` | variant, clocks, ring size, stamp overhead | 0 | 0 | 0 | RETRY |
+| 1 | `PROBE_ARM` | arm the event-latency probe (MT-3) | meas_src | bits 0-1 meas_probe_mode, bit 8 event polarity (0 rising, 1 falling), other bits 0 | timer prescaler 0…65535 | VERIFY |
+| 2 | `PROBE_READ` | read the probe captures | 0 | 0 | 0 | RETRY |
+| 3 | `COUNTER` | independent PUL counter (MT-2): read / reset | 0 read, 1 reset (returns the value before the reset) | 0 | 0 | RETRY (read) / VERIFY (reset) |
+| 4 | `STAMPS` | device-time stamp ring (MT-4), newest first | meas_chan | page 0…1023 | 0 | RETRY |
+| 5 | `NOINIT` | .noinit block (last PUL, heartbeat, hang start; survives a reset) | 0 read, 1 clear | 0 | 0 | RETRY (read) / VERIFY (clear) |
+| 6 | `STIM_RUN` | stimulus series on the J-STIM output (MT-7) | bit 0 polarity (0 high pulse, 1 low pulse), bits 1-7 hold time 1…127 ms | pulses 1…1000 | seed | VERIFY |
+| 7 | `HANG` | test-image hang injection while moving (IWDG evidence) | meas_hang_where | duration 0…10000 ms (0 = until the IWDG resets) | 0 | VERIFY |
+| 8 | `STATIC_LEVEL` | drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed) | meas_pin | level 0/1 | 0 | VERIFY |
+| 9 | `DWT` | DWT section statistics (HW_MEAS_DWT builds; else w0 = 0) | 0 read, 1 reset | section 0…31 | 0 | RETRY (read) / VERIFY (reset) |
+
+### B.19 DIAG_MEAS probe event source (PROBE_ARM sel; J-EVT selector position, FW_test_plan §6.2)
+
+Generated from `protocol.yaml` table `meas_src` (C `MEAS_SRC_*`, Python `MeasSrc`).
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | `ESTOP` | E-stop sense PA10 |
+| 1 | `LIMIT_START` | START limit PB0 |
+| 2 | `LIMIT_END` | END limit PC1 |
+| 3 | `PAUSE` | PAUSE button PB6 |
+| 4 | `DOUT` | HX711 DOUT PB4 (data ready) |
+| 5 | `DRV_PWR` | driver-power sense PA7 |
+| 6 | `RX` | USART2 RX PA3 (start bit of a frame byte) |
+| 7 | `DIR` | DIR output node |
+| 8 | `STIM` | stimulus output PB8 (self-test) |
+
+### B.20 DIAG_MEAS probe mode (PROBE_ARM a bits 0-1)
+
+Generated from `protocol.yaml` table `meas_probe_mode` (C `MEAS_MODE_*`, Python `MeasProbeMode`).
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | `TRIGGER` | the first event edge after arming starts the probe counter (single shot) |
+| 1 | `RESET` | every event edge restarts the probe counter (last event wins) |
+| 2 | `PWM_INPUT` | PUL period and high width per pulse (min/max over the pulses since arming) |
+
+### B.21 DIAG_MEAS PROBE_READ w0 flags
+
+Generated from `protocol.yaml` table `meas_probe_flags` (C `MEAS_PF_*`, Python `MeasProbeFlags`).
+
+| Bit | Name | Meaning |
+|---|---|---|
+| 0 | `ARMED` | probe armed |
+| 1 | `TRIGGERED` | the event occurred (w1 valid) |
+| 2 | `OVERCAPTURE` | a capture was overwritten before it was read (hardware over-capture) |
+| 3 | `WINDOW_OVERFLOW` | the probe counter overflowed after the event (window 65 536 ticks): later captures invalid |
+| 4 | `EDGE_BEFORE_EVENT` | a PUL edge was captured before the event (CCR = 0 case) |
+| 5–15 | — | reserved (0) |
+
+### B.22 DIAG_MEAS stamp channel (STAMPS sel)
+
+Generated from `protocol.yaml` table `meas_chan` (C `MEAS_CHAN_*`, Python `MeasChan`).
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | `EVT` | J-EVT edges (TIM8 CH1) |
+| 1 | `PUL` | PUL rising edges (TIM8 CH2) |
+| 2 | `DIR` | DIR edges (TIM8 CH4) |
+| 3 | `AUX` | J-AUX edges (TIM1 CH4) |
+
+### B.23 DIAG_MEAS HANG where (HANG sel)
+
+Generated from `protocol.yaml` table `meas_hang_where` (C `MEAS_HANG_*`, Python `MeasHangWhere`).
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | `MAIN` | main loop stops kicking the IWDG |
+| 1 | `TICK` | the 1 kHz tick hangs |
+| 2 | `ISR1` | level-1 ISR storm (software-triggered unused EXTI line, test image only) |
+
+### B.24 DIAG_MEAS STATIC_LEVEL pin (sel)
+
+Generated from `protocol.yaml` table `meas_pin` (C `MEAS_PIN_*`, Python `MeasPin`).
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | `PUL` | PUL output |
+| 1 | `DIR` | DIR output |
+
+### B.25 DIAG_MEAS INFO w0 variant
+
+Generated from `protocol.yaml` table `meas_variant` (C `MEAS_VAR_*`, Python `MeasVariant`).
+
+| Bit | Name | Meaning |
+|---|---|---|
+| 0 | `MEAS` | HW_MEAS build (MT-2/3/4/7, HANG, STATIC_LEVEL) |
+| 1 | `DWT` | HW_MEAS_DWT build (DWT section statistics) |
+| 2 | `TWIN_MODEL` | the FW host twin's model of DIAG_MEAS (REQ-C-M2-08) |
+| 3–31 | — | reserved (0) |
+
+### B.26 SW retry class (§9.3; not on the wire)
 
 Generated from `protocol.yaml` table `retry_class` (Python `RetryClass` (not on the wire)).
 
@@ -1531,3 +1682,28 @@ Generated from `protocol.yaml` table `retry_class` (Python `RetryClass` (not on 
 | 3 | `VERIFY` | never retried; after a timeout GET_STATUS decides (commands with priority = true still use the SW priority lane) |
 
 <!-- END GENERATED protocol:registry -->
+
+---
+
+## Appendix C. DIAG_MEAS ops and word layouts (D-40c; normative in HW_MEAS builds; to be confirmed by A, OI-ICD-10)
+
+Request: `u8 op` (table `meas_op`), `u8 sel`, `u16 a`, `u32 b` (ranges in the generated `meas_op` table, Appendix B).
+OK body: `u32 w[16]`, little-endian; words not listed are 0. Times: `t_us` = the FW's 1 MHz device time (DATA / EVENT
+domain); probe ticks = 180 MHz / (PSC + 1) of the 16-bit probe timer (TIM8). Sources, channels, modes and flag bits:
+tables `meas_src`, `meas_chan`, `meas_probe_mode`, `meas_probe_flags`, `meas_variant`, `meas_hang_where`, `meas_pin`.
+
+| op | Body words |
+|---|---|
+| 0 INFO | w0 variant (`meas_variant`), w1 probe timer clock Hz (180 000 000), w2 counter width bits (32, software-extended), w3 stamp clock Hz (1 000 000), w4 stamp ring size per channel, w5 DMA stamp latency ns (≤ 1 000), w6 DWT stamp overhead cycles (0 without DWT), w7 stimulus timer clock Hz |
+| 1 PROBE_ARM | – (armed; previous captures discarded) |
+| 2 PROBE_READ | w0 flags (`meas_probe_flags`), w1 CCR1 = event capture (0 in TRIGGER / RESET: the counter starts at the event), w2 CCR2 = last PUL rising edge after the event, w3 CCR3 = last ENA edge, w4 CCR4 = last DIR edge (probe ticks since the event), w5 PUL captures since the event, w6 probe CNT now, w7 PSC, w8 / w9 PWM-input min / max PUL period, w10 / w11 min / max PUL high time, w12 PWM samples (probe ticks) |
+| 3 COUNTER | w0 PUL rising edges since the last reset (32 bit), w1 `t_us` of the read (sel 1: values before the reset) |
+| 4 STAMPS | w0 stamps written on the channel since boot / reset, w1 ring size, w2…w15 the 14 stamps of page `a`, newest first (stamp k = entry w0 − 1 − (14·a + k)); 0 = not available |
+| 5 NOINIT | w0 magic `0x4D454153` when valid, w1 last PUL `t_us`, w2 heartbeat `t_us` (10 kHz update), w3 hang start `t_us` (HANG op); survives a reset; sel 1 clears after reading |
+| 6 STIM_RUN | – (series started: `a` pulses on the J-STIM output, each after a seeded random delay of 0…1 step period, `sel` bits 1–7 = hold ms, bit 0 polarity) |
+| 7 HANG | – (the selected context hangs for `a` ms, 0 = until the IWDG resets; only while moving) |
+| 8 STATIC_LEVEL | – (PUL or DIR held at level `a` until the next command; only NOT_ENABLED) |
+| 9 DWT | w0 valid (1 in HW_MEAS_DWT builds, else 0), w1 count, w2 min cycles, w3 max cycles, w4 / w5 sum low / high, w6…w15 histogram bins (main-loop section) |
+
+Retry class (§9.3): ops 0, 2, 4 and the read variants of 3, 5, 9 = RETRY; ops 1, 6, 7, 8 and the reset / clear
+variants = VERIFY.

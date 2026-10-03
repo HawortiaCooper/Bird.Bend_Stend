@@ -3,8 +3,8 @@
 | Item | Value |
 |---|---|
 | Doc | `01_HW/pinout.md` |
-| Version | **0.3** — final P1: ALM polled instead of EXTI (OBS-P1-10). v0.2: aligned to SRS v0.3 / ICD v0.3 / D-29 / D-30 (DRV_PWR required, START-only homing, ALM scope, TX DMA one frame per transfer, CRIT_DATA). v0.1: The pin map follows **R5 §6.1** (checked by R5 against the F446 datasheet DocID027107 Rev 6, Table 10) and is **accepted by the PO (D-28, 2026-10-03)**: DOUT → PB4, RATE → PB5, END → PC1, STOP → PC7 (NC), PAUSE → PB6 (NO), DRV_PWR → PA7, TRIP → PB9 (provisioned, unused in release 1), PA6 reserved. |
-| Date | 2026-10-03 |
+| Version | **0.4** — M2: CR-01 (D-36) applied — PC7 STOP/BREAK input removed (PC7 = measurement-header input J-PUL-A, R-01 closed); measurement header MH for CR-02 / D-40 c (§1.5, REQ-A-M2-01/04); PC8/PC9 debug markers retired; MH pins digital input without pull in every build (never analog). · 0.3 — final P1: ALM polled instead of EXTI (OBS-P1-10). v0.2: aligned to SRS v0.3 / ICD v0.3 / D-29 / D-30 (DRV_PWR required, START-only homing, ALM scope, TX DMA one frame per transfer, CRIT_DATA). v0.1: The pin map follows **R5 §6.1** (checked by R5 against the F446 datasheet DocID027107 Rev 6, Table 10) and is **accepted by the PO (D-28, 2026-10-03)**: DOUT → PB4, RATE → PB5, END → PC1, STOP → PC7 (NC), PAUSE → PB6 (NO), DRV_PWR → PA7, TRIP → PB9 (provisioned, unused in release 1), PA6 reserved. |
+| Date | 2026-10-04 |
 | Owner | Implementer A (FW) |
 | Binding inputs | SRS v0.3 (SYS-007, FW-SW-005, SAF-FW-024/025/026, FW-PLT-001/002, FW-SW-001…004, FW-AFE-001/002, SAF-FW-002/005/007/018/019, NFR-007), DECISIONS D-08, D-09, D-11, D-13, D-16 (PFDE HBS86H clone), D-17, D-18, D-21, D-22, D-26, D-27, **D-28**, **D-29** (b, c), D-30, R1 §1–2, §6, §9, R2 §1.3–1.7, §5, R4 §1.4, §1.8, R5 §1.3, §5.2, §6 |
 | Board | NUCLEO-F446RE (MB1136), Stefan's board (D-22). Revision and solder-bridge state not yet inspected (§5, Q-HW-01) |
@@ -33,12 +33,11 @@ Conventions
 | **PA10** | D2 · CN9-3 / CN10-33 | **E-stop sense** ← E-stop NC2 contact (D-11) | in | GPIO | **10 → EXTI15_10, level 0 — alone on this vector** (both edges) | in, internal PU (7–14 kΩ on PA10, OTG_FS_ID, R5 §3.1) + external 1 kΩ PU, 1 kΩ/4.7 nF (τ ≤ 10 µs) | NC to GND: **high = E-stop pressed or wire broken** (fixed polarity, SAF-FW-007) | FT | R1 §9 (replaces Stefan's B1), R5 §6.1 | SAF-FW-005/007, FW-SW-002 |
 | **PB0** | A3 · CN8-4 / CN7-34 | **START limit** (home end, D-18) | in | GPIO | **0 → EXTI0 (own vector), level 1** (both edges) | in, internal PU + external 1 kΩ PU, 1 kΩ/47 nF (τ ≈ 94 µs) | NC to GND: high = hit or wire broken (fixed polarity) | FT | Stefan MIN (`hw_stm32.hpp:15`), R1 §9; **the only home reference** (D-29 b) | FW-SW-001, SAF-FW-007/013, FW-HOM-001 |
 | **PC1** | **A4** · CN8-5 / CN7-36 | **END limit** | in | GPIO | **1 → EXTI1 (own vector), level 1** (both edges) | as PB0 | as PB0 | FT | **R5/D-28**: R5 moved END from PB1 (morpho only) to A4 so all signals are on the Arduino headers (shield option). **PB1 (CN10-24) is the equivalent fallback** for the current hand wiring (also EXTI1) — selectable by the build flag `-DPIN_END_PB1` while the hand wiring still uses PB1 | FW-SW-001, SAF-FW-013/014 |
-| **PC7** | **D9** · CN5-2 / CN10-19 | **STOP/BREAK button** (NC, D-26) | in | GPIO | **7 → EXTI9_5, level 1** (both edges) | in, internal PU + external 1 kΩ PU, 1 kΩ/47 nF | NC to GND: high = pressed or wire broken; `io.stop_active_level` (default open-active, A-08) | FTf | **new, R5/D-28** (R5 §6.1) | FW-SW-003, SAF-FW-022 |
 | **PB6** | **D10** · CN5-3 / CN10-17 | **PAUSE button** (NO, D-14/D-26) | in | GPIO | **6 → EXTI9_5, level 1** (both edges) | in, internal PU + external 4.7 kΩ PU, 1 kΩ/220 nF (≈ 1.3 ms) | NO to GND: **low = pressed**; `io.pause_active_level` (default closed-active, A-08) | FT | **new, R5/D-28** (R5 §6.1) | FW-SW-003, SAF-FW-023 |
 | **PB4** | **D5** · CN9-6 / CN10-27 | **HX711 DOUT** | in | GPIO (after reset: AF0 = NJTRST with internal PU) | **4 → EXTI4 (own vector), level 3** (falling) | in, no pull (HX711 drives push-pull) | low = data ready | FT | **R5/D-28**: R5 moved DOUT from PB5 to PB4 so the AFE interrupt has its own vector and does not share EXTI9_5 with STOP/PAUSE/ALM (R5 §6 finding 6). **NJTRST release VERIFIED** (see §1.4) | FW-AFE-001/005, FW-TIM-001 |
 | **PB10** | D6 · CN9-7 / CN10-25 | **HX711 PD_SCK** | out | GPIO | – | out PP, medium speed, no pull, **init low** (ODR first; high > 60 µs = HX711 power-down) | high = clock | FT | R1 §9 (new vs Stefan) | FW-AFE-001/003 |
 | **PB5** | **D4** · CN9-5 / CN10-29 | **HX711 RATE** (D-21) | out | GPIO | – | out PP, low speed, no pull; ODR = `afe.rate_sps` (80 → high) written before MODER; external 10 kΩ PU to HX711 DVDD keeps 80 SPS during MCU reset (R5 §5.2) | high = 80 SPS, low = 10 SPS | FT | **R5/D-28** (R5 swapped RATE/DOUT vs R1) | FW-AFE-002 |
-| **PA7** | **D11** · CN5-4 / CN10-15 | **DRV_PWR sense** (**required**; `drv.pwr_sense_enable` = false for bring-up only) ← contactor K1 aux NO (R5 §1.3 A) | in | GPIO | (line 7 used by PC7) — **polled 1 kHz, 20 ms stability filter** | in, internal PU + external 1 kΩ PU, 1 kΩ/1 µF (≈ 2 ms) | closed = low = **driver powered** (fixed polarity, no parameter) | FT | **new, R5/D-28** (R5 §1.5); D-29 c: power lost (any cause) → stop, ENA disabled, NOT_ENABLED, HOMED cleared ≤ 25 ms; E-stop open + power present > `drv.k1_weld_ms` → K1_WELDED; "driver power present" for the ALM start-block | FW-SW-005, SAF-FW-024/025/026 |
+| **PA7** | **D11** · CN5-4 / CN10-15 | **DRV_PWR sense** (**required**; `drv.pwr_sense_enable` = false for bring-up only) ← contactor K1 aux NO (R5 §1.3 A) | in | GPIO | (no EXTI) — **polled 1 kHz, 20 ms stability filter** | in, internal PU + external 1 kΩ PU, 1 kΩ/1 µF (≈ 2 ms) | closed = low = **driver powered** (fixed polarity, no parameter) | FT | **new, R5/D-28** (R5 §1.5); D-29 c: power lost (any cause) → stop, ENA disabled, NOT_ENABLED, HOMED cleared ≤ 25 ms; E-stop open + power present > `drv.k1_weld_ms` → K1_WELDED; "driver power present" for the ALM start-block | FW-SW-005, SAF-FW-024/025/026 |
 | **PB9** | **D14** · CN5-9 / CN10-5 | **TRIP relay output** (provision only, Q-R5-04) | out | GPIO | – | out PP, low speed, **init low** (= relay off = K1 hold path closed); external base pull-down on the relay driver | high = trip (can only *remove* driver power) | FT | **new, R5/D-28** — provisioned, never driven high in release 1 | – |
 | **PA5** | D13 · CN5-6 / CN10-11 | Status LED = on-board **LD2** (green) | out | GPIO | – | out PP, low speed, init low | high = on (FW_design §5.12 blink codes) | TC | Stefan (`app.cpp:78`) | – |
 | **PA2** | (D1, disconnected: SB62 OFF) · CN10-35 | **USART2_TX** → ST-LINK VCP | out | USART2, **AF7**; DMA1 Stream6 Ch4 | – (DMA1_Stream6 / USART2 IRQs, level 5) | AF PP, high speed, no pull | – | FT | Stefan, R1 §9 | IF-002 |
@@ -56,9 +55,9 @@ Conventions
 | PB1 | CN10-24 | spare / **END fallback** | see PC1 row. |
 | PC0 | A5 · CN8-6 / CN7-38 | spare | EXTI0 belongs to PB0 → no interrupt on PC0. |
 | PB8 | D15 · CN5-10 / CN10-3 | spare | SB52 must stay OFF (otherwise PB8 is also on A5). |
-| PC8 / PC9 | CN10-2 / CN10-1 | **debug markers** (build flag `-DFW_DEBUG_PINS=1` only) | DBG0 = high during the TIM2 step ISR; DBG1 = high during the HX711 read / BASEPRI sections (scope timing for NFR-007, SYS-009). Out PP, high speed, init low. |
+| PC6…PC9, PB7, PA11, PB8 | see §1.5 | **measurement header MH** (CR-02) | digital input, no pull, in every build (REQ-A-M2-04); AF timer inputs / PB8 stimulus output only in the `HW_MEAS` images. The v0.3 scope markers on PC8/PC9 are retired (no scope, D-35 G5). |
 | PA15 | CN7-17 | unused (JTDI, AF0 PU after reset) | left at reset state. |
-| all other GPIOs (PC2–PC6, PC10–PC12, PB2, PB7, PB11–PB15, PA11, PA12, PD2, PC14, PC15) | – | unused | configured **analog** at boot (no floating digital inputs). |
+| all other GPIOs (PC2–PC5, PC10–PC12, PB2, PB11–PB15, PA12, PD2, PC14, PC15) | – | unused | left at reset (analog after reset on the F4); never an MH pin (§1.5). |
 
 ### 1.3 EXTI line map (one port per line, unique — VERIFIED R5 §6.1)
 
@@ -68,12 +67,32 @@ Conventions
 | 1 | PC1 (fallback PB1) | END limit | EXTI1 | 1 | both | as line 0 (never a homing edge; END reached during HOME → HOME_WIRING) |
 | 4 | PB4 | HX711 DOUT | EXTI4 | 3 | falling | t_us + position latch, bit-bang read (≈ 40–50 µs), load-limit check (FW_design §5.8) |
 | 6 | PB6 | PAUSE button | EXTI9_5 (shared) | 1 | both | active edge → request flag + t_us (controlled stop executed by the tick) |
-| 7 | PC7 | STOP/BREAK button | EXTI9_5 (shared) | 1 | both | active edge → immediate stop (CLEAN), latch HALT(src = button) |
 | 8 | PA8 | ALM | – | – | – | **not enabled** (v0.3): ALM is polled in the tick (active at the first active sample, inactive after a stable `io.release_ms`) |
 | 10 | PA10 | E-stop sense | EXTI15_10 | **0** | both | open edge → immediate stop (TRUNCATE), ENA → disabled level, latch ESTOP |
 | 9, 13 | (PA9, PC13) | PEND, B1 | – | – | – | **not enabled** (polled / unused) |
 
 The shared EXTI9_5 handler serves only lines that are pending **and** enabled and clears only its own `PR` bits (Thrust_Stand pitfall P10, R3 §1.7).
+
+### 1.5 Measurement header MH (CR-02, D-40 c; FW_test_plan v0.3 §6.2; REQ-A-M2-01/04)
+Bench-only loopback / stimulus header (2 × 8 pins on the interface board or shield, GND next to every signal, wires ≤ 10 cm,
+**1 kΩ series resistor at the MCU end of every jumper**). Used only by the measurement images `nucleo_f446re_meas` /
+`_meas_dwt` (`hal/f446/meas_f4.c`, DIAG_MEAS 0x3D); in every build the MH pins are configured as **digital input without
+pull** at boot (`board_init.c`, never analog, so a 5 V tap from the SYS-011 buffer can stay fitted, HG-31).
+
+| Jumper | MCU pin (header, ASSUMED per UM1724 — check the silkscreen) | Timer / AF (meas images) | From node | 5 V tol. |
+|---|---|---|---|---|
+| J-PUL-A | **PC7** (D9, CN5-2 / CN10-19; free since CR-01) | TIM8_CH2, AF3 | PUL at the driver input (PA0 during bring-up, buffer output later) | FT (ASSUMED, DS10693 Table 10 to verify) |
+| J-PUL-B | **PB7** (CN7-21) | TIM4_CH2, AF2 (external clock, independent counter MT-2) | same PUL node | FTf (ASSUMED) |
+| J-DIR | **PC9** (CN10-1) | TIM8_CH4, AF3 | DIR node | FT (ASSUMED) |
+| J-ENA | **PC8** (CN10-2) | TIM8_CH3, AF3 | ENA node | FT (ASSUMED) |
+| J-EVT (selector) | **PC6** (CN10-4) | TIM8_CH1, AF3 (TI1FP1 slave trigger / reset) | PA10 E-stop, PB0 START, PC1 END, PB6 PAUSE, PB4 DOUT, PA7 DRV_PWR, PA3 RX, DIR or PB8 STIM | FT (ASSUMED) |
+| J-AUX (selector) | **PA11** (CN10-14) | TIM1_CH4, AF1 | PB4 DOUT, PB10 SCK, PA2 TX, PA7, PA8 ALM, PA10, PB8 | FT (ASSUMED) |
+| J-STIM | **PB8** (D15, CN5-10 / CN10-3; SB52 must stay OFF) | TIM10_CH1, AF3 output (meas images only) | → input connector of E-stop sense / START / END / PAUSE with the switch unplugged (the E-stop NC1 → K1 power path stays wired) | FTf (ASSUMED) |
+
+DMA2 stream map of the device-time stamps (meas images, **ASSUMED per RM0390 Table 29, verify at HG-29**): S2 ch7 TIM8_CH1,
+S3 ch7 TIM8_CH2, S7 ch7 TIM8_CH4, S4 ch6 TIM1_CH4, S5 ch6 TIM1_UP (DMA1 S5/S6 stay with USART2). Extra timers of the meas
+images: TIM4, TIM8, TIM1, TIM10, TIM13 (HANG at tick level); EXTI2 (HANG level-1 storm, no pin). PC6 is also the spare of
+the future TIM8-PUL / PA6-BKIN option (§1.2); if that option is built, the probe moves to TIM3 on the same pins (AF2).
 
 ### 1.4 PB4 / NJTRST — check requested by the Orchestrator (VERIFIED)
 - After reset PB4 is in AF0 (JTAG NJTRST) with the internal pull-up. On the F4 there is no AFIO remap: writing `GPIOB->MODER[9:8] = 00` (input) makes it a plain GPIO; SWD (PA13/PA14) is unaffected.
@@ -124,7 +143,7 @@ NVIC priority grouping 4 (16 pre-emption levels, 0 = highest; set by the core's 
 | Level | IRQ (vector) | Sources | Worst-case body | Rationale |
 |---|---|---|---|---|
 | **0** | `EXTI15_10_IRQn` | E-stop sense PA10 only | ≤ 0.5 µs (halt TRUNCATE + ENA write + latch) | SRS FW-SW-002: **highest** priority, alone on its level |
-| **1** | `EXTI0_IRQn`, `EXTI1_IRQn`, `EXTI9_5_IRQn` | START, END, STOP/BREAK, PAUSE | ≤ 1 µs each | SRS FW-SW-003: STOP/PAUSE "just below the E-stop"; limits share the level (≤ 200 µs budget, SAF-FW-002) |
+| **1** | `EXTI0_IRQn`, `EXTI1_IRQn`, `EXTI9_5_IRQn` | START, END, PAUSE (STOP/BREAK retired, CR-01) | ≤ 1 µs each | SRS FW-SW-003: STOP/PAUSE "just below the E-stop"; limits share the level (≤ 200 µs budget, SAF-FW-002) |
 | **2** | `TIM2_IRQn` | step update | ≤ 1.2 µs (NFR-007: ≤ 2 µs) | must never miss an update; only ≤ 1 µs ISRs above it |
 | **3** | `EXTI4_IRQn` | HX711 DOUT | ≈ 40–55 µs (bit-bang) | timestamp latency ≤ 5 µs (FW-TIM-001): only levels 0–2 (each ≤ 1.2 µs) can delay its entry |
 | **4** | `TIM5_IRQn` | 1 kHz control tick | ≤ 30 µs typ., ≤ 60 µs worst | ms-scale deadlines (controlled stops ≤ 2 ms, debounce, timeouts) |
@@ -173,4 +192,5 @@ Factory defaults from UM1724 as quoted in R1 §9.2, R2 §5.2, R3 §4.3 and the v
 |---|---|---|
 | 0.1 | 2026-10-03 | First draft from R1 §9 / R5 §6.1 (pins verified by R5 against DS10693 Rev 6, accepted by the PO in D-28), NVIC plan split per SRS FW-SW-002/003, NJTRST release verified in the stm32duino core, clock + timer/DMA allocation, solder-bridge list; driver = PFDE HBS86H clone (D-16/D-27). |
 | 0.2 | 2026-10-03 | Aligned to SRS v0.3 / ICD v0.3 / D-29 / D-30:<br>• PA7 DRV_PWR required (20 ms filter, FW-SW-005, SAF-FW-024/025);<br>• PB0 START = only home reference, END never a homing edge (D-29 b);<br>• ALM scope (SAF-FW-026, no step-loss use, D-27);<br>• DMA1 S6 sends one frame per transfer;<br>• TIM5 CC2 synthetic AFE (M1);<br>• new `CRIT_DATA` (BASEPRI 0x30);<br>• level-0/1 fixed reactions in the RAM-resident HAL handler. |
+| 0.4 | 2026-10-04 | M2: CR-01 — PC7 STOP/BREAK row, EXTI line 7 and the level-1 STOP entries removed (`io.stop_active_level` retired in dict 4; R-01 closed: PC7 free → J-PUL-A); §1.5 measurement header MH (CR-02, D-40 c); PC8/PC9 debug markers retired; MH pins digital input without pull in every build (REQ-A-M2-04). |
 | 0.3 | 2026-10-03 | Final P1 round: ALM (PA8) polled at 1 kHz, EXTI line 8 not enabled (OBS-P1-10); level 1 now serves START, END, STOP, PAUSE only. |

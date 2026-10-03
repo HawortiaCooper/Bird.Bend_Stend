@@ -2,7 +2,7 @@
  * detail, the exact NACK frame bytes, the request frame through the parser, no side effect
  * (context and parameter image unchanged after the call).
  * Verifies: FW-CMD-001, FW-CFG-003, SAF-FW-006, SAF-FW-012, SAF-FW-020, SAF-FW-021, SAF-FW-022,
- *           SAF-FW-023, SAF-FW-024, SAF-FW-026, FW-CMD-003, FW-MOT-009, D-30, D-31
+ *           SAF-FW-023, SAF-FW-024, SAF-FW-026, FW-CMD-003, FW-MOT-009, D-30, D-31, D-40 c (DIAG_MEAS)
  */
 #include <string.h>
 #include <unity.h>
@@ -14,13 +14,12 @@
 void setUp(void) {}
 void tearDown(void) {}
 
-static void test_all_check_vectors(void)
+static uint32_t replay(const vec_check_t *tab, uint32_t n_vec)
 {
     uint32_t i;
     uint32_t nacks = 0u;
-    TEST_ASSERT_TRUE(VEC_CHECK_N >= 500u);
-    for (i = 0u; i < VEC_CHECK_N; i++) {
-        const vec_check_t *v = &VEC_CHECK[i];
+    for (i = 0u; i < n_vec; i++) {
+        const vec_check_t *v = &tab[i];
         params_t p, p_before;
         cmd_ctx_t c, c_before;
         cmd_verdict_t r;
@@ -50,12 +49,25 @@ static void test_all_check_vectors(void)
             TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(v->resp_frame, fr, n, v->name);
         }
     }
-    TEST_ASSERT_TRUE(nacks > 250u);
+    return nacks;
+}
+
+static void test_all_check_vectors(void)        /* release / twin build: FEAT_HW_MEAS = 0 */
+{
+    TEST_ASSERT_TRUE(VEC_CHECK_N >= 500u);
+    TEST_ASSERT_TRUE(replay(VEC_CHECK, VEC_CHECK_N) > 250u);
+}
+
+static void test_hw_meas_check_vectors(void)    /* measurement build (D-40 c, ICD v0.6 Appendix C) */
+{
+    TEST_ASSERT_TRUE(VEC_CHECK_MEAS_N >= 20u);
+    TEST_ASSERT_TRUE(replay(VEC_CHECK_MEAS, VEC_CHECK_MEAS_N) > 5u);
 }
 
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_all_check_vectors);
+    RUN_TEST(test_hw_meas_check_vectors);
     return UNITY_END();
 }

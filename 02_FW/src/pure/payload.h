@@ -86,6 +86,7 @@ typedef struct {
         struct { int32_t bound_um; uint32_t v_um_s; uint32_t a_um_s2; int32_t raw_stop;
                  uint8_t cmp; } mul;
         struct { uint8_t mode; } stop;
+        struct { uint8_t op; uint8_t sel; uint16_t a; uint32_t b; } meas;   /* DIAG_MEAS (ICD v0.6) */
     } u;
 } cmd_req_t;
 

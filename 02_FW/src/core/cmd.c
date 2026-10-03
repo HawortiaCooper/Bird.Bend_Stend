@@ -42,6 +42,7 @@ void fw_cmd_ctx(cmd_ctx_t *c)
     c->alm_active = drvmon_alm(&g_fw.in.drv);
     c->nvm_record_valid = g_fw.nvm_record_valid;
     c->paused = g_fw.lat.paused;
+    c->hw_meas = g_fw.hw_meas;
 }
 
 static void ok_empty(uint8_t type, uint8_t seq)
@@ -252,6 +253,13 @@ void cmd_execute(uint8_t type, uint8_t seq, const uint8_t *payload, uint16_t len
         break;
     case CMD_MOVE_UNTIL_LOAD:
         link_nack(type, seq, ST_E_INTERNAL, INTERNAL_NOT_IN_BUILD);   /* M4 (FW_design §5.10) */
+        break;
+    case CMD_DIAG_MEAS:                              /* measurement images only (D-40 c, App. C) */
+        if (hal_meas_cmd(payload, len, body, PROTO_MEAS_BODY_LEN) == PROTO_MEAS_BODY_LEN) {
+            link_respond(type, seq, ST_OK, body, PROTO_MEAS_BODY_LEN);
+        } else {
+            link_nack(type, seq, ST_E_INTERNAL, INTERNAL_NOT_IN_BUILD);
+        }
         break;
     default:
         link_nack(type, seq, ST_E_INTERNAL, INTERNAL_INVARIANT);

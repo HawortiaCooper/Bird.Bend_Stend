@@ -2,11 +2,12 @@
 
 | Doc | SW_test_plan |
 |---|---|
-| Version | **0.2 — M1 execution corrections** (0.1 = P1 gate draft) |
-| Date | 2026-10-03 |
+| Version | **0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
+| Date | 2026-10-04 |
 | Owner | Validator F — SW (`03_SW/docs/SW_test_plan.md`, `03_SW/docs/SW_test_report*.md`, `03_SW/tests/validation/**`) |
-| Verifies | SRS **v0.3**: SW-* (60), SAF-SW-* (6), NFR-001…004, the SW side of IF-001…012, SYS-003, SYS-008, SYS-010 (85 requirements) |
-| Binding inputs | `DECISIONS.md` D-01…**D-32**. D-30: PAUSED blocks motion. **D-31: dedicated RESUME command 0x3C**, clears only PAUSED, refused while HALT/ESTOP/fault latched; HALT_CLEAR clears HALT and PAUSED. **D-32 (PO Q26)**: a load step that does not reach its target travels to the soft limit in the step direction and stops there, the step is NOT_REACHED and the sequence stops; the approach bound is that soft limit; the timeout must not abort earlier; BREAK_DETECTED still aborts. PO accepted the GUI defaults GQ-01…20 and KL-01. |
+| Verifies | SRS **v0.5.1**: SW-* (61, incl. new SW-RT-006), SAF-SW-* (6), NFR-001…004, the SW side of IF-001…012, SYS-003, SYS-008, SYS-010 (**86 requirements**; v0.2: 85 of SRS v0.3) |
+| Binding inputs | `DECISIONS.md` D-01…**D-39** (v0.3: D-36 one red button = E-stop, CR-01; D-37 M1-gate interface decisions a–d; D-38 plot panes; D-39 M2 start). Earlier: D-30: PAUSED blocks motion. **D-31: dedicated RESUME command 0x3C**, clears only PAUSED, refused while HALT/ESTOP/fault latched; HALT_CLEAR clears HALT and PAUSED. **D-32 (PO Q26)**: a load step that does not reach its target travels to the soft limit in the step direction and stops there, the step is NOT_REACHED and the sequence stops; the approach bound is that soft limit; the timeout must not abort earlier; BREAK_DETECTED still aborts. PO accepted the GUI defaults GQ-01…20 and KL-01. |
+| M2 baseline (v0.3) | SRS **v0.5.1** (CR-01: SAF-FW-022 withdrawn, KL-07; D-37 in SW-CFG-004, SAF-SW-005, IF-011, SW-STOP-001/002; new SW-RT-006), ICD **v0.5** (PROTO 1.0, PAYLOAD 1; `params.yaml` dict_version **4**, **47** parameters, PARAM_DICT_HASH **0xFCC54C90**; STOP_BTN / STOP_BUTTON retired; `*_FEATURE` validity; units vectors with int32 saturation; new `motion_vectors.json` + `ref_motion.py`), DECISIONS D-36…**D-40** (D-40 a: LIMIT_WIRING FAULT_CLEAR once the inputs are no longer both active; b: ramp sum tolerance ±ceil(N/1000) ticks — FW only, the SW simulator reproduces `motion_vectors.json` exactly; d: regrow reference until back inside the thresholds or the next FAULT_CLEAR), SW_design v0.3.3 + B's M2 work in progress (WP-B12 simulator rewritten: exact ramps, homing back-off, K1 timer, idle disable, regrow), SW_design_GUI **v0.4** §4.7 (plot panes, G-45…G-52) |
 | M1 baseline (v0.2) | SRS **v0.4.1**, ICD **v0.4.1** (164 frame vectors, 11 streams, 509 check vectors, `units_vectors.json`), `params.yaml` dict_version 3 (PARAM_DICT_HASH **0xF0376293**), SW_design **v0.3.2** (as-built), SW_design_GUI **v0.3.1** (§15.1 as-built), FW host twin (A's firmware) — the M1 corrections of §10a apply |
 | Specs and tools (P1) | `ICD_protocol.md` **v0.3** (RESUME not yet in it, see SWD-P1-02), `protocol.yaml`, `params.yaml` dict_version 2 (PARAM_DICT_HASH 0xB046DD01), `00_System/tools/{ref_codec.py, ref_cmdcheck.py, vectors/}` (check vectors: 486 at ICD 0.3), R4 §12, `SW_design.md` **v0.2** (§15 API, §19 hooks, §22 M1 breakdown), `SW_design_GUI.md` v0.1 (G-01…G-36, P-01…P-05, §10.4 demonstrations, GF-09) |
 | Reference | Process pattern: Thrust_Stand_HAW `03_SW/docs/SW_test_plan.md` (read-only, D-02). Only the structure is reused. |
@@ -117,6 +118,12 @@ Independence rules (binding for `tests/validation/**`):
   - `qtbot` and `main_window(sim)`.
 - The hooks F needs are listed in SWD-P1-09 (condition C3).
 
+### 2.4a Pre-written tests and arming (v0.3)
+- Tests written ahead of the implementation carry `@pytest.mark.pending("<group>", needs="…")`. They are **skipped** (reason "pending <group> …") unless the group is armed: `pytest … --arm M2` or `BEND_VALIDATION_ARM=M2` (`all` arms every group). Implementers may arm them for early feedback; Validator F arms them at the milestone verification and turns every failure into a defect or a harness correction (only `harness.py` names the API, §2.4; the M2 verbs are one block there).
+- `_reports/trace.json` records them with outcome `pending:<group>`; every entry carries the plan TC id derived from the test name (`test_tc_sw_cfg_004_02_…` → `TC-SW-CFG-004-02`).
+- Tests of a decided-but-not-yet-implemented rule that run against the current code (e.g. D-37) are written armed; while they fail they are open defects as `xfail(strict=True)` + `defect("SWD-Mx-nn")` (M1-C7 rule), so a fix flips them (XPASS = failure → marker removed at the re-test).
+- Wire-decoding predicates (`ref_codec` over the whole log) are evaluated with `harness.until()` (lock-step advance in 25 ms chunks), never on every 1 ms tick (O(n²) decode).
+
 ### 2.5 Test-case conventions
 - ID `TC-<REQ>-nn`. A parametrised case counts once. A TC named after its primary requirement may list secondary ones in brackets.
 - Columns: **Lvl** (§2.1) · **Env** (DEV unless stated; **REF** = needs the reference PC, **TGT** = target hardware, **TWIN**) · **MS** (milestone of the first acceptance) · **Pre** (preconditions) · **Stimulus** · **Expected** (traced to the SRS acceptance criterion; "AC" = the SRS text).
@@ -140,7 +147,7 @@ Independence rules (binding for `tests/validation/**`):
 
 | TC | Lvl | Env | MS | Pre | Stimulus | Expected |
 |---|---|---|---|---|---|---|
-| TC-SYS-003-01 | U | DEV | M1 | – | R4 TV-U and TV-TC `um_to_steps`/`steps_to_um`; VV-U rounding (0.0005 mm → 1 µm, −0.0005 → −1, 12.3454 mm → 12 345 µm, ±2.5 → ±3) | all equal (AC: TV-U and µm/steps vectors pass); F > 0 for tension with K > 0, sign carried by K |
+| TC-SYS-003-01 | U | DEV | M1 | – | R4 TV-U and TV-TC `um_to_steps`/`steps_to_um`; VV-U rounding (0.0005 mm → 1 µm, −0.0005 → −1, 12.3454 mm → 12 345 µm, ±2.5 → ±3); **v0.3:** `units_vectors.json` of ICD v0.5 incl. the `saturated: true` cases (int32 saturation, OBS-M1-05; oracle `f_ref.sat_i32`) | all equal (AC: TV-U and µm/steps vectors pass); F > 0 for tension with K > 0, sign carried by K; saturated results = 2³¹ − 1 / −2³¹ |
 | TC-SYS-003-02 | G | DEV | M3 | std | View ▸ Units N ↔ kgf | axes and readouts relabel; 98.0665 N shown as 10.000 kgf (AC: N/kgf selector) |
 | TC-SYS-008-01 | C | DEV | M1→M4 | fresh sim | Headless workflow through the harness: connect → enable → home → no-specimen mode → travel cal (D entries = sim true distance) → load cal (zero, 1 kg, 10 kg via `load_offset`) → leave no-specimen mode → tare → sequence (travel + load + hold steps) → report | every step succeeds; three report files exist (AC: full workflow against the simulator). M1 runs the connect/config/stream subset only. |
 | TC-SYS-008-02 | X | TWIN | M1/M2 | twin running | TC-SYS-008-01 subset (M1: connect, config write/verify, stream, STOP/HALT/PAUSE/RESUME confirmation; M2+: enable/home/move/jog) against the twin and against the sim | same responses, NACK codes, EVENT sequences, DATA flags; positions within ±1 step (AC: SW⇄twin integration tests pass) |
@@ -165,7 +172,9 @@ Independence rules (binding for `tests/validation/**`):
 | TC-SAF-SW-003-04 | C | DEV | M3 | moving / idle | 400 ms DATA gap while moving; 600 ms gap while idle | no STOP in either case; DEGRADED only (negative test) |
 | TC-SAF-SW-004-01 | G | DEV | M3 | sim: load 6 % FS; then load unknown | HOME (C-01), DISABLE (C-02), E-stop clear (C-03), enter no-specimen mode (C-10) | each dialog appears under its condition; Return/Enter/Space with focus on every focusable widget never confirm; Esc cancels; a mouse click confirms; the wire shows HOME flags bit0 = 1 only after confirmation; STOP button present and functional in each dialog (AC) |
 | TC-SAF-SW-004-02 | C | DEV | M3 | same conditions | call the actions through the API without the confirmation token | `ConfirmationRequired`; nothing on the wire |
-| TC-SAF-SW-005-01 | C rt | DEV | M3 | std | Real cause per indicator via `SimControl` (FI table §5): ESTOP; HALT with source PC / KEY / BUTTON; PAUSED with source PC / BUTTON; LIMIT_START/END; LOAD_LIMIT; AFE stale / saturated / rate mismatch; LINK_WDG; link state; HOMED; POS_UNCERTAIN; ENABLED; DRV_PWR; ALM (+ gate text "new motion blocked"); PEND; K1_WELDED; HOME_DRIFT; CLK_FALLBACK (`emit_event` + STATUS); no-specimen banner | `status().indicators.<item>` changes **≤ 200 ms** after the carrier frame (DATA, EVENT or STATUS response, Reader stamp); the source is correct; each latched item has a non-empty `clear_hint` that matches its clear procedure (AC) |
+| TC-SAF-SW-005-01 | C rt | DEV | M3 | std | Real cause per indicator via `SimControl` (FI table §5): ESTOP; HALT (v0.3, CR-01: source PC only — Pause/Break key or PC HALT; source BUTTON retired); PAUSED with source PC / BUTTON; LIMIT_START/END; LOAD_LIMIT; AFE stale / saturated / rate mismatch; LINK_WDG; link state; HOMED; POS_UNCERTAIN; ENABLED; DRV_PWR; ALM (+ gate text "new motion blocked"); PEND; K1_WELDED; HOME_DRIFT; CLK_FALLBACK (`emit_event` + STATUS); no-specimen banner | `status().indicators.<item>` changes **≤ 200 ms** after the carrier frame (DATA, EVENT or STATUS response, Reader stamp); the source is correct; each latched item has a non-empty `clear_hint` that matches its clear procedure (AC) |
+| TC-SAF-SW-005-03 [D-37 b] | C | DEV | **M2 entry** | F-board with a selectable GET_INFO feature mask | FEAT_DRV_SIGNALS = 0 and FEAT_BUTTONS = 0 while DATA / STATUS carry DRV_PWR, ALM, PAUSE_BTN = 1 (non-conforming FW); contrast case FEAT_DRV_SIGNALS = 1 | indicators `alm`, `pend`, `drv_pwr`, `pause_btn` = UNKNOWN; the `enable` / motion gates carry no DRV_UNPOWERED / DRIVER_ALARM item from invalid bits; contrast: DRV_PWR 1 → ON, ALM 1 → ON, PEND 0 → OFF (AC SAF-SW-005 v0.5). Also X: the M1-mask twin (FEAT_DRV_SIGNALS = 0) shows UNKNOWN, not 'driver power lost' (IF-C-M1-02) |
+| TC-SAF-SW-005-04 [CR-01] | I | DEV | M2 entry | code | scan of the operator texts (string literals except docstrings) in `core`, `gui` | no text points to a physical STOP/BREAK button or a 'STOP input' (the only physical stop is the red E-stop; KL-07) |
 | TC-SAF-SW-005-02 | G | DEV | M3 | as -01 | same injections through the GUI | a chip/banner for **every** item renders within one tick of the status change; grey = UNKNOWN when stale or disconnected; the help dialog shows the clear procedure. Needs GUI v0.2 (SWD-P1-05). |
 | TC-SAF-SW-006-01 | U | DEV | M4 | – | VV-M: (k 50 N/mm, v 10 mm/s) and (500, 10) at default levels | no warning / warning; boundary k·v = 3017.43 N/s (AC: pytest of the rule) |
 | TC-SAF-SW-006-02 | C+G | DEV | M4 | std, k_est 500 | manual speed field 10 mm/s; a sequence step at 10 mm/s | WARN item in `motion.check`, the editor and the start list; the GUI warning line is shown (AC) |
@@ -174,7 +183,8 @@ Independence rules (binding for `tests/validation/**`):
 
 | TC | Lvl | Env | MS | Pre | Stimulus | Expected |
 |---|---|---|---|---|---|---|
-| TC-IF-001-01 | I | DEV | M1 | code | AST scan of production code: hand-written numeric codes/bit tables (outside `io.protocol` struct layouts); imports of `ref_codec`/`ref_cmdcheck`; commands and fields used vs ICD §3.2/§7 | none / none / all present (AC: every command/field used appears in the ICD) |
+| TC-IF-001-01 | I | DEV | M1 | code | AST scan of production code: hand-written numeric codes/bit tables (outside `io.protocol` struct layouts); imports of `ref_codec`/`ref_cmdcheck`; commands and fields used vs ICD §3.2/§7 | none / none / all present (AC: every command/field used appears in the ICD); v0.3: names marked `retired` in `protocol.yaml` are judged by TC-IF-001-02 |
+| TC-IF-001-02 [CR-01] | I | DEV | M2 entry | code | AST scan of `core`, `calc`, `io` (simulator excluded), `gui` for uses of ICD names marked `retired:` in `protocol.yaml` (oracle read directly) | none — STOP_BTN / STOP_BUTTON never drive a gate, indicator or text (ICD v0.5 §7.6) |
 | TC-IF-002-01 | U | DEV | M1 | `serial.Serial` monkeypatched (no port) | `transport_factory("COM7")` then read/write; `endpoints()` | constructor args 921600, 8, N, 1, no xonxoff/rtscts/dsrdtr; timeout configured once (no per-read SetCommState); `endpoints()` opens nothing (AC: SW side; D-06) |
 | TC-IF-002-02 | H | TGT | HW gate | PO approval | VCP soak (with NFR-004 H part) | 0 sequence gaps, 0 CRC errors |
 | TC-IF-003-01 | P | DEV | M1 | – | production `FrameDecoder` on all 11 `streams` vectors (chunked as given, idle timeout hook); seeded random fuzz (1 MB noise with 1 000 valid frames inserted at random split points) | frames **and** counters equal the vectors; every inserted frame recovered, no exception (AC) |
@@ -182,7 +192,7 @@ Independence rules (binding for `tests/validation/**`):
 | TC-IF-004-01 | P | DEV | M1 | – | `crc16` vectors; bad-CRC frame vectors | 0x29B1 for "123456789", 0xFFFF for empty; bad frames dropped and counted |
 | TC-IF-004-02 | C | DEV | M1 | std | FI-04: corrupt a response (`corrupt_next`); a corrupted PC→FW frame injected at the FW (`rx_bytes`); DATA/over-long/truncated frames on the F-board (v0.2, §10a) | dropped and counted in the link stats; no state change from the corrupt frame; the lost SET_PARAM is retried per class; the FW `rx_crc_errors` counter increments (AC: corrupted frames → no action + counter) |
 | TC-IF-005-01 | C | DEV | M1 | std | FI-02: drop the response to PING, GET_STATUS, SET_PARAM ×1 and ×3 | retry with a **new SEQ** and the newest value, ≤ 2 retries, then TIMEOUT; a late response to an abandoned SEQ is ignored and counted |
-| TC-IF-005-02 | C | DEV | M1/M3 | std | FI-02: drop the response to MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0, ENABLE, DISABLE, SAVE_PARAMS, REBOOT, RESUME [D-31] | each command appears **once** on the wire; then GET_STATUS; outcome resolved per SW_design §4.4.1; sim PUL count shows exactly one motion (AC: no duplicated motion, no motion command sent twice) |
+| TC-IF-005-02 | C | DEV | M1/M3 | std | FI-02: drop the response to MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0, ENABLE, DISABLE, SAVE_PARAMS, REBOOT, RESUME [D-31]; D-34 races (v0.3, CR-01: the new latch between a clear and its lost response comes from the **Pause/Break key (PC HALT)**, the physical PAUSE or the E-stop — no STOP button) | each command appears **once** on the wire; then GET_STATUS; outcome resolved per SW_design §4.4.1; sim PUL count shows exactly one motion (AC: no duplicated motion, no motion command sent twice); race: the HALT_CLEAR precedes the new HALT on the wire and the HALT stays latched |
 | TC-IF-005-03 | C | DEV | M1 | std | FI-03: duplicate a response frame; deliver a response after the next command's | the second copy is ignored; exactly one resolution per SEQ |
 | TC-IF-005-04 | P | DEV | M1 | – | retry class used by the channel for each of the commands vs `protocol_gen.CMD_RETRY` | equal for all commands (JOG decided by v) |
 | TC-IF-006-01 | P | DEV | M1 | – | every DATA vector (typical, idle, fallback, rails, sync in payload, all bits, wrap, E-stop); numpy batch decode vs per-frame decode | all fields equal (AC) |
@@ -191,7 +201,7 @@ Independence rules (binding for `tests/validation/**`):
 | TC-IF-008-02 | G | DEV | M1 | as -01 | GUI | RO chip + banner; motion and config controls disabled |
 | TC-IF-009-01 | C | DEV | M3 | std | scripted session: `move_to`, `move_by`, ±0.1/1/10, slider release, jog, travel cal, sequence with travel_ref test and machine | every motion frame carries absolute µm (= commanded target rounded half away); no relative command exists in `Cmd` (AC) |
 | TC-IF-010-01 | I/T | DEV | M1 | – | `gen_params.py --check`, `gen_vectors.py --check`; `params_gen.PARAM_DICT_HASH` vs `gen_params.py --hash`; vector `icd_version` vs implemented | exit 0; equal; vectors loaded in place (AC) |
-| TC-IF-011-01 | C | DEV | M1 | std | job queue + GENERAL lane busy (40 queued reads + a write) and the token bucket empty (TX held at 100 frames/s); then `stop()`, `halt()`, `pause()`, RESUME [D-31], clears (v0.2: '4 outstanding' is not constructible through the M1 public API — the Worker serialises jobs; B's ScriptedBoard unit test covers it) | each priority frame is the **next frame** written after the frame in progress (`wire_log`); wait ≤ one frame time + 3 ms (AC: STOP sent while the queue is full goes out first) |
+| TC-IF-011-01 | C | DEV | M1 | std | (v0.3, D-37 c / SRS v0.5 IF-011: priority path = STOP, HALT, PAUSE + HALT_CLEAR, ESTOP_CLEAR, FAULT_CLEAR; RESUME on the CONTROL lane = M1-C8) job queue + GENERAL lane busy (40 queued reads + a write) and the token bucket empty (TX held at 100 frames/s); then `stop()`, `halt()`, `pause()`, RESUME [D-31], clears (v0.2: '4 outstanding' is not constructible through the M1 public API — the Worker serialises jobs; B's ScriptedBoard unit test covers it) | each priority frame is the **next frame** written after the frame in progress (`wire_log`); wait ≤ one frame time + 3 ms (AC: STOP sent while the queue is full goes out first) |
 | TC-IF-011-02 | A+C | DEV | M1 | std | analysis of ICD §10; 10 min sim at 80 Hz with events | FW→PC ≤ 9 216 B/s (10 %); measured ≈ 2 080 B/s DATA + events (AC) |
 | TC-IF-012-01 | I+P | DEV | M1 | – | checklist: every IF-012 command (+ RESUME 0x3C, D-31) has a builder, and a vector in TC-IF-003-02 | complete. RESUME is blocked until the ICD carries it (SWD-P1-02). |
 
@@ -210,6 +220,7 @@ Independence rules (binding for `tests/validation/**`):
 | TC-SW-CFG-002-01 | U | DEV | M1 | – | board-config file round trip; crafted files: unknown key, missing key, out-of-range, wrong type, hash mismatch, newer schema, truncated JSON | round trip identical (enums by name, f32 exact); each case reported; recall fills edit fields only — no SET_PARAM on the wire (AC) |
 | TC-SW-CFG-003-01 | C | DEV | M1 | std | write_and_verify: valid edit; out of range; H1/H2/H3/H4 edits that need the write order; `inject_nack`; `inject_store_mismatch`; non-`moving_ok` key while moving; dropped response; `motion.pul_invert` (reboot required); `safety.zero_raw` edit | OK; refused before the first write; OK with a rule-safe order; REJECTED (status, detail); MISMATCH; BUSY with nothing sent; TIMEOUT; REBOOT_REQUIRED → REBOOT_PENDING after SAVE + offer REBOOT; session key ERROR "managed by the backend" and absent from the saved file (AC) |
 | TC-SW-CFG-003-02 | G | DEV | M1 | as -01 | Config tab | per-row status shown; session rows locked |
+| TC-SW-CFG-004-02 [D-37 a] | C | DEV | **M2 entry** | std; the flash stall modelled by delaying the board response 600 ms (`delay_next`) | SAVE_PARAMS / LOAD_PARAMS / DEFAULT_PARAMS outstanding; during it 240 ms idle (heartbeat and STATUS-poll time), a queued `read_all`, then `stop()`, `halt()`, `pause()` | between the request and its response **only STOP / HALT / PAUSE** appear on the TX wire (no PING, no GET_STATUS, no job); the three stop-class frames are written at the call; the held `read_all` follows the response (AC SW-CFG-004 v0.5 'wire-log test') |
 | TC-SW-CFG-004-01 | C+D | DEV, REF | M1 | std | SAVE / LOAD / DEFAULTS (+ confirmation); CFG_DIRTY | SAVE → `nvm_record_seq` +1, CFG_DIRTY 0; DEFAULTS → session thresholds re-sent and verified; indicator follows `sys_flags`; demonstrated in the GUI (AC: demonstration) |
 
 ### 3.5 Safety limits and report marks (SW-LIM, SW-META)
@@ -237,6 +248,26 @@ Independence rules (binding for `tests/validation/**`):
 | TC-SW-RT-004-02 | C | DEV | M3 | std, 60 s of motion | live derived columns vs F's offline recomputation from the recorded raw | equal within the documented causal lag |
 | TC-SW-RT-005-01 | G+D | DEV, REF | M3 | inject saturation, stale, no calibration, extrapolation | readouts | texts n/a / STALE / SATURATED / INVALID / EXTRAPOLATED (AC; Should) |
 
+**SW-RT-006 plot panes (v0.3, D-38; Thrust_Stand SW-RT-004 / D-62 / D-63; GUI design v0.4 §4.7, G-45…G-52).** Level G, offscreen, B's real Backend on the lock-step simulator; expected results from the SRS text and the D-63 rules — never from D's placement code. MS = M1 add-on (SRS MS column M3; first acceptance at the M2 gate, re-run at M3). The SRS acceptance names D-63 rules (1)–(4); rule (5) (group tick) is verified as well (D-63 (5) is part of the adopted Thrust_Stand decision, finding SWD-M2-R6).
+
+| TC | Lvl | Env | MS | Pre | Stimulus | Expected |
+|---|---|---|---|---|---|---|
+| TC-SW-RT-006-01 | G | DEV | M2 | Plot 1 with 5 panes | columns 2 → 3 → 4 → 1 → 3; then 5 | pane order unchanged; `grid.position_of` = row-major `divmod(i, n)` for every n; 5 refused (`ValueError`) (AC: column switch keeps order) |
+| TC-SW-RT-006-02 | G | DEV | M2 | one empty pane | "+ Pane"; "Plot in pane 2" (raw); "Move to pane 1"; "Plot in new pane" (x_mm) | empty pane appended; raw ticked straight into pane 2; moved curve leaves pane 2 empty; new pane created with x_mm; a channel appears in exactly one pane per window |
+| TC-SW-RT-006-03 | G | DEV | M2 | 4 panes, 2 columns | drop pane 3 on cell 0, then on cell 3 (grid drop handler = the drag & drop target; pane MIME round trip) | order [3, 1, 2, 4] then [1, 2, 4, 3]; columns unchanged (AC: drag-reorder) |
+| TC-SW-RT-006-04 | G | DEV | M2 | Plot 1 with raw + x_mm; Plot 2 created (View ▸ New plot window) | "Move to window ▸ Plot 2" of the raw pane | the pane object with the same curve keys is in Plot 2; source window unticks them, target ticks them; Plot 1 keeps ≥ 1 pane (AC: move pane to another window keeps curves) |
+| TC-SW-RT-006-05 | G | DEV | M2 | raw in pane 1 | rename "Load cell"; untick / re-tick raw; "Automatic title"; close pane 2 (x_mm); close the last pane | user title kept across curve changes; automatic title = quantity ("Raw counts") again; closing unticks its channels; the last pane cannot be closed |
+| TC-SW-RT-006-06 | G | DEV | M2 | empty window | tick bit.valid, raw, x_mm, then bit.moving / homed / paused | all status bits in the first pane that shows status bits; raw, x_mm and bits in three different panes (D-63 (1)) |
+| TC-SW-RT-006-07 | G | DEV | M2 | raw in pane 1 + two empty panes | tick x_mm, bit.valid, rate_sps | x_mm → first empty pane, bit → second empty pane (no new pane); rate_sps → a new pane only when no empty pane is left (D-63 (2)) |
+| TC-SW-RT-006-08 | G | DEV | M2 | raw, x_mm, two bits | untick one bit; untick x_mm; tick rate_sps | the bit pane keeps the other bit; the emptied x_mm pane is kept and reused by rate_sps; pane count unchanged (D-63 (3)) |
+| TC-SW-RT-006-09 | G | DEV | M2 | bit.valid moved by the user to a new pane | tick bit.moving; select the user pane; tick bit.paused | the moved channel stays; later bits join the first pane (grid order) showing status bits; the selected pane does not redirect ticks (D-63 (4)) |
+| TC-SW-RT-006-10 | G | DEV | M2 | no calibration (F_N, F_kgf unavailable) | tick the tree group of raw (load) | only the available children ticked; greyed ones stay unticked; the group row is partially checked (D-63 (5)) |
+| TC-SW-RT-006-11 | G | DEV | M2 | – | "+ X-Y pane" (x = x_mm, y = raw) | the X-Y pane is a pane type (not a time pane); x choices = travel channels, y = force then raw counts; it pulls `data.xy(x, y, window)` (not the time snapshot); saved as `{"type": "xy", …}` (AC: X-Y view as a pane) |
+| TC-SW-RT-006-12 | G | DEV | M2 | 3 time panes in Plot 1, Plot 2 open | zoom the time axis of one pane | the same X range in every time pane of Plot 1, Plot 2 unchanged (AC: time axis linked within a window) |
+| TC-SW-RT-006-13 | G | DEV | M2 | Plot 1: 3 columns, 5 panes incl. an empty pane, an X-Y pane, a renamed pane, moved order; Plot 2: 2 columns | save, close, new MainWindow on the same settings file | for both windows: title, columns, pane order, curves per pane (incl. empty panes), user titles, window length identical (AC: restart restores layout) |
+| TC-SW-RT-006-14 | G | DEV | M2 | Plot 1 with 4 filled time panes, Plot 2 floating (both shown) | one refresh tick with both windows at 30 s; Plot 2 → 60 s, one tick | exactly **one** `data.snapshot` call for the union of keys; then exactly two (30 s, 60 s) — never one per pane (AC: one snapshot per time window with 4 panes) |
+| TC-NFR-001-04 | F (rt) | DEV (informative) / REF | M2 smoke, M3 REF | real-clock simulator 80 Hz; Plot 1 with 4 time panes (raw, travel, 8 status bits, rate) + X-Y pane, 30 s | 4 s refresh (DEV), 10 min on REF in PR-1 | paint-to-paint p95 ≤ 50 ms, no refresh-stage error (AC: NFR-001 frame interval holds with 4 panes) |
+
 ### 3.7 Manual control (SW-MAN)
 
 | TC | Lvl | Env | MS | Pre | Stimulus | Expected |
@@ -257,11 +288,13 @@ Independence rules (binding for `tests/validation/**`):
 | TC-SW-STOP-001-01 | G | DEV | M3 | std | for all tabs, docked/floating docks, every dialog class incl. file open/save, every wizard phase, the tare popup | exactly one STOP, `NoFocus`, not default/escape, fires on press; file dialogs are Qt non-native (AC) |
 | TC-SW-STOP-001-02 | C | DEV | M3 | sequence, travel wizard, jog, load approach | `stop()` | STOP mode 0 on the priority path; `terminate_all`; no motion frame of the old epoch after the STOP (AC) |
 | TC-SW-STOP-001-03 | I | DEV | M3 | – | inspect the application start | `AA_DontUseNativeDialogs` set before any dialog (AC: inspection) |
+| TC-SW-STOP-001-04 [D-37 d] | C | DEV | **M2 entry** | lock-step, link latency 8 ms each way, enabled + homed (forced path) | MOVE_ABS 200 mm at 20 mm/s sent; `stop()` 2 ms later with the STOP **request lost** | precondition shown on the wire: a DATA frame produced before the FW executed the MOVE (MOVING = 0) arrives after the STOP write; expected: it does **not** confirm the STOP — the STOP is repeated (≥ 2 frames), `stop.confirmed` has attempts ≥ 2, the axis stops long before 200 mm (OBS-M1-R1; AC SW-STOP-001 v0.5 'confirmed only by ACK or an indication with t_us ≥ the FW receive time') |
 | TC-SW-STOP-002-01 | W | DEV interactive, REF | M3 | std, sequence running, Notepad focused | `SendInput` Pause; then Ctrl+Break; stream off variant; first 3 HALT responses dropped | HALT on the wire, sequence terminated; repeated every 50 ms until ACK (4 frames), ≤ 20 in 1 s; with the stream off, confirmed via GET_STATUS `flags.HALT`; hotkey indicator active (AC) |
-| TC-SW-STOP-002-02 | C | DEV | M3 | fake hotkey backend | callback; all HALT responses dropped for 1.2 s | HALT repeated ≤ 20 in 1 s; `stop.unconfirmed` + banner "use the physical STOP / E-stop" |
+| TC-SW-STOP-002-02 | C | DEV | M2 (pre-written) / M3 | fake hotkey backend (hook `test_hooks.hotkey_press()`, GRQ-F-M2-01), axis moving through the M2 API | callback; first 3 HALT requests lost; variant all lost for 1.2 s | HALT written ≤ 1 ms after the callback, repeated every 50 ms, confirmed with attempts = 4; all lost: ≤ 20 in 1 s, `stop.unconfirmed` + banner "use the red E-stop" (v0.3, CR-01: no physical STOP) |
+| TC-SW-STOP-002-04 [D-37 d] | C | DEV | **M2 entry** | lock-step, 8 ms latency; HALT latched | Clear stop (HALT_CLEAR in flight), Pause/Break 1 ms later with the HALT request lost | frames produced before the clear executed (HALT = 1) arrive after the HALT write and do **not** confirm it: HALT repeated (≥ 2), attempts ≥ 2, HALT latched at the end |
 | TC-SW-STOP-002-03 | D | REF | M3 | – | DM-06: key with an elevated window focused; the application itself elevated | not delivered (KL-01) and documented; the GUI shows the hotkey state and the elevation warning |
-| TC-SW-STOP-003-01 | C | DEV | M3 | (a) sequence (b) travel wizard (c) load-cal capture (d) tare | FI-18 physical STOP button, FI-19 E-stop, FI-15 DRV_PWR loss, PC HALT | each operation ABORTED in the pipeline batch of the carrier frame; no motion frame from it afterwards (AC: within one received frame) |
-| TC-SW-STOP-003-02 | C | DEV | M3 | HALT latched (button), then released | Clear stop while pressed; after release; then watch 5 s; then reconnect / RESUME | NACK E_CAUSE_ACTIVE with verbatim text; HALT_CLEAR clears HALT; **no motion command** for 5 s; HALT is never cleared by reconnect or RESUME (AC) |
+| TC-SW-STOP-003-01 | C | DEV | M3 | (a) sequence (b) travel wizard (c) load-cal capture (d) tare | FI-18 PC HALT (Pause/Break key), FI-19 E-stop (power cut via K1), FI-15 DRV_PWR loss (v0.3, CR-01: the physical STOP-button case is removed) | each operation ABORTED in the pipeline batch of the carrier frame; no motion frame from it afterwards (AC: within one received frame) |
+| TC-SW-STOP-003-02 | C | DEV | M3 | HALT latched (Pause/Break key) | reconnect; RESUME; then Clear stop; then watch 5 s | HALT survives reconnect and RESUME (E_STATE HALT); HALT_CLEAR clears HALT (never refused with E_CAUSE_ACTIVE since ICD v0.5, D-36); **no motion command** for 5 s (AC). v0.3: 'Clear stop while the STOP button is pressed' removed (CR-01) |
 | TC-SW-STOP-004-01 [D-31] | C | DEV | M4 | sequence, TRAVEL step moving | GUI Pause | wire **PAUSE** (not STOP); sim controlled stop; sequence PAUSED with step/loop kept; no VALID = 1 frame until resumed; Resume → wire **RESUME (0x3C)** → after OK / PAUSED = 0 → MOVE_ABS with the step's absolute target; the step completes with a new settle + capture window; the report uses the resumed window only (AC) |
 | TC-SW-STOP-004-02 [D-31] | C | DEV | M4 | LOAD step in (a) approach (b) trim (c) capture | GUI Pause, then Resume | RESUME, then approach + trim re-run from the current force; within tolerance; capture window restarted (AC: pause in a load step) |
 | TC-SW-STOP-004-03 [D-31] | C | DEV | M4 | sequence in settle / capture / HOLD | physical PAUSE press; second press (RESUME_REQUEST) | PAUSED (source BUTTON), window discarded; the second press → RESUME + re-issue (resume gate open) or "resume request ignored: reason" (gate closed) |
@@ -269,7 +302,7 @@ Independence rules (binding for `tests/validation/**`):
 | TC-SW-STOP-004-05 [D-30] | C | DEV | M3 | jog running | PAUSE (button), with a JOG refresh in flight | jog session ended on EVENT PAUSED before the next refresh; an in-flight refresh gets NACK E_STATE PAUSED, treated as expected (no DEGRADED, no retry); the axis does not restart |
 | TC-SW-STOP-004-06 [D-30 race] | C | DEV | M3/M4 | MOVE_ABS (manual, and as a sequence step) | `SimControl` schedules a PAUSE-button press at −20…+20 ms (1 ms steps) around the arrival of the MOVE_ABS frame; link latency 1–16 ms; 41 × 2 runs | in every run: no pulse after the PAUSED-set instant other than the controlled deceleration; no motion restart; the sequence ends PAUSED (never ERROR); manual: no auto re-send. Also X. |
 | TC-SW-STOP-004-07 [D-31] | C+G | DEV | M3 | HALT latched (Pause/Break) while PAUSED (manual) | GUI Resume; API `resume()` | `resume` gate REFUSE "**Clear stop first**", toolbar Resume disabled with that tooltip; **no RESUME frame** sent; HALT and PAUSED unchanged. A forced RESUME frame (`Device`) → NACK E_STATE (BLOCK HALT), nothing cleared. |
-| TC-SW-STOP-004-08 [D-31 race] | C | DEV | M4 | sequence PAUSED | `SimControl` presses the physical STOP button 0–30 ms (1 ms steps) **before** the RESUME frame arrives (and releases it ≥ `io.release_ms` before arrival) | the FW refuses RESUME (E_STATE HALT); HALT and PAUSED stay latched; **no re-issue** MOVE_ABS is sent, or a sent one is refused; zero pulses after the button press; the sequence is terminated by HALT_SET (SW-STOP-003); clearing needs Clear stop. Also X. |
+| TC-SW-STOP-004-08 [D-31 race] | C | DEV | M4 | sequence PAUSED | (v0.3, CR-01) GUI Resume, then the Pause/Break key 0–30 ms later (1 ms steps; HALT on the priority path can overtake the RESUME on the CONTROL lane) — and the variant E-stop opened 0–30 ms before the RESUME frame arrives | whichever arrives first: HALT (resp. ESTOP) latched at the end, PAUSED latched or cleared consistently with the FW verdict; **no re-issue** MOVE_ABS is sent, or a sent one is refused; zero pulses after the HALT / E-stop; the sequence is terminated (SW-STOP-003); clearing needs Clear stop. Also X. |
 | TC-SW-STOP-004-09 [D-31] | C | DEV | M3 | PAUSED; ESTOP / FAULT latched variants | Resume | gate REFUSE with the latch name; no RESUME frame; forced → NACK E_STATE with that BLOCK bit |
 | TC-SW-STOP-004-10 [D-31] | C | DEV | M3/M4 | PAUSED | PAUSE pressed again between the RESUME OK and the re-issue | re-issue NACK E_STATE PAUSED; the sequence stays PAUSED with a reason (not ERROR); PAUSE while PAUSED → no new EVENT PAUSED |
 | TC-SW-STOP-004-11 [D-30] | C | DEV | M3 | travel wizard MOVE1; load-cal capture; tare capture | PAUSE | wizard / tare ABORTED (not resumable); travel spm0 restored (SET_PARAM is allowed while PAUSED); `cal_travel_start` / motion gates REFUSE "PAUSED — Resume" until RESUME |
@@ -357,7 +390,7 @@ Independence rules (binding for `tests/validation/**`):
 
 | TC | Lvl | Env | MS | Pre | Stimulus | Expected |
 |---|---|---|---|---|---|---|
-| TC-NFR-001-01 | F | **REF** | M3 | out-of-process sim at 80 Hz; recording on; Plot 1 = time view with **all registry channels** + X-Y view, 30 s window; Plot 2 floating | 10 min | paint-to-paint interval **p95 ≤ 50 ms** (≥ 20 fps); event-loop p99 ≤ 100 ms reported (AC; GUI P-01) |
+| TC-NFR-001-01 | F | **REF** | M3 | out-of-process sim at 80 Hz; recording on; Plot 1 = time panes with **all registry channels** (v0.3: placed by the D-63 rules, ≥ 4 panes, 2 columns) + an X-Y pane, 30 s window; Plot 2 floating | 10 min | paint-to-paint interval **p95 ≤ 50 ms** (≥ 20 fps); event-loop p99 ≤ 100 ms reported (AC; GUI P-01) |
 | TC-NFR-001-02 | F | DEV | M1… | as -01 | 60 s smoke at every milestone | trend recorded (informative) |
 | TC-NFR-001-03 | F | REF | M3 | 600 s window, 4 plot windows | 10 min | ≥ 20 fps (informative, P-04) |
 | TC-NFR-002-01 | F | **REF** | M3 | NFR-001 load | 100 STOP clicks (posted mouse press on the toolbar and dock STOP, 0.5 s apart) | click timestamp → STOP frame in the sim-server `wire_log` **p95 ≤ 50 ms** (AC; P-02) |
@@ -367,6 +400,26 @@ Independence rules (binding for `tests/validation/**`):
 | TC-NFR-004-01 | F | **REF** | M3 | NFR-001 load, recording | 1 h at 80 Hz (≈ 289 440 frames at +0.5 %) | `async_overflow` 0, `rows_lost` 0, link loss 0 (LinkModel loss 0) → 0 SW-attributable losses; rows = frames sent; RSS growth from minute 15 (ring buffer full) to the end **≤ 50 MB** (AC; P-05) |
 | TC-NFR-004-02 | C | DEV | M1/M3 | lockstep accelerated | 1 h of device time, backend only | 0 SW losses; memory bounded (regression at every milestone) |
 | TC-NFR-004-03 | H | TGT | HW gate | VCP | 1 h | 0 seq gaps, 0 CRC errors |
+
+### 3.14 M2 SW early acceptance (v0.3; backend B builds in M2, D-39)
+
+The SRS assigns no SW requirement to M2, but B builds the motion backend (MotionController, motion gates, simulator WP-B12) and D-39 folds the M1 close-out items into M2. These TCs are accepted at the **M2 gate** (early acceptance; they are re-run at M3 where their requirement's MS lies). **Run** = column "now": ✓ = runs against the current simulator / F-board (forced wire path where the M2 API is not there yet); P = pre-written, `pending("M2")`, armed at the M2 verification (§2.4a). Simulator-fidelity cases check B's test environment against the ICD / SRS §3.2 / `params.yaml` / `ref_motion` (rule 3); each is also an X case against the twin once A's M2 motion is in it.
+
+| TC | Run | Lvl | Pre | Stimulus | Expected |
+|---|---|---|---|---|---|
+| TC-SYS-008-04 (9 scenarios) | ✓ | C | lock-step sim, forced enable + home | (a) MOVE_ABS 50 mm @ 10 mm/s; (b) JOG with bound 3 mm (80 ms refresh), JOG without refresh; (c) re-HOME from 40 mm; (d) END limit during a + move, + / − moves while latched, release; (e) E-stop during a move (K1 delay 40 ms), clear; (f) DRV_PWR loss with E-stop closed; (g) PAUSE during a move, MOVE_ABS / JOG while PAUSED, RESUME; (h) MOVE_ABS response lost; (i) [D-40 a] both limits active, release END, FAULT_CLEAR, moves toward / away from START | (a) MOVE_DONE TARGET value 50 000 µm, value2 = `um_to_steps` (f_ref), MOVING 1 → 0, duration within [t_plan − 20 ms, t_plan + 0.5 s] of `plan_trapezoid`; (b) MOVE_DONE BOUND at 3 000 µm; STOPPED JOG_DEADMAN `jog_timeout_ms` … + 20 ms after the last JOG, no VALID_CLEARED; (c) HOMED, setpoint 0, no POS_UNCERTAIN, no HOME_DRIFT; (d) STOPPED LIMIT_END + LIMIT_SET; + move E_STATE BLOCK LIMIT, − move OK; LIMIT_CLEARED ≤ `io.release_ms` + 50 ms after release; (e) STOPPED ESTOP ≤ 3 ms, ESTOP_SET, DRIVER_DISABLED 3, DRIVER_POWER 0 at k1 + 0…25 ms (20 ms DRV_PWR filter), HOMED 0; ENABLE E_STATE ESTOP until ESTOP_CLEAR after `io.estop_release_ms`; (f) STOPPED DRV_POWER_LOST, DRIVER_POWER 0, DRIVER_DISABLED 4, HOMED 0, ENABLE E_STATE DRV_UNPOWERED; (g) STOPPED PC_PAUSE, PAUSED arg PC, no POS_UNCERTAIN; E_STATE BLOCK PAUSED for both; PAUSE_CLEARED arg 3 without motion; MOVE_ABS OK afterwards; (h) one MOVE_ABS, one MOVE_DONE (IF-005); (i) FAULT_SET LIMIT_WIRING; FAULT_CLEAR E_CAUSE_ACTIVE while both active, OK after END released; − move toward START E_STATE BLOCK LIMIT, + move OK |
+| TC-SYS-008-05 (WP-B12) | ✓ | C | lock-step sim | K1: E-stop open with DRV_PWR held, `drv.k1_weld_ms` ∈ {100, 200, 2000}; normal drop 60 ms; idle disable (unloaded / loaded ≥ release band); LOAD_LIMIT regrow (200 N/mm spring past the default FW threshold, FAULT_CLEAR, reduce, increase) | K1_WELDED within (k1, k1 + 25 ms], never in the normal case (SAF-FW-025); DRIVER_DISABLED cause IDLE at `idle_disable_s` ± 1 s, none when loaded (2 × idle time) (SAF-FW-017); clear accepted beyond the threshold, unloading move runs, loading again re-trips (SAF-FW-011) |
+| TC-SYS-008-06 | ✓ | P | – | `motion_vectors.json` (ICD v0.5, `ref_motion.py`): event-free ramp cases, planner, `ctrl_stop_paths` | production `calc.motion` (the simulator's ramp) reproduces every period **exactly**, the planner fields and the CLEAN / ISR / STRETCH selection (D-30) |
+| TC-SW-MAN-002-02 | P | C | M2 API: enable + home | `move_to(20)`, `move_by(+2.5)`, `move_to(12.3455)` | one MOVE_ABS each: 20 000, 22 500, 12 346 µm (round half away); no relative command (IF-009, SYS-003) |
+| TC-SW-MAN-003-01 / -02 | P | C | as above | (see §3.7) | wire 11/12/13 and 11/13; pending target dropped on STOP / PAUSE |
+| TC-SW-MAN-004-01 (3 cases) | P | C | as above; un-homed variant | jog 5 s with GUI beat; jog without beat; un-homed jog 50 mm/s | refresh max interval ≤ 100 ms, JOG 0 on stop; FW dead-man STOPPED JOG_DEADMAN ≤ 300 ms + `jog_timeout_ms` + 200 ms; un-homed v ≤ `v_unhomed_um_s`, bound = JOG_NO_BOUND |
+| TC-SW-MAN-005-01 | P | C | as above | 31 mm/s; accel > a_max | `check()` refuses naming the maximum; nothing on the wire |
+| TC-SW-LIM-001-01 | P | C | SW limits 10…200 mm | `move_to(250)`; jog + from 190 mm | refused locally, nothing on the wire; JOG `bound_um` = 200 000, MOVE_DONE BOUND at 200 000 |
+| TC-SW-MAN-006-02 (7 cases) | P | C | not enabled / not homed / HALT / PAUSED / ESTOP / DRV_PWR off / ALM | `move` gate; `move_to` through the API | REFUSE item with the generated BLOCK name (NOT_ENABLED, NOT_HOMED, HALT, PAUSED, ESTOP, DRV_UNPOWERED, DRIVER_ALARM); no MOVE_ABS on the wire |
+| TC-SAF-SW-004-02 | P | C | enabled, not homed, load unknown | `disable()` / `home()` without confirmation; `home(load_confirmed=True)` | refused, nothing on the wire; HOME flags bit0 = 1 |
+| TC-SW-STOP-002-02 | P | C | fake hotkey, moving | hotkey press, 3 HALT requests lost | as §3.8 |
+| TC-SW-STOP-001-04, TC-SW-STOP-002-04, TC-SW-CFG-004-02, TC-SAF-SW-005-03/-04, TC-IF-001-02 | ✓ (strict xfail while open) | C / I | – | §3.2–§3.8 | M2 **entry** items (D-37, CR-01; STATUS E-C3, E-C4, F-MC-4) |
+| TC-SYS-008-02 (X motion subset) | at M2 | X | twin with A's M2 motion | TC-SYS-008-04 (a)–(h) + TC-SYS-008-05 on sim and twin | identical EVENT sequences / verdicts; positions ± 1 step (Integrator's `test_sim_vs_twin.py` + F's `test_v_twin.py`) |
 
 ---
 
@@ -459,9 +512,9 @@ Every scenario asserts the wire (`wire_log`), the world (`query`), `status()` an
 | FI-15 | **DRV_PWR loss** with the E-stop closed, during a jog and a sequence | DRIVER_POWER 0 → operation terminated, HOMED lost, gates REFUSE DRV_UNPOWERED; after return: hint "Enable, then Home", no automatic enable | STOP-003-01, SEQ-005-01 |
 | FI-16 | **ALM** active (powered), idle and during a move | indicator "new motion blocked"; running move completes; new motion / sequence start refused | SAF-SW-005-01, SEQ-005-01, SEQ-007-03 |
 | FI-17 | **PAUSE** (button / PC) during a manual move, jog, travel/load step (approach, trim, settle, capture, hold, home), travel wizard, load-cal capture, tare; plus the in-flight races | D-30/D-31 behaviour of §3.8 | STOP-004-01…13 |
-| FI-18 | **HALT** (key / button / PC) in the same states; STOP button just before RESUME | operation terminated; HALT never cleared by RESUME / reconnect | STOP-002-01, STOP-003-01/02, STOP-004-07/08 |
+| FI-18 | **HALT** (Pause/Break key / PC; v0.3: no STOP button, CR-01) in the same states; HALT just after a Resume | operation terminated; HALT never cleared by RESUME / reconnect | STOP-002-01/02/04, STOP-003-01/02, STOP-004-07/08 |
 | FI-19 | **E-stop** in the same states, then the clear procedure | terminated; C-03; ENABLE + HOME needed; no restart | STOP-003-01, SAF-SW-004-01 |
-| FI-20 | Limit switch during a move; both limits (wiring) | stop handled; direction-aware gate; LIMIT_WIRING indicator | SAF-SW-005-01, LIM-001-01 |
+| FI-20 | Limit switch during a move; both limits (wiring) | stop handled; direction-aware gate; LIMIT_WIRING indicator; clear once not both active, the remaining input acts as a limit latch (D-40 a) | SAF-SW-005-01, LIM-001-01 |
 | FI-21 | FW load-limit trip (specimen overload past the FW threshold with the SW limits off) | FAULT_SET LOAD_LIMIT → terminated; clear + unload allowed | SAF-SW-005-01 |
 | FI-22 | Step fault (`inject step_fault`) | HOMED lost, operation terminated | SAF-SW-005-01 |
 | FI-23 | Board reset (`reset pin/iwdg`) mid-sequence | EVENT BOOT → new time epoch, sequence terminated, no re-enable, threshold rewrite, restore-pending check | SAF-SW-002-02, CAL-001-03 |
@@ -471,6 +524,9 @@ Every scenario asserts the wire (`wire_log`), the world (`query`), `status()` an
 | FI-27 | EVENT loss (event queue overflow → EVENT SEQ gap) | GET_STATUS + resync; no wrong state | IF-007-01 (extension) |
 | FI-28 | Specimen break / slip (`specimen f_break`, bilinear yield); unreachable load (too-soft spring, D-32) | guards BREAK_DETECTED / SLIP; unreachable → travel to the soft limit, NOT_REACHED, sequence stops, no early timeout | SEQ-007-01, SEQ-007-04, SEQ-006-04 |
 | FI-29 | GUI stall (no `gui_beat` > 2 s) while jogging | jog refresh stops; FW dead-man stops | MAN-004-01 |
+| FI-30 | NVM flash stall (response of SAVE / LOAD / DEFAULTS delayed 0.6 s, D-37 a) | only stop-class frames while outstanding | CFG-004-02 |
+| FI-31 | Link latency 8 ms + lost STOP / HALT request while a MOVE_ABS / HALT_CLEAR is in flight (OBS-M1-R1, D-37 d) | confirmation only from frames produced after the FW received the command | STOP-001-04, STOP-002-04 |
+| FI-32 | Feature bit 0 with its status bits set (F-board, D-37 b) | bits shown UNKNOWN, no gate items from them | SAF-SW-005-03 |
 
 ---
 
@@ -510,7 +566,7 @@ Every scenario asserts the wire (`wire_log`), the world (`query`), `status()` an
 | MS | SW scope (SRS MS column) | Entry | Exit (all required) |
 |---|---|---|---|
 | **M1** | SYS-003, SYS-008 (sim + twin subset), SYS-010, IF-001…012, SW-PLT-001…003, SW-CFG-001…004, SW-ACQ-001; NFR-002/004 backend parts; perf smoke | P1 gate passed; ICD version frozen for M1 (with RESUME, D-31) and vectors regenerated (`--check` exit 0); B's WP-B0…B11 merged with `Implements:` tags; B's unit suite green incl. the check-vector replay; conditions C2, C3 met | All M1 TCs pass in the 3 gate runs (§2.3) with identical counts; no open S1/S2; coverage floor met for M1 modules; X subset (TC-SYS-008-02) passes, or is carried as a dated condition if the twin is late (C6); TC-SW-PLT-001-01 on PY311 or C5/SWD-P1-16 resolved |
-| **M2** | (no SW requirement) | twin with motion logic | M1 suite re-run green; X motion subset passes (regression for SYS-008) |
+| **M2** | (no SW requirement in the SRS MS column) — v0.3: early acceptance of §3.14, SW-RT-006 (M1 add-on, §3.6), the D-37 / CR-01 items | ICD v0.5 landed (`--check` exit 0); M2 entry items closed: D-37 a/b/d (TC-SW-CFG-004-02, TC-SAF-SW-005-03, TC-SW-STOP-001-04 / 002-04), CR-01 remnants (TC-IF-001-02, TC-SAF-SW-005-04), StopConfirmation shim removed (F-MC-4) | M1 suite re-run green ×3; §3.14 armed (`--arm M2`) and passing; SW-RT-006 TCs pass; no open S1/S2; X motion subset passes (regression for SYS-008) |
 | **M3** | SAF-SW-001…005, SW-LIM, SW-META, SW-RT, SW-MAN, SW-STOP-001…003 (+ STOP-004 manual cases), SW-ACQ-002…004, SW-CAL, SW-TARE, NFR-001…004 | REF-PC named and specced (C5); GUI design v0.2 (C4); SRS v0.4 with the D-30/D-31 deltas (C1) | All M3 TCs pass ×3; PR-1…PR-5 met on REF; DM-02…07 and DM-09 witnessed; no open S1/S2 |
 | **M4** | SAF-SW-006, SW-STOP-004, SW-SEQ, SW-WIZ, SW-SEQF, SW-SCH, SW-REP, SYS-008 full | the POS_UNCERTAIN decision (SWD-P1-04) made | All M4 TCs pass ×3; DM-01, DM-08, DM-10 witnessed; full traceability (TC-SYS-010-01) |
 | **HW gate** | IF-002 (target), NFR-003 (PUL), NFR-004 (VCP) | PO approval (D-06/D-07) | H cases signed jointly with Validator E |
@@ -569,6 +625,27 @@ Closed during this review (no action): no-specimen thresholds keep the calibrate
 
 ---
 
+## 8a. M2-entry review (v0.3, 2026-10-04)
+
+Validation-suite baseline at the start of this revision (ICD v0.5 regenerated, B's M2 work in progress): 8 of 379
+tests failed — 4 were F's own hard-coded ICD v0.4.1 facts (48 parameters, hash 0xF0376293; fixed: values now taken
+from `params.yaml`), 2 the missing int32 saturation of `calc.motion` (ICD v0.5 §0.1), 2 the retired name
+`IoBits.STOP_BTN` in `core/gates.py`. The new D-37 / CR-01 tests (§3.2–§3.8) failed at first against the then-current
+backend (PING + GET_STATUS sent during an outstanding SAVE / LOAD / DEFAULTS; ALM / PEND / DRV_PWR / PAUSE_BTN shown
+ON/OFF with the feature bit 0; a lost STOP / HALT confirmed by a frame produced before the FW executed the preceding
+command — OBS-M1-R1; operator text "use the physical STOP / E-stop"). B's M2 work landed during the revision and F
+re-ran them: **all pass now**; they stay as regression tests (no SWD number was raised because the items were within
+B's announced M2-entry work, D-39).
+
+| ID | Sev | To | Finding | Proposed resolution |
+|---|---|---|---|---|
+| OI-F-M2-01 | Low | Orchestrator | SRS v0.5.1 SW-RT-006 acceptance cites "D-63 rules (1)–(4)"; D-63 has five rules (5: a group tick ticks only the available children). D's design G-46 and this plan verify (1)–(5). | SRS v0.5.2: "(1)–(5)". |
+| OI-F-M2-02 | Low | Orchestrator | CR-01 remnant: SRS SYS-002 still lists "physical STOP/PAUSE" among the FW-alone functions. | "physical PAUSE" (the E-stop is listed separately). |
+| OI-F-M2-03 | Low | Integrator | CR-01 remnant: ICD §9.3 rationale of the VERIFY clears still says "HALT_CLEAR a new STOP-button HALT (button pressed and released ≥ io.release_ms …)". | Reword to a Pause/Break-key HALT (TC-IF-005-02 race now uses it). |
+| OI-F-M2-04 | Low | B | The simulator answers SAVE_PARAMS at once (no flash stall); D-37 a is therefore exercised only with an injected response delay (FI-30), and sim and twin differ in timing. | Model the SAVE stall (response and buffered commands after ≈ `nvm_save_ms`), as the twin does (OBS-M1-02 fix). |
+| OI-F-M2-05 | Info | B / F | The M2 motion API landed while this plan was written: an armed run (`--arm M2`) of the 18 pre-written §3.14 public-API cases already passes at this snapshot. They stay `pending("M2")` until B declares WP-B12 / M2 done; F arms them at the M2 verification. | — |
+| OI-F-M2-06 | Info | Orchestrator / PO | TC-NFR-001-04 (4 panes) is informative on DEV; acceptance on the REF PC (MC-2 / G6 still open). | REF PC before M3 entry. |
+
 ## 9. P1 verdict on SW testability
 
 **YES WITH CONDITIONS.** Every SW-*, SAF-SW-*, NFR-001…004 requirement and the SW side of IF-*, SYS-003, SYS-008 and SYS-010 has at least one test case with a measurable expected result. The oracles are available and verified:
@@ -596,22 +673,22 @@ Conditions:
 
 | Group | Requirements | TCs | Of which REF / TGT / D |
 |---|---|---|---|
-| SYS (SW side: 003, 008, 010) | 3 | 6 | 1 D |
-| SAF-SW-001…006 | 6 | 18 | SAF-SW-001-01 also on REF |
-| IF-001…012 (SW side) | 12 | 20 | IF-002-02 TGT |
-| SW-PLT / SW-CFG | 7 | 12 | PLT-001 REF/PY311, CFG-004 D |
+| SYS (SW side: 003, 008, 010) | 3 | 9 | 1 D |
+| SAF-SW-001…006 | 6 | 20 | SAF-SW-001-01 also on REF |
+| IF-001…012 (SW side) | 12 | 21 | IF-002-02 TGT |
+| SW-PLT / SW-CFG | 7 | 13 | PLT-001 REF, CFG-004 D |
 | SW-LIM / SW-META | 6 | 8 | — |
-| SW-RT | 5 | 7 | RT-001-02, RT-003, RT-005 D |
-| SW-MAN | 6 | 8 | MAN-006 D |
-| SW-STOP | 4 | 21 | STOP-002-01 W (REF), STOP-002-03 D |
+| SW-RT | 6 | 21 | RT-001-02, RT-003, RT-005 D |
+| SW-MAN | 6 | 10 | MAN-006 D |
+| SW-STOP | 4 | 23 | STOP-002-01 W (REF), STOP-002-03 D |
 | SW-ACQ | 4 | 9 | ACQ-002-02 REF |
 | SW-CAL / SW-TARE | 12 | 20 | — |
 | SW-SEQ / SW-WIZ / SW-SEQF / SW-SCH | 12 | 22 | SCH-001-02, SCH-002-02 D |
 | SW-REP | 4 | 6 | REP-001-02 D |
-| NFR-001…004 | 4 | 10 | 6 REF, 2 TGT |
-| **Total** | **85** | **167** | REF-dependent 10, TGT 3, D 10 |
+| NFR-001…004 | 4 | 11 | 7 REF, 2 TGT |
+| **Total** | **86** | **193** (v0.2: 167) | REF-dependent 11, TGT 3, D 10 |
 
-Every requirement in scope is covered.
+Every requirement in scope is covered (counts = distinct `TC-<REQ>-nn` ids of this plan, computed 2026-10-04).
 
 ## 10a. M1 execution corrections (v0.2)
 
@@ -628,9 +705,30 @@ Every requirement in scope is covered.
 
 Validation suite layout (M1): `tests/validation/{conftest.py, harness.py, oracle/{f_ref.py, fboard.py}, test_v_protocol.py (P), test_v_connect.py, test_v_config.py, test_v_link.py, test_v_stream.py (C), test_v_gui.py (G), test_v_twin.py (X), test_v_static.py (U/I)}`; `_reports/trace.json` (req → node → outcome), `_reports/processes.log` (every process F started / stopped, by PID).
 
+## 10b. v0.3 corrections and suite changes
+
+| # | TC | Change | Reason |
+|---|---|---|---|
+| M2-C1 | TC-SAF-SW-005-01, TC-SW-STOP-002-02, -003-01, -003-02, -004-08, FI-18, TC-IF-005-02 (race) | physical STOP-button stimuli removed or replaced (Pause/Break-key HALT, E-stop); HALT source PC only; HALT_CLEAR never refused with E_CAUSE_ACTIVE; banner text "use the red E-stop" | CR-01 / D-36, ICD v0.5 |
+| M2-C2 | TC-SW-CFG-004-02, TC-SAF-SW-005-03/-04, TC-SW-STOP-001-04, TC-SW-STOP-002-04, TC-IF-001-02 | new | D-37 a, b, d; CR-01 remnants; OBS-M1-R1 |
+| M2-C3 | TC-IF-011-01 | priority list = STOP / HALT / PAUSE + clears; RESUME on the CONTROL lane | D-37 c, SRS v0.5 IF-011 |
+| M2-C4 | TC-SYS-003-01 | + int32 saturation vectors; F's oracle `f_ref.sat_i32`, `rate_cap_um_s` | ICD v0.5 §0.1, OBS-M1-05 |
+| M2-C5 | TC-IF-010-01, TC-IF-005-01/03, TC-IF-004-02 | parameter count and dictionary hash taken from `params.yaml` (oracle), no literals | dict_version 4 (47 params, 0xFCC54C90) |
+| M2-C6 | TC-IF-005-02 (M1 part "no motion from the M1 API") | retired | motion exists in M2; superseded by TC-SW-MAN-006-02 and TC-SYS-008-04 (h) |
+| M2-C7 | TC-SW-RT-006-01…14, TC-NFR-001-04 | new | SW-RT-006 (D-38), GUI design v0.4 §4.7 |
+| M2-C8 | §3.14 | M2 SW early-acceptance set; simulator-fidelity TC-SYS-008-04/05/06; `pending("M2")` mechanism (§2.4a) | D-39, WP-B12 |
+
+Validation suite (v0.3): `test_v_d37.py` (C: D-37 a/b/d), `test_v_motion.py` (C: simulator motion + WP-B12 items
+now; MotionController / gates / hotkey pending M2), `test_v_plots.py` (G: SW-RT-006, NFR-001 4-pane smoke),
+additions to `test_v_protocol.py` (units saturation, `motion_vectors.json`), `test_v_static.py` (retired names,
+CR-01 texts), `test_v_link.py` (D-34 race with the Pause/Break key). `oracle/f_ref.py`: int32 saturation, rate cap;
+`oracle/fboard.py`: selectable feature mask and STATUS `io`; `harness.py`: forced request / outcome from the wire,
+M2 verbs, `until()`; `conftest.py`: `--arm`, `pending` marker, TC id in `trace.json`.
+
 ## 11. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 0.1 | 2026-10-03 | Validator F | First plan for the P1 gate: strategy and levels, 167 TCs for 85 requirements, R4 + VV vectors (R4 §12 independently verified 22/22 × 3 runs), 29 fault-injection scenarios, REF runs PR-1…5, demonstrations DM-01…10, milestone criteria, findings SWD-P1-01…18, P1 verdict YES WITH CONDITIONS (C1…C7). Includes D-30, D-31 (RESUME 0x3C) and D-32 (load step travels to the soft limit, NOT_REACHED) per Orchestrator messages. |
+| 0.3 | 2026-10-04 | Validator F | M2 plan: baseline SRS v0.5.1 / ICD v0.5 (dict 4, 47 params, 0xFCC54C90) / D-36…D-40 / GUI design v0.4; CR-01 (physical STOP-button cases removed, HALT source PC only), D-37 a–d TCs incl. OBS-M1-R1, SW-RT-006 TCs (14 + NFR-001 4-pane smoke), §3.14 M2 SW early acceptance (simulator fidelity incl. WP-B12, MotionController, gates, hotkey), pre-written tests with `pending` / `--arm` (§2.4a), FI-30…32, D-40 (LIMIT_WIRING clear rule, TC-SYS-008-04 (i)), §8a M2-entry review (OI-F-M2-01…06), §10b corrections M2-C1…C8; 86 requirements → 193 TCs. |
 | 0.2 | 2026-10-03 | Validator F | M1 execution: baseline SRS/ICD v0.4.1, dict 3, SW_design v0.3.2, GUI v0.3.1, twin; TC corrections M1-C1…C7 (§10a: F-board for IF-008 / link-attributed gaps / duplicates / frame errors, IF-011 queue condition, Python 3.14 only, forced motion path, heartbeat lock-step part, strict-xfail open defects, M1-C8 RESUME on the CONTROL lane); validation suite layout. Results: `SW_test_report_M1.md` (incl. re-test). |

@@ -49,20 +49,21 @@ from bend_stand.calc.motion import F_TICK_HZ, Ramp, ctrl_stop_path, steps_to_um,
 from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.clock import Clock
-from bend_stand.core.model import BoardStatus, DeviceInfo
+from bend_stand.core.model import INT_DF, INT_DS, INT_FA, INT_FE, INT_IO, BoardStatus, DeviceInfo
 from bend_stand.io import protocol as P
 from bend_stand.io.framing import Frame, FrameDecoder, encode_frame
 from bend_stand.io.sim.check import MOVING, SimCheckState, check
+from bend_stand.io.sim.loadlim import LoadLimit
 from bend_stand.io.sim.models import Hx711Model, World
 from bend_stand.io.sim.nvm import NvmStore
 from bend_stand.io.transport import Transport
 
 log = logging.getLogger("bend_stand.sim")
 Cmd = pg.Cmd
-DF, DS, FA = pg.DataFlags, pg.DataStatus, pg.Faults
+DF, DS, FA = INT_DF, INT_DS, INT_FA        # plain ints (fast bit tests)
 SC = pg.StopCause
 EV = pg.Event
-FE = pg.Features
+FE = INT_FE
 DEFAULT_FEATURES = int(FE.AFE | FE.MOTION | FE.HOMING | FE.MOVE_UNTIL_LOAD | FE.NVM | FE.BUTTONS | FE.DRV_SIGNALS)
 SIM_UID = "53494D0000000000B1BDB0A0"
 EVENT_QUEUE = 32
@@ -169,6 +170,7 @@ class SimBoard:
         self._pos_override: int | None = None
         self._hung = False
         self.steps = 0
+        self.dir_sign = 1
         self.boot(cause=self.cfg.reset_cause, first=True)
 
     # ============================================================================== features
@@ -239,8 +241,7 @@ class SimBoard:
             self.nvm_save_ms = 0
             self.nvm_save_uptime_ms = 0
             self.last_tick_us = self.now_us()
-            self.load_trip_count = 0
-            self.regrow_ref: int | None = None
+            self.loadlim = LoadLimit()
             self.idle_since_us: int | None = None
             self.pend_wait_since_us: int | None = None
             self.k1_since_us: int | None = None
@@ -298,8 +299,15 @@ class SimBoard:
         return self.steps * 1000.0 / self.spm
 
     def _x_true(self) -> float:
-        """World position of the carriage (µm): machine position + offset + lost steps (``world_shift``)."""
-        return self.steps * 1000.0 / self.spm + self.true_offset_um + self.world.x_um_true_offset
+        """World position of the carriage (µm): machine position (sign of the DIR wiring) + offset + lost steps
+        (``world_shift``)."""
+        return self.dir_sign * self.steps * 1000.0 / self.spm + self.true_offset_um + self.world.x_um_true_offset
+
+    def set_dir_inverted(self, inverted: bool) -> None:
+        """World DIR wiring inversion (vocabulary ``driver dir_wiring_inverted``, S variant); x stays continuous."""
+        xt = self._x_true()
+        self.dir_sign = -1 if inverted else 1
+        self.true_offset_um += xt - self._x_true()
 
     # ============================================================================== threads
     def start(self) -> None:
@@ -508,7 +516,7 @@ class SimBoard:
         self.estop_level = st.estop_input_open
         self.estop_closed_since_us = None if st.estop_input_open else now - st.estop_closed_ms * 1000
         self.halt_latched = st.halt_latched
-        self.faults_mask = sum(int(FA[n]) for n in st.faults)
+        self.faults_mask = sum(int(pg.Faults[n]) for n in st.faults)
         self.forced_causes = set(st.fault_causes)
         self.limit_latch = {"start": st.limit_start, "end": st.limit_end}
         self.world.limit_start_forced = st.limit_start
@@ -641,7 +649,7 @@ class SimBoard:
         self.params[meta.key] = value
         if meta.key == "motion.steps_per_mm":
             # HOMED kept: machine zero is a step count, µm positions rescale (FW-MOT-009); the carriage stays
-            self.true_offset_um += self.steps * 1000.0 / old_spm - self.steps * 1000.0 / self.spm
+            self.true_offset_um += self.dir_sign * (self.steps * 1000.0 / old_spm - self.steps * 1000.0 / self.spm)
         if meta.reboot_required:
             self.reboot_pending = True
         if meta.key == "io.pause_active_level":       # re-arm without generating a press
@@ -887,7 +895,7 @@ class SimBoard:
         else:
             self._home_drift = 0
         new = self.steps - edge - offset                        # the edge lies at x = −home.offset_um
-        self.true_offset_um += (self.steps - new) * 1000.0 / self.spm
+        self.true_offset_um += self.dir_sign * (self.steps - new) * 1000.0 / self.spm
         self.steps = new
         self._home_leg("MOVE_TO_ZERO", t_us=t)
 
@@ -982,8 +990,7 @@ class SimBoard:
         for i, name in enumerate(pg.FAULTS_BITS):
             if self.faults_mask >> i & 1 and (name not in causes or name == "LOAD_LIMIT"):
                 cleared |= 1 << i
-        if cleared & FA.LOAD_LIMIT and self.last_raw != pg.AFE_NO_DATA and self._load_violation(self.last_raw):
-            self.regrow_ref = self.last_raw            # SAF-FW-011: unload allowed, re-trip on regrow
+        self.loadlim.fault_clear()                     # SAF-FW-011 / D-40 d: every clear takes a new reference
         self.faults_mask &= ~cleared
         self.forced_causes = None
         if cleared:
@@ -1122,7 +1129,7 @@ class SimBoard:
         self._finish(m.stop_reason if m.stopping else m.end_reason)
 
     def _fault(self, name: str, value: int = 0, value2: int = 0) -> None:
-        bit = int(FA[name])
+        bit = int(pg.Faults[name])
         if not self.faults_mask & bit:
             self.faults_mask |= bit
             self.emit(EV.FAULT_SET, pg.FAULTS_BITS.index(name), value, value2)
@@ -1356,10 +1363,6 @@ class SimBoard:
     def _force_n(self, t_us: int | None = None) -> float:
         return self.world.specimen.force_n(self._x_true(), t_us)
 
-    def _load_violation(self, raw: int) -> bool:
-        lo, hi = int(self.p("safety.load_raw_min")), int(self.p("safety.load_raw_max"))
-        return raw > hi or raw < lo or raw in (pg.RAW_MIN, pg.RAW_MAX)
-
     def _on_sample(self, t_us: int, raw: int) -> None:
         if self.afe_stale:
             self.afe_stale = False
@@ -1370,22 +1373,11 @@ class SimBoard:
         self.last_raw = raw
         self.afe_saturated = raw in (pg.RAW_MIN, pg.RAW_MAX)
         self._rate_check()
-        # FW load limit on every sample (D-12); rails always trip; regrow rule after FAULT_CLEAR (SAF-FW-011)
-        trip = False
-        if self._load_violation(raw):
-            ref = self.regrow_ref
-            if ref is not None and not self.afe_saturated:
-                grow = int(self.p("safety.load_regrow_raw"))
-                hi = int(self.p("safety.load_raw_max"))
-                trip = (raw - ref > grow) if ref > hi else (ref - raw > grow)
-            else:
-                self.load_trip_count += 1
-                trip = self.load_trip_count >= int(self.p("safety.load_trip_samples")) or self.afe_saturated
-        else:
-            self.load_trip_count = 0
-            self.regrow_ref = None
-        if trip and not self.faults_mask & FA.LOAD_LIMIT:
-            self.regrow_ref = None
+        # FW load limit on every sample (D-12): ICD v0.6 §5.5 model (rails, trip count, regrow window D-40 d)
+        ll = self.loadlim
+        ll.config(int(self.p("safety.load_raw_min")), int(self.p("safety.load_raw_max")),
+                  int(self.p("safety.load_trip_samples")), int(self.p("safety.load_regrow_raw")))
+        if ll.sample(raw) and not self.faults_mask & FA.LOAD_LIMIT:
             self._fault("LOAD_LIMIT", raw, self.pos_steps)
             if self.motion is not None:
                 self._immediate_stop(int(SC.LOAD_LIMIT))
@@ -1488,24 +1480,24 @@ class SimBoard:
         now = self.now_us()
         io = 0
         if self.world.estop_input_open():
-            io |= pg.IoBits.ESTOP_OPEN
+            io |= INT_IO.ESTOP_OPEN
         if self.db["start"].level:
-            io |= pg.IoBits.LIMIT_START
+            io |= INT_IO.LIMIT_START
         if self.db["end"].level:
-            io |= pg.IoBits.LIMIT_END
+            io |= INT_IO.LIMIT_END
         if self.db["pause"].level:
-            io |= pg.IoBits.PAUSE_BTN
+            io |= INT_IO.PAUSE_BTN
         if self.has(FE.DRV_SIGNALS):                 # D-37 b: invalid → sent as 0
             if self.world.alm_active():
-                io |= pg.IoBits.ALM
+                io |= INT_IO.ALM
             if self.world.pend_active():
-                io |= pg.IoBits.PEND
+                io |= INT_IO.PEND
             if self.world.power_present():
-                io |= pg.IoBits.DRV_PWR
+                io |= INT_IO.DRV_PWR
         if self.motion_state == "NOT_ENABLED" and self.ena_disabled:
-            io |= pg.IoBits.ENA_DISABLED
+            io |= INT_IO.ENA_DISABLED
         if int(self.p("afe.rate_sps")) == 1:
-            io |= pg.IoBits.RATE_80
+            io |= INT_IO.RATE_80
         sysf = 0
         if self.nvm.differs(self.params):
             sysf |= pg.SysFlags.CFG_DIRTY

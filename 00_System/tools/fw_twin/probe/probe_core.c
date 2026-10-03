@@ -204,6 +204,13 @@ static void status_body(uint8_t *b)
     b[84] = pause_src;
 }
 
+static bool meas_present(void)
+{
+    static const uint8_t info[8] = {0};
+    uint8_t mb[64];
+    return hal_meas_cmd(info, sizeof info, mb, sizeof mb) == 64u;
+}
+
 /* ------------------------------------------------------------------ commands */
 static void dispatch(uint8_t type, uint8_t seq, const uint8_t *pl, uint16_t len)
 {
@@ -213,12 +220,12 @@ static void dispatch(uint8_t type, uint8_t seq, const uint8_t *pl, uint16_t len)
         [CMD_DEFAULT_PARAMS] = 0, [CMD_STREAM_START] = 0, [CMD_STREAM_STOP] = 0, [CMD_SET_VALID] = 1,
         [CMD_ENABLE] = 0, [CMD_DISABLE] = 0, [CMD_HOME] = 1, [CMD_MOVE_ABS] = 12, [CMD_JOG] = 12,
         [CMD_MOVE_UNTIL_LOAD] = 17, [CMD_STOP] = 1, [CMD_HALT] = 0, [CMD_HALT_CLEAR] = 0, [CMD_ESTOP_CLEAR] = 0,
-        [CMD_FAULT_CLEAR] = 0, [CMD_PAUSE] = 0, [CMD_RESUME] = 0 };
+        [CMD_FAULT_CLEAR] = 0, [CMD_PAUSE] = 0, [CMD_RESUME] = 0, [CMD_DIAG_MEAS] = 8 };
     static uint8_t defined[0x40];
     static const uint8_t cmds[] = { CMD_PING, CMD_GET_INFO, CMD_GET_STATUS, CMD_REBOOT, CMD_GET_ALL_PARAMS, CMD_GET_PARAM,
         CMD_SET_PARAM, CMD_SAVE_PARAMS, CMD_LOAD_PARAMS, CMD_DEFAULT_PARAMS, CMD_STREAM_START, CMD_STREAM_STOP,
         CMD_SET_VALID, CMD_ENABLE, CMD_DISABLE, CMD_HOME, CMD_MOVE_ABS, CMD_JOG, CMD_MOVE_UNTIL_LOAD, CMD_STOP,
-        CMD_HALT, CMD_HALT_CLEAR, CMD_ESTOP_CLEAR, CMD_FAULT_CLEAR, CMD_PAUSE, CMD_RESUME };
+        CMD_HALT, CMD_HALT_CLEAR, CMD_ESTOP_CLEAR, CMD_FAULT_CLEAR, CMD_PAUSE, CMD_RESUME, CMD_DIAG_MEAS };
     for (unsigned i = 0; i < sizeof cmds; i++) defined[cmds[i]] = 1;
     if (type == 0 || type >= 0x40) { rx_ferr++; return; }
     link_ms = hal_time_ms();
@@ -238,7 +245,7 @@ static void dispatch(uint8_t type, uint8_t seq, const uint8_t *pl, uint16_t len)
         memset(b, 0, 44);
         b[0] = PROTO_MAJOR; b[1] = PROTO_MINOR; b[2] = PROTO_PAYLOAD_VERSION; b[3] = 0; b[4] = 1; b[5] = 0;
         put32(b + 6, PARAM_DICT_HASH); hal_uid(b + 10); memcpy(b + 22, "PROBE-NOT-FW", 12);
-        put16(b + 38, PARAM_COUNT); put32(b + 40, FEAT_AFE_SYNTHETIC | FEAT_NVM | FEAT_TWIN);
+        put16(b + 38, PARAM_COUNT); put32(b + 40, FEAT_AFE_SYNTHETIC | FEAT_NVM | FEAT_TWIN | (meas_present() ? FEAT_HW_MEAS : 0u));
         resp(type, seq, b, 44); break;
     }
     case CMD_GET_STATUS: status_body(b); resp(type, seq, b, PROTO_STATUS_LEN); break;
@@ -294,6 +301,11 @@ static void dispatch(uint8_t type, uint8_t seq, const uint8_t *pl, uint16_t len)
     case CMD_PAUSE:
         if (!paused) { paused = true; pause_src = SRC_PC; event(EV_PAUSED, SRC_PC, 0); }
         valid_clear(SC_PC_PAUSE); resp(type, seq, NULL, 0); break;
+    case CMD_DIAG_MEAS: {      /* probe forwarder of seam v1.3 (validation of the request is the core's job) */
+        uint8_t mb[64];
+        if (hal_meas_cmd(pl, len, mb, sizeof mb) == 64u) resp(type, seq, mb, 64); else nack(type, seq, ST_E_INTERNAL, 1);
+        break;
+    }
     case CMD_RESUME:
         if (halt_l) { nack(type, seq, ST_E_STATE, BLOCK_HALT); break; }
         if (paused) { paused = false; pause_src = SRC_NONE; event(EV_PAUSE_CLEARED, 3, 0); }
@@ -394,7 +406,7 @@ void app_init(void)
     hal_step_cfg_t sc = { 900u, 1800u, P.motion.pul_invert, P.motion.ena_invert };
     (void)hal_step_init(&sc);
     hal_ena_set(true);
-    hal_in_cfg_t ic; memset(&ic, 0, sizeof ic); ic.stop_active_level = 0u; /* retired (D-36) */ ic.pause_active_level = P.io.pause_active_level;
+    hal_in_cfg_t ic; memset(&ic, 0, sizeof ic); ic.pause_active_level = P.io.pause_active_level;
     hal_inputs_config(&ic);
     hal_hx711_config(25, P.afe.rate_sps != 0);
     event(EV_BOOT, hal_reset_cause(), 0);

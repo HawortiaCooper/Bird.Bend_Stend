@@ -5,7 +5,8 @@
  * Origin: pattern of Thrust_Stand_HAW/02_FW/src/pure/cmd_check.* @37c8747 (rewritten).
  * Implements: FW-CMD-001, FW-CFG-003, SAF-FW-006, SAF-FW-012 (check), SAF-FW-020, SAF-FW-021,
  *             SAF-FW-023 (BLOCK PAUSED, RESUME), SAF-FW-024/026 (check part),
- *             FW-CMD-003 (FAULT_CLEAR cause rule), FW-MOT-009 (speed cap), D-30, D-31
+ *             FW-CMD-003 (FAULT_CLEAR cause rule), FW-MOT-009 (speed cap), D-30, D-31,
+ *             D-40 c (DIAG_MEAS, ICD v0.6 Appendix C)
  */
 #ifndef PURE_CMD_CHECK_H
 #define PURE_CMD_CHECK_H
@@ -41,6 +42,7 @@ typedef struct {
     bool     alm_active;
     bool     nvm_record_valid;
     bool     paused;                /* PAUSED latch (D-30) */
+    bool     hw_meas;               /* build has FEAT_HW_MEAS (not a FwState key: replay parameter) */
 } cmd_ctx_t;
 
 typedef struct {

@@ -14,7 +14,7 @@ static void test_generated_tables_present(void)
 {
     params_t p;
     TEST_ASSERT_EQUAL_UINT32(47u, PARAM_COUNT);             /* dict 4: io.stop_active_level retired */
-    TEST_ASSERT_EQUAL_STRING("0.5", PROTO_ICD_VERSION);
+    TEST_ASSERT_EQUAL_STRING("0.6", PROTO_ICD_VERSION);
     TEST_ASSERT_NULL(param_find(0x0603u));               /* retired io.stop_active_level (CR-01) */
     params_set_defaults(&p);
     TEST_ASSERT_EQUAL_FLOAT(800.0f, p.motion.steps_per_mm);

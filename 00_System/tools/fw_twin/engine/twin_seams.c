@@ -95,12 +95,15 @@ uint32_t hal_step_init(const hal_step_cfg_t *cfg)
 
 static vt_t ticks_ns(uint32_t ticks) { return ((uint64_t)ticks * 1000000000ull + F_TICK_HZ / 2u) / F_TICK_HZ; }
 
+/* seam v1.3 (SR-M2-01): dir = +-1 logical direction (the HAL counts by the sign); +-2 = the same logical
+ * direction with the DIR output inverted (motion.dir_invert). DIR electrical = (dir > 0) XOR (|dir| == 2). */
 void hal_step_set_dir(int dir)
 {
     tw_out("L %llu hal_step_set_dir %d", (unsigned long long)T.now, dir);
     if (T.step_running) { tw_out("L %llu seam_violation set_dir_while_running", (unsigned long long)T.now); return; }
-    int lv = dir > 0;
-    if (lv != (T.dir > 0) || T.dir == 0) tw_edge("DIR", lv);
+    int inv = (dir == 2 || dir == -2);
+    int lv = (dir > 0) ^ inv;
+    if (lv != T.dir_level) { T.dir_level = lv; tw_edge("DIR", lv); }
     T.dir = dir > 0 ? 1 : -1;
 }
 
@@ -119,6 +122,8 @@ void hal_step_start(uint32_t first_period_ticks)
 {
     tw_out("L %llu hal_step_start %u", (unsigned long long)T.now, (unsigned)first_period_ticks);
     if (T.dir == 0) T.dir = 1;
+    if (T.dir_level < 0) T.dir_level = T.dir > 0;
+    tw_meas_release_static();
     T.step_running = true; T.step_last = false; T.step_stop_after = false; T.period_pre = 0;
     schedule_period(T.now, first_period_ticks, T.now + ticks_ns(T.dir_setup_ticks));
 }
@@ -161,14 +166,14 @@ void hal_step_set_count(int32_t steps)
 {
     tw_out("L %llu hal_step_set_count %ld", (unsigned long long)T.now, (long)steps);
     if (T.step_running) { tw_out("L %llu seam_violation set_count_while_running", (unsigned long long)T.now); return; }
-    T.shift_um += (double)(T.count - steps) * 1000.0 / T.spm_world;   /* the world does not move */
-    T.count = steps;
+    T.count = steps;                                     /* the world does not move (it is integrated separately) */
 }
 bool hal_step_running(void) { return T.step_running; }
 uint32_t hal_step_stop_gen(void) { return T.stop_gen; }
 
 void hal_ena_set(bool enabled)
 {
+    tw_meas_release_static();
     tw_out("L %llu hal_ena_set %d", (unsigned long long)T.now, enabled);
     T.ena_enabled = enabled;
     int lv = (!enabled) ^ (T.ena_invert ? 1 : 0);        /* LED current (high) = driver disabled */
@@ -182,7 +187,11 @@ void twin_step_event(void)
     if (!T.step_high) { T.step_high = true; set_pul(1); return; }
     /* end of the pulse = update event */
     set_pul(0); T.step_high = false;
-    T.count += T.dir; tw_step_counted();
+    T.count += T.dir;
+    /* the world moves by the DIR pin (+x while DIR is high), unless the wiring / driver SW5 is inverted */
+    T.wsteps += ((T.dir_level > 0) != T.dir_wiring_inv) ? 1 : -1;
+    T.last_pul_end = T.now;
+    tw_step_counted();
     if (T.step_stop_after || T.step_last) { step_halt(); return; }
     uint32_t next = T.period_pre ? T.period_pre : T.period_cur;
     T.period_pre = 0;
@@ -208,12 +217,16 @@ uint16_t hal_inputs_raw(void)
 {
     uint16_t v = 0;
     for (unsigned i = 0; i < IN_COUNT; i++) v |= (uint16_t)(T.lvl[i] ? 1u << i : 0u);
+    if (T.pend_auto) {                                   /* PEND high = in position (pinout), REQ-C-M2-07 */
+        bool inpos = !T.step_running && T.now - T.last_pul_end >= T.pend_lag_ns;
+        v = (uint16_t)((v & ~(1u << IN_PEND)) | (inpos ? 1u << IN_PEND : 0u));
+    }
     return v;
 }
 void hal_inputs_config(const hal_in_cfg_t *c)
 {
-    T.stop_active_level = c->stop_active_level; T.pause_active_level = c->pause_active_level;
-    tw_out("L %llu hal_inputs_config stop=%u pause=%u", (unsigned long long)T.now, c->stop_active_level, c->pause_active_level);
+    T.pause_active_level = c->pause_active_level; T.alm_active_level = c->alm_active_level;
+    tw_out("L %llu hal_inputs_config pause=%u alm=%u", (unsigned long long)T.now, c->pause_active_level, c->alm_active_level);
 }
 void hal_inputs_rearm(uint8_t id) { (void)id; }          /* twin: lines are never masked (README) */
 
@@ -225,7 +238,6 @@ void twin_input_edge(uint8_t id, uint8_t level)
     switch (id) {
     case IN_ESTOP: active = level; if (active) { (void)hal_step_abort(); hal_ena_set(false); } break;
     case IN_LIM_START: case IN_LIM_END: active = level; if (active) (void)hal_step_stop_now(); break;
-    case IN_STOP: active = (T.stop_active_level == 0) ? level : !level; if (active) (void)hal_step_stop_now(); break;
     case IN_PAUSE: break;
     default: return;                                      /* ALM, PEND, DRV_PWR: polled, no EXTI */
     }

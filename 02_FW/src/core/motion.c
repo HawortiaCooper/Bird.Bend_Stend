@@ -254,6 +254,96 @@ static void hw_start(void)
     }
 }
 
+/* ---- ramp edits (NFR-007): computed on a copy outside CRIT_MOTION (double math, VSQRT), committed
+ * under CRIT_MOTION (struct copy + at most two HAL register writes, <= ~0.5 us) only if the step ISR
+ * did not advance the ramp in between; after 4 lost races the edit is done inside the section ---- */
+#define RE_JOG          0u
+#define RE_TOTAL        1u
+#define RE_STOP_ISR     2u
+#define RE_STOP_STRETCH 3u
+typedef struct {
+    uint8_t  kind;
+    bool     set_speed;
+    double   v, a, d;            /* steps/s, steps/s^2 */
+    uint32_t total;
+    float    floor_c;
+    uint32_t c1, c2;             /* RE_STOP_STRETCH results */
+} redit_t;
+
+static void redit_apply(ramp_t *r, redit_t *e)
+{
+    switch (e->kind) {
+    case RE_JOG:
+        if (e->set_speed) {
+            ramp_set_speed(r, e->v, e->a, e->d);             /* on the fly (FW-MOT-005) */
+        }
+        ramp_set_total(r, e->total);
+        break;
+    case RE_TOTAL:
+        ramp_set_total(r, e->total);
+        break;
+    case RE_STOP_ISR:
+        (void)ramp_stop(r, e->a, 1u, e->floor_c);             /* next ISR preloads c_dec1 */
+        break;
+    default:
+        /* stretch (OI-ICD-07): the running and the preloaded period are regenerated, extend-only */
+        r->gen = (r->gen >= 2u) ? r->gen - 2u : 0u;
+        r->rem += 2u;
+        (void)ramp_stop(r, e->a, 0u, e->floor_c);
+        e->c1 = ramp_next(r);
+        e->c2 = (r->rem != 0u) ? ramp_next(r) : 0u;
+        break;
+    }
+}
+
+static void redit_hw(const redit_t *e)       /* inside CRIT_MOTION */
+{
+    if (e->kind == RE_STOP_STRETCH) {
+        hal_step_set_period_now(e->c1);
+        if (e->c2 != 0u) {
+            hal_step_set_period(e->c2);
+        } else {
+            hal_step_arm_last();
+            M.last_armed = true;
+        }
+    }
+}
+
+static void ramp_commit(redit_t *e)
+{
+    uint8_t k;
+    bool done = false;
+    for (k = 0u; k < 4u && !done; k++) {
+        ramp_t c;
+        uint32_t g;
+        bool la;
+        CRIT_BEGIN(HAL_CRIT_MOTION);
+        c = M.ramp;
+        la = M.last_armed;
+        CRIT_END();
+        g = c.gen;
+        if (e->kind == RE_STOP_STRETCH && la) {
+            return;                                           /* the running pulse is the last one */
+        }
+        redit_apply(&c, e);
+        CRIT_BEGIN(HAL_CRIT_MOTION);
+        if (M.ramp.gen == g && M.last_armed == la) {
+            M.ramp = c;
+            redit_hw(e);
+            done = true;
+        }
+        CRIT_END();
+    }
+    if (!done) {
+        CRIT_BEGIN(HAL_CRIT_MOTION);
+        if (!(e->kind == RE_STOP_STRETCH && M.last_armed)) {
+            redit_apply(&M.ramp, e);
+            redit_hw(e);
+        }
+        CRIT_END();
+    }
+}
+
 /* start a segment of n steps in dir; returns false if there is nothing to move (n == 0) */
 static bool seg_start(int8_t dir, uint32_t n, uint32_t v_um_s, uint32_t a_um_s2)
 {
@@ -408,14 +498,16 @@ void motion_jog(int32_t v_um_s, uint32_t a_um_s2, int32_t bound_um, uint32_t now
             M.target_um = um_of(end);
             M.v_um_s = v;
             M.a_um_s2 = a;
-            CRIT_BEGIN(HAL_CRIT_MOTION);
             if (!M.ramp.mono) {
-                if (new_speed) {
-                    ramp_set_speed(&M.ramp, sps(v), sps(a), sps(a));   /* on the fly (FW-MOT-005) */
-                }
-                ramp_set_total(&M.ramp, span(M.start, end, dir));
+                redit_t e;
+                e.kind = RE_JOG;
+                e.set_speed = new_speed;
+                e.v = sps(v);
+                e.a = sps(a);
+                e.d = e.a;
+                e.total = span(M.start, end, dir);
+                ramp_commit(&e);
             }
-            CRIT_END();
         }
     }
 }
@@ -460,30 +552,25 @@ static void ctrl_stop_apply(double alpha_stop)
         (void)hal_step_stop_now();                     /* clean halt, no STOPPING (ICD §6.5) */
         return;
     }
-    CRIT_BEGIN(HAL_CRIT_MOTION);
-    if (M.last_armed) {
-        M.ramp.mono = true;                            /* the running pulse is the last one anyway */
-    } else if (path == STOPPATH_ISR) {
-        (void)ramp_stop(&M.ramp, alpha_stop, 1u, M.ramp.last);   /* next ISR preloads c_dec1 */
-    } else {
-        /* stretch (OI-ICD-07): replace the running and the preloaded period, extend-only */
-        uint32_t c1, c2 = 0u;
-        M.ramp.gen = (M.ramp.gen >= 2u) ? M.ramp.gen - 2u : 0u;
-        M.ramp.rem += 2u;
-        (void)ramp_stop(&M.ramp, alpha_stop, 0u, run);
-        c1 = ramp_next(&M.ramp);
-        if (M.ramp.rem != 0u) {
-            c2 = ramp_next(&M.ramp);
-        }
-        hal_step_set_period_now(c1);
-        if (c2 != 0u) {
-            hal_step_set_period(c2);
+    {
+        redit_t e;
+        e.kind = (path == STOPPATH_ISR) ? RE_STOP_ISR : RE_STOP_STRETCH;
+        e.set_speed = false;
+        e.v = 0.0;
+        e.a = alpha_stop;
+        e.d = alpha_stop;
+        e.total = 0u;
+        e.floor_c = (path == STOPPATH_ISR) ? M.ramp.last : run;
+        e.c1 = 0u;
+        e.c2 = 0u;
+        if (M.last_armed) {
+            CRIT_BEGIN(HAL_CRIT_MOTION);
+            M.ramp.mono = true;                        /* the running pulse is the last one anyway */
+            CRIT_END();
         } else {
-            hal_step_arm_last();
-            M.last_armed = true;
+            ramp_commit(&e);
         }
     }
-    CRIT_END();
     if (!M.reversing) {
         g_fw.motion_state = (uint8_t)MS_STOPPING;
     }
@@ -727,9 +814,19 @@ void motion_tick(uint32_t now_ms)
         int32_t p = pos_now();
         int32_t end = p + steps_of((int32_t)g_fw.p.home.backoff_um);
         M.hreleased = true;                            /* START released stably: back off further */
-        CRIT_BEGIN(HAL_CRIT_MOTION);
-        ramp_set_total(&M.ramp, span(M.start, end, M.dir));
-        CRIT_END();
+        {
+            redit_t e;
+            e.kind = RE_TOTAL;
+            e.set_speed = false;
+            e.v = 0.0;
+            e.a = 0.0;
+            e.d = 0.0;
+            e.total = span(M.start, end, M.dir);
+            e.floor_c = 0.0f;
+            e.c1 = 0u;
+            e.c2 = 0u;
+            ramp_commit(&e);
+        }
     }
     if (M.active && M.running && !hal_step_running()) {
         segment_ended(now_ms);

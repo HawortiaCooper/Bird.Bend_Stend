@@ -196,7 +196,7 @@ def load(path: Path = PROTO_YAML_PATH) -> Protocol:
         if kind == "events" and any(not 1 <= i.value <= 0xFFFF for i in items):
             raise ProtoError(f"{tid}: event codes must be 1..65535")
         prefix = str(_req(td, "c_prefix", tid))
-        if not re.match(r"^[A-Z][A-Z0-9]*_$", prefix):
+        if not re.match(r"^[A-Z][A-Z0-9_]*_$", prefix):
             raise ProtoError(f"{tid}: bad c_prefix")
         tables.append(Table(tid, kind, str(_req(td, "title", tid)), str(td.get("icd", "")), prefix,
                             str(_req(td, "py_name", tid)), width, bool(td.get("wire", True)), cols,

@@ -64,6 +64,8 @@ void ramp_start(ramp_t *r, double f, double alpha_a, double alpha_d, double v_st
         r->cmin = r->chw;
     }
     r->ka = 1.0f;
+    r->sa = 1.0f;
+    r->sa1 = 0.0f;
     r->acc_on = true;
     r->rv = 0.0f;
     r->red = false;
@@ -96,7 +98,7 @@ uint32_t ramp_next(ramp_t *r)
             r->red = false;
         }
     } else if (r->acc_on) {
-        float p = r->ca / (sqrtf(r->ka) + sqrtf(r->ka - 1.0f));
+        float p = r->ca / (r->sa + r->sa1);
         if (p > c) {
             c = p;
             bind = 1u;
@@ -119,6 +121,8 @@ uint32_t ramp_next(ramp_t *r)
     }
     if (bind == 1u) {
         r->ka += 1.0f;
+        r->sa1 = r->sa;
+        r->sa = sqrtf(r->ka);
     } else if (bind == 2u) {
         r->rv -= 1.0f;
     }
@@ -155,6 +159,8 @@ static void accel_from_last(ramp_t *r)
     /* k0 = (f / c_last)^2 / (2 alpha) = Ca^2 / (4 c_last^2); next index k0 + 1 */
     double k0 = ((double)r->ca * (double)r->ca) / (4.0 * (double)r->last * (double)r->last);
     r->ka = (float)(k0 + 1.0);
+    r->sa = sqrtf(r->ka);
+    r->sa1 = sqrtf(r->ka - 1.0f);
     r->acc_on = true;
     r->red = false;
 }
@@ -181,6 +187,8 @@ void ramp_set_speed(ramp_t *r, double v_steps_s, double alpha_a, double alpha_d)
     r->sr_ok = false;
     if (r->last <= 0.0f) {                   /* not started yet: from rest */
         r->ka = 1.0f;
+        r->sa = 1.0f;
+        r->sa1 = 0.0f;
         r->acc_on = true;
         r->red = false;
         return;

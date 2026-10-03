@@ -146,6 +146,12 @@ bool payload_decode_request(uint8_t type, const uint8_t *p, uint16_t len, cmd_re
     case CMD_STOP:
         out->u.stop.mode = p[0];
         break;
+    case CMD_DIAG_MEAS:
+        out->u.meas.op = p[0];
+        out->u.meas.sel = p[1];
+        out->u.meas.a = le_get16(&p[2]);
+        out->u.meas.b = le_get32(&p[4]);
+        break;
     default:
         break;               /* LEN 0 commands: no fields */
     }

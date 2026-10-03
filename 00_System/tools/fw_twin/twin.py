@@ -90,10 +90,10 @@ class _Engine:
     """One engine process = one MCU power-on period."""
 
     def __init__(self, exe: Path, run_dir: Path, boot_ns: int, t0_us: int, cause: int, uid: str, hse_fail: bool,
-                 lsi_hz: float, seed: int, init: list[str]):
+                 lsi_hz: float, seed: int, init: list[str], hw_meas: bool = False, noinit: str = "0:0:0"):
         args = [str(exe), "--boot-ns", str(boot_ns), "--t0-us", str(t0_us), "--reset-cause", str(cause),
                 "--flash", str(run_dir / "flash.bin"), "--uid", uid, "--hse-fail", str(int(hse_fail)),
-                "--lsi", str(lsi_hz), "--seed", str(seed)]
+                "--lsi", str(lsi_hz), "--seed", str(seed), "--hw-meas", str(int(hw_meas)), "--noinit", noinit]
         self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
                                   cwd=str(run_dir))
         self.alive = True
@@ -133,7 +133,7 @@ class Twin:
     def __init__(self, clock: str = "lockstep", *, core: str = "auto", exe: Path | None = None,
                  run_dir: Path | None = None, fresh_flash: bool = True, scenario: dict | str | Path | None = None,
                  t0_us: int = 0, speed: float = 1.0, uid: str = "5457494E2D5549442D303031", seed: int = 1,
-                 boot_delay_ms: float = 2.0, log_max: int = 200_000):
+                 boot_delay_ms: float = 2.0, log_max: int = 1_000_000, hw_meas: bool = False):
         if clock not in ("lockstep", "realtime"):
             raise ValueError("clock must be lockstep or realtime")
         self.clock, self.speed, self.t0_us, self.uid, self.seed = clock, speed, t0_us, uid, seed
@@ -153,6 +153,11 @@ class Twin:
         self.boot_ns = 0
         self.eng: _Engine | None = None
         self.hse_fail, self.lsi_hz = False, 32000.0
+        self.hw_meas = hw_meas            # model of the HW_MEAS seam (DIAG_MEAS, REQ-C-M2-08)
+        self.noinit = "0:0:0"             # DIAG_MEAS .noinit carried over a reset
+        self.world_x_um: float | None = None   # world position carried over a reset
+        self.driver_cfg = {"dir_wiring_inverted": False, "pend_auto": False, "pend_lag_ms": 5.0}
+        self.loop_load_line = ""
         # logs
         self.wire_log: deque[dict] = deque(maxlen=log_max)
         self.sent: deque[dict] = deque(maxlen=log_max)
@@ -255,6 +260,12 @@ class Twin:
                   f"W spm {w.get('steps_per_mm', 800.0)}", f"W shift {self.shift_um}",
                   f"W afe cpn {w['cell_counts_per_n']}", f"W afe offset {w['load_offset_counts']}",
                   f"W afe seed {self.seed}", f"W lsi {self.lsi_hz}", self.spec_line]
+        lines.append(f"W dirwiring {int(self.driver_cfg['dir_wiring_inverted'])}")
+        lines.append(f"W pendauto {int(self.driver_cfg['pend_auto'])} {int(self.driver_cfg['pend_lag_ms'] * 1e6)}")
+        if self.world_x_um is not None:
+            lines.append(f"W x {self.world_x_um}")
+        if self.loop_load_line:
+            lines.append(self.loop_load_line)
         if getattr(self, "fault_rec", None):
             lines.append("W faultrec %x %x" % self.fault_rec)
             self.fault_rec = None
@@ -268,7 +279,7 @@ class Twin:
         self.boot_ns = t
         self.now = max(self.now, t)
         self.eng = _Engine(self.exe, self.run_dir, t, self.t0_us, cause, self.uid, self.hse_fail, self.lsi_hz,
-                           self.seed, self._world_lines())
+                           self.seed, self._world_lines(), self.hw_meas, self.noinit)
         self._sync_break()
         self.eng.flush()
         line = self.eng.readline()
@@ -329,13 +340,24 @@ class Twin:
         elif tag == "O":
             self.outputs[p[1]] = int(p[2])
         elif tag == "S":
-            self.conversions.append({"t_us": int(p[0]) / 1000, "fw_t_us": int(p[1]), "raw": int(p[2]),
-                                     "delivered": p[3] == "1"})
+            c = {"t_us": int(p[0]) / 1000, "fw_t_us": int(p[1]), "raw": int(p[2]), "delivered": p[3] == "1"}
+            if len(p) >= 6:               # REQ-C-M2-05: HX711 gain / channel and rate used for this conversion
+                gp = int(p[4])
+                c["gain_pulses"] = gp
+                c["channel_gain"] = {25: "A128", 26: "B32", 27: "A64"}.get(gp, str(gp))
+                c["rate_sps"] = int(p[5])
+            self.conversions.append(c)
+        elif tag == "N":
+            self.noinit = f"{p[0]}:{p[1]}:{p[2]}"
+        elif tag == "M" and p[0] == "stim":
+            self._stim(int(p[1]), int(p[2]), int(p[3]), int(p[4]), int(p[5]), int(p[6]))
         elif tag == "I":
             self.input_log.append({"t_us": int(p[0]) / 1000, "input": INPUT_NAME.get(int(p[1])), "level": int(p[2])})
         elif tag == "D":
             return ("D", int(p[0]))
         elif tag == "Z":
+            if len(p) >= 3:
+                self.world_x_um = float(p[2])           # the axis does not move across an MCU reset
             return ("Z", int(p[1]), p[0])  # type: ignore[return-value]
         elif tag == "!":
             self.errors.append(rest)
@@ -740,12 +762,55 @@ class Twin:
         if raw_script is not None:
             self._send("W afescript " + " ".join(str(int(v)) for v in raw_script[:256]))
 
+    def _a_driver(self, dir_wiring_inverted: bool | None = None, pend_auto: bool | None = None,
+                  pend_lag_ms: float | None = None):
+        """M2 (REQ-C-M2-06/07): DIR wiring / driver SW5 inverted in the world; automatic driver PEND model
+        (PEND inactive while pulsing and pend_lag_ms after the last pulse)."""
+        if dir_wiring_inverted is not None:
+            self.driver_cfg["dir_wiring_inverted"] = bool(dir_wiring_inverted)
+            self._send(f"W dirwiring {int(bool(dir_wiring_inverted))}")
+        if pend_auto is not None or pend_lag_ms is not None:
+            if pend_auto is not None:
+                self.driver_cfg["pend_auto"] = bool(pend_auto)
+            if pend_lag_ms is not None:
+                self.driver_cfg["pend_lag_ms"] = float(pend_lag_ms)
+            self._send(f"W pendauto {int(self.driver_cfg['pend_auto'])} {int(self.driver_cfg['pend_lag_ms'] * 1e6)}")
+        return {"ok": True, **self.driver_cfg}
+
+    def _stim(self, src: int, pol: int, hold_ms: int, n: int, period_ticks: int, seed: int) -> None:
+        """DIAG_MEAS STIM_RUN (model): n pulses on the selected input, each after a seeded random delay of
+        0…1 step period, active for hold_ms, then hold_ms idle (FW_test_plan §6.1 MT-7)."""
+        import random as _r  # noqa: PLC0415
+        rnd = _r.Random(seed)
+        name = {0: "estop", 1: "start", 2: "end", 3: "pause", 5: "drv_power"}.get(src)
+        t = self.now
+        period_ns = period_ticks * 1e9 / 90e6
+        active = 0 if pol else 1                       # electrical level during the pulse
+        for _ in range(n):
+            t += int(rnd.random() * period_ns)
+            t1, t2 = t, t + int(hold_ms * 1e6)
+            if name is None:                           # STIM self-test (src 8) or unmodelled source: stamp only
+                self.at(t1, lambda lv=active: self._send(f"W stimedge {lv}"), "stim")
+                self.at(t2, lambda lv=1 - active: self._send(f"W stimedge {lv}"), "stim")
+            else:
+                self.at(t1, lambda nm=name, lv=active: self._stim_level(nm, lv), "stim")
+                self.at(t2, lambda nm=name: self._stim_level(nm, None), "stim")
+            t = t2 + int(hold_ms * 1e6)
+
+    def _stim_level(self, name: str, level: int | None) -> None:
+        if name in ("start", "end"):
+            k = 0 if name == "start" else 1
+            self._send(f"W limf {k} {-1 if level is None else level}")
+        else:
+            lv = self._level(name) if level is None else level
+            self._send(f"W in {INPUT_ID[name]} {lv}")
+
     def _a_world_shift(self, um: float):
         self.shift_um += um
         self._send(f"W shift {um}")
 
     def _a_inject(self, fault: str, duration_ms: float | None = None, where: str = "main", cmd: str | None = None,
-                  what: str = "request", n: int = 1, ms: float = 0):
+                  what: str = "request", n: int = 1, ms: float = 0, us_per_pass: float = 500.0):
         end = VT_NEVER if duration_ms is None else self.now + int(duration_ms * 1e6)
         if fault == "step_fault":
             self._send("W stepfault 1")
@@ -759,6 +824,11 @@ class Twin:
             if where not in ("main", "tick", "isr1"):
                 return {"ok": False, "error": f"hang where={where}"}
             self._send(f"W hang {where} {min(end, 2**63)}")
+        elif fault == "loop_load":                   # M2 (REQ-C-M2-02): each main-loop pass takes us_per_pass
+            per = int(float(us_per_pass) * 1000)
+            until = VT_NEVER if duration_ms is None else end
+            self.loop_load_line = f"W loopload {per} {until}"
+            self._send(self.loop_load_line)
         elif fault == "isr_storm":                   # level-1 ISR storm (M2): = hang where=isr1
             if duration_ms is None:
                 return {"ok": False, "error": "isr_storm needs duration_ms"}
@@ -820,9 +890,12 @@ class Twin:
         if self.eng:
             self.eng.flush()
 
-    def _a_query(self, what: str, since_us: float = 0.0):
+    def _a_query(self, what: str, since_us: float = 0.0, clear: bool = False):
         def since(log):
-            return [x for x in log if x.get("t_us", x.get("first_us", 0)) >= since_us]
+            out = [x for x in log if x.get("t_us", x.get("first_us", 0)) >= since_us]
+            if clear:                     # REQ-C-M2-10: drain the log after reading (per-query ring)
+                log.clear()
+            return out
         y = self._engine_query()          # also drains the engine's pending log lines (I / L / E / O / W)
         if what == "world":
             return {"ok": True, "now_us": self.now_us, "fw_t_us": self.fw_t_us(), "boot_us": self.boot_ns / 1000,

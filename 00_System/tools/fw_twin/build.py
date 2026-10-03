@@ -31,7 +31,7 @@ README = HERE.parent / "README.md"
 CLION_GCC = Path(r"C:\Program Files\JetBrains\CLion 2025.3.2\bin\mingw\bin\gcc.exe")
 HAL_HEADERS = ["hal_uart.h", "hal_time.h", "hal_step.h", "hal_inputs.h", "hal_outputs.h", "hal_hx711.h",
                "hal_flash.h", "hal_sys.h"]
-ENGINE = [HERE / "engine" / "twin_engine.c", HERE / "engine" / "twin_seams.c"]
+ENGINE = [HERE / "engine" / "twin_engine.c", HERE / "engine" / "twin_seams.c", HERE / "engine" / "twin_meas.c"]
 DEFINES = ["-DFW_TWIN=1", "-DFW_VERSION_MAJOR=0", "-DFW_VERSION_MINOR=1", "-DFW_VERSION_PATCH=0",
            "-DPARAMS_GEN_WITH_KEYS=0",
            "-DFW_FEATURE_EXTRA=FEAT_TWIN"]          # INFO feature bit TWIN (02_FW/src/core/fw.h, no #ifdef in core)
@@ -128,6 +128,9 @@ def check_seams() -> list[str]:
     if not contract:
         return ["tools/README.md: seam v1 block not found"]
     want_p, want_s = prototypes(contract), structs(contract)
+    # seam additions announced in the README but not yet delivered by A (marked "PENDING-A" on their line)
+    pending = {m.group(1) for ln in contract.splitlines() if "PENDING-A" in ln
+               for m in [re.search(r"(\w+)\s*\(", ln)] if m}
     a = FW / "src" / "hal"
     present = [h for h in HAL_HEADERS if (a / h).exists()]
     if not present:
@@ -137,7 +140,8 @@ def check_seams() -> list[str]:
     diffs = [f"missing header 02_FW/src/hal/{h}" for h in HAL_HEADERS if h not in present]
     for k, v in want_p.items():
         if k not in have_p:
-            diffs.append(f"{k}: missing in A's headers (README: {v})")
+            if k not in pending:
+                diffs.append(f"{k}: missing in A's headers (README: {v})")
         elif have_p[k].replace(" ", "") != v.replace(" ", ""):
             diffs.append(f"{k}: A '{have_p[k]}' != README '{v}'")
     for k, v in want_s.items():

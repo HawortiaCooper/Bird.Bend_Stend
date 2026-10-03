@@ -40,6 +40,7 @@ typedef struct {
     float    cmin;             /* cruise period (ticks) */
     float    chw;              /* hardware minimum period (ticks) */
     float    ka;               /* next virtual accel index (real, >= 1) */
+    float    sa, sa1;          /* sqrt(ka), sqrt(ka - 1) (cache: one VSQRT per accel step) */
     bool     acc_on;           /* the accel term may still bind */
     float    rv;               /* virtual reduction index (real) */
     bool     red;              /* slowing down to cmin */

@@ -47,7 +47,7 @@ from bend_stand.core.errors import CommandTimeout, ConfirmationRequired, GateRef
 from bend_stand.core.gates import CLEAR_HINTS, g_disable, g_enable, g_motion, g_test_zero
 from bend_stand.core.link import CommandDropped, Lane
 from bend_stand.core.model import (
-    GateCode, GateItem, GateResult, MotionKind, MotionLimits, MoveDone, MoveOutcome, Severity,
+    INT_DF, INT_DS, GateCode, GateItem, GateResult, MotionKind, MotionLimits, MoveDone, MoveOutcome, Severity,
 )
 from bend_stand.core.observers import ReleasingFuture, failed_future
 from bend_stand.io import protocol as P
@@ -58,7 +58,7 @@ if TYPE_CHECKING:  # pragma: no cover
 log = logging.getLogger("bend_stand.core.motion")
 MS = 1_000_000
 Cmd = pg.Cmd
-DF, DS = pg.DataFlags, pg.DataStatus
+DF, DS = INT_DF, INT_DS
 JOG_REFRESH_NS = 80 * MS
 GUI_BEAT_MAX_MS = 300.0
 JOG_TIMEOUTS_MAX = 3
@@ -114,6 +114,8 @@ class MotionController:
         self._stop_cause: str | None = None
         self._enabling_until_ns = 0
         self._last_paused = False
+        self._done_ns = 0
+        self._done_pos_mm: float | None = None
 
     # ================================================================================ helpers
     @property
@@ -129,6 +131,12 @@ class MotionController:
     def jogging(self) -> bool:
         return self._jog is not None
 
+    def fw_moving(self) -> bool:
+        """MOVING from the newest DATA / STATUS, unless that indication is older than the last MOVE_DONE (the frame
+        after the MOVE_DONE may not have arrived yet)."""
+        d = self._dev
+        return bool(d.last_flags & DF.MOVING) and d.last_flags_ns > self._done_ns
+
     @property
     def busy(self) -> bool:
         """A motion command of this backend is running (manual move or homing)."""
@@ -137,6 +145,8 @@ class MotionController:
     def position_mm(self) -> float | None:
         """Commanded position: setpoint of the newest DATA frame, else STATUS ``pos_um``."""
         lt = self._be.pipeline.latest_copy()
+        if self._done_pos_mm is not None and lt.t_host_ns <= self._done_ns:
+            return self._done_pos_mm                  # MOVE_DONE newer than the newest DATA frame: final position
         if lt.t_host_ns and not math.isnan(lt.x_mm):
             return lt.x_mm
         st = self._dev.board
@@ -271,7 +281,7 @@ class MotionController:
             if act is not None and act.kind == "MOVE":
                 superseded, self._pending = self._pending, _Pending(target_mm, v, a, ticket)   # latest wins
                 send = False
-            elif act is not None or self._jog is not None or self._dev.last_flags & DF.MOVING:
+            elif act is not None or self._jog is not None or self.fw_moving():
                 return failed_future(GateRefused(GateResult((GateItem(GateCode.MOTION_ACTIVE, R, "axis moving"),))))
             else:
                 send = True
@@ -379,6 +389,7 @@ class MotionController:
                 (code == E.DRIVER_POWER and ev.arg == 0):
             self._drop(E(code).name)
         elif code == E.BOOT:
+            self._done_pos_mm = None
             with self._lock:
                 act, self._active = self._active, None
             self._drop("board reset")
@@ -391,6 +402,8 @@ class MotionController:
             reason = pg.MoveDoneReason(ev.arg).name
         except ValueError:
             reason = f"REASON_{ev.arg}"
+        self._done_ns = self._be.clock.monotonic_ns()
+        self._done_pos_mm = ev.value / 1000.0
         md = MoveDone(reason, ev.value / 1000.0, ev.value2, ev.t_us,
                       self._stop_cause if reason == "STOPPED" else None)
         self._stop_cause = None

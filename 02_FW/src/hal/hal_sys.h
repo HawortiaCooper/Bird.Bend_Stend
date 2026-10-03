@@ -8,12 +8,14 @@
  * Levels (pinout §4): HALT = PRIMASK, AFE / MOTION = BASEPRI 0x20, DATA = 0x30, TICK = 0x40.
  * Usage: CRIT_BEGIN(HAL_CRIT_DATA); ... CRIT_END();   (at most one per block scope)
  * Seam v1.2 (tools/README, ICD v0.5): hal_fault_record() added (BOOT EVENT value / value2).
+ * Seam v1.3 (ICD v0.6, D-40 c): hal_meas_cmd() added (DIAG_MEAS, measurement images only).
  * Implements: SAF-FW-018/019, FW-CFG-004, NFR-005, NFR-007, SYS-008
  */
 #ifndef HAL_SYS_H
 #define HAL_SYS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -27,6 +29,9 @@ uint16_t hal_stack_free_min(void);
 bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);   /* seam v1.2 (OI-FW-32): HardFault record of the
                                                           previous run (.noinit): true once after boot
                                                           if present, then cleared */
+size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max);   /* seam v1.3 (D-40 c):
+                                                          DIAG_MEAS forwarder; 64 = executed, 0 = no
+                                                          HW_MEAS in this build (main loop only) */
 
 typedef enum {
     HAL_CRIT_HALT = 0,     /* PRIMASK: everything, <= 0.2 us */

@@ -205,6 +205,8 @@ def check(st: SimCheckState, ftype: int, payload: bytes) -> tuple[str, int]:
         return "OK", 0
     if cmd == C.SET_VALID:
         return ("OK", 0) if payload[0] <= 1 else ("E_RANGE", 0)
+    if cmd == C.DIAG_MEAS:          # ICD v0.6 App. C: only HW_MEAS builds execute it (the simulator is no such build)
+        return "E_INTERNAL", int(pg.InternalDetail.NOT_IN_BUILD)
 
     # ---- stops, pause, clears ---------------------------------------------------------------------------
     if cmd == C.STOP:

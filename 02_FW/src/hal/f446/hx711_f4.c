@@ -136,9 +136,6 @@ void EXTI4_IRQHandler(void)
     if (s_hold || s_pd || !dout_low()) {
         return;                                      /* spurious / held */
     }
-#if defined(FW_DEBUG_PINS) && FW_DEBUG_PINS
-    gpio_write(GPIOC, PIN_DBG1_BIT, true);
-#endif
     EXTI->IMR &= ~L_DOUT;                            /* DOUT toggles with the data during the read */
     s_max_hi = 0u;
     raw24 = hx711_shift_in(s_pulses, &high);
@@ -154,8 +151,5 @@ void EXTI4_IRQHandler(void)
         s.status |= (uint8_t)AFES_MISSED_EDGE;
     }
     on_afe_sample(&s);
-#if defined(FW_DEBUG_PINS) && FW_DEBUG_PINS
-    gpio_write(GPIOC, PIN_DBG1_BIT, false);
-#endif
 }
 #endif

@@ -170,7 +170,7 @@ def test_tc_if_001_01_every_name_used_is_in_the_icd():
               "ResetCause": set(rc.RESET_CAUSE), "Source": set(rc.SOURCE)}
     uses = _attr_uses(_modules("core", "io", "calc", "gui") + [SRC / "__main__.py"], {"pg", "protocol_gen"},
                       set(tables))
-    assert len(uses) > 60
+    assert len(uses) > 40          # sanity floor of the scan (v0.3: B uses more local aliases; was > 60)
     retired = _retired_icd_names()
     missing = sorted(f"{e}.{m}" for e, m in uses if m not in tables[e] and m not in retired)
     assert not missing, missing
@@ -186,8 +186,6 @@ def _retired_icd_names() -> set[str]:
 
 
 @pytest.mark.req("IF-001", "SAF-SW-005")
-@pytest.mark.defect("SWD-M2-01")
-@pytest.mark.xfail(strict=True, reason="SWD-M2-01 open (B): core/gates.py:130 still evaluates IoBits.STOP_BTN")
 def test_tc_if_001_02_no_retired_icd_name_in_backend_or_gui():
     """CR-01 / D-36 (ICD v0.5): no backend / GUI module (simulator excluded) uses a retired ICD name — STOP_BTN /
     STOP_BUTTON are reserved, never sent, and must not drive a gate, indicator or text."""
@@ -201,7 +199,8 @@ def test_tc_if_001_02_no_retired_icd_name_in_backend_or_gui():
     assert not used, used
 
 
-_CR01_TEXT = re.compile(r"physical STOP|STOP/BREAK|STOP input|STOP button (?:active|pressed|released)", re.I)
+_CR01_TEXT = re.compile(r"physical STOP|STOP/BREAK|(?<![Ee]-)STOP (?:input|button (?:active|pressed|released))",
+                        re.I)                                  # "E-stop input / button" is the red E-stop: allowed
 
 
 def _user_strings(path: Path) -> list[tuple[int, str]]:
@@ -217,9 +216,6 @@ def _user_strings(path: Path) -> list[tuple[int, str]]:
 
 
 @pytest.mark.req("SAF-SW-005", "SW-STOP-002")
-@pytest.mark.defect("SWD-M2-01")
-@pytest.mark.xfail(strict=True, reason="SWD-M2-01 open (B): core/device.py:552 'use the physical STOP / E-stop', "
-                                       "core/gates.py:131 'STOP input active'")
 def test_tc_saf_sw_005_04_no_text_refers_to_a_physical_stop_button():
     """CR-01 / D-36: the only physical stop is the red E-stop (power cut); no operator text (indicator, gate, clear
     hint, alarm) may point to a physical STOP/BREAK button or STOP input (KL-07). Docstrings / comments excluded."""

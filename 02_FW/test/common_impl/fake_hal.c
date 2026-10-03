@@ -518,6 +518,19 @@ void fake_sample_st(uint32_t t_us, int32_t raw, uint8_t status)
 
 void fake_sample(uint32_t t_us, int32_t raw) { fake_sample_st(t_us, raw, 0u); }
 
+bool fake_meas_on;                                   /* emulate a HW_MEAS build */
+uint8_t fake_meas_last_op = 0xFFu;
+size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
+{
+    if (!fake_meas_on || n < 8u || max < 64u) {
+        return 0u;
+    }
+    memset(resp, 0, 64u);
+    fake_meas_last_op = req[0];
+    resp[0] = 1u;                                    /* INFO w0: variant MEAS */
+    return 64u;
+}
+
 bool fake_fault_valid;
 uint32_t fake_fault_pc, fake_fault_cfsr;
 bool hal_fault_record(uint32_t *pc, uint32_t *cfsr)
@@ -597,6 +610,7 @@ void fake_hal_reset(void)
     fake_rise_n = 0u;
     fake_step_skip_isr = false;
     fake_hx_kicks = 0u;
+    fake_meas_on = false;
     fake_fault_valid = false;
     s_rx_w = 0u;
     s_rx_r = 0u;

@@ -113,6 +113,17 @@ void hal_crit_exit(hal_crit_t saved)
     }
 }
 
+/* seam v1.3 (D-40 c): no HW_MEAS in this image -> 0 (the core answers DIAG_MEAS NOT_IN_BUILD);
+ * meas_f4.c overrides it in the measurement images */
+__attribute__((weak)) size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
+{
+    (void)req;
+    (void)n;
+    (void)resp;
+    (void)max;
+    return 0u;
+}
+
 /* seam v1.2 (OI-FW-32): the record of the previous run, once */
 bool hal_fault_record(uint32_t *pc, uint32_t *cfsr)
 {
