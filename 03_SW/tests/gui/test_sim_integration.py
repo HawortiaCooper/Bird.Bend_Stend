@@ -1,0 +1,220 @@
+"""WP-D7: the GUI on B's real ``Backend`` + in-process FW simulator (endpoint "sim"; D-06: no port is opened).
+
+G-36 (M1 part: connect → stream → plot → config), G-17 / G-18 / G-41 simulator variants (write statuses incl.
+MISMATCH via ``inject_store_mismatch`` and REJECTED via ``inject_nack``, REBOOT_REQUIRED, NVM save, file round
+trip), STOP / PAUSE / Resume / Clear stop on the simulator, perf smoke (informative, offscreen).
+
+The module is skipped while ``bend_stand.core.backend`` is not importable (B's WP-B11).
+
+Verifies: SYS-008, SW-PLT-003, SW-CFG-001, SW-CFG-002, SW-CFG-003, SW-CFG-004, SW-ACQ-001, SW-RT-002, SW-RT-005,
+SW-STOP-001, SW-STOP-003, SW-STOP-004, SAF-SW-005, NFR-001
+"""
+from __future__ import annotations
+
+import json
+
+import numpy as np
+import pytest
+from fakes import tick
+from PySide6.QtCore import Qt
+
+backend_mod = pytest.importorskip("bend_stand.core.backend")
+
+from bend_stand.core import protocol_gen as pg  # noqa: E402
+from bend_stand.core.api import BackendAPI, GateId  # noqa: E402
+from bend_stand.gui.dialogs import safe_dialog  # noqa: E402
+
+T_CONNECT_MS = 10000
+
+
+@pytest.fixture
+def sim_backend(tmp_path):
+    be = backend_mod.Backend(backend_mod.BackendSettings(sim_nvm_path=str(tmp_path / "nvm.json"),
+                                                         recordings_root=str(tmp_path / "rec")))
+    assert isinstance(be, BackendAPI)
+    be.start()
+    yield be
+    be.shutdown()
+
+
+@pytest.fixture
+def sim_window(make_window, sim_backend, qtbot):
+    win = make_window(sim_backend)
+    win.refresh.start()                                   # real 33 ms timer against the real backend
+    tab = win.connection_tab
+    tab.selector.set_endpoint("sim")
+    tab.connect_button.click()
+    qtbot.waitUntil(lambda: str(sim_backend.status().link.state.value) == "CONNECTED", timeout=T_CONNECT_MS)
+    qtbot.waitUntil(lambda: sim_backend.status().stream.on and sim_backend.status().board is not None,
+                    timeout=T_CONNECT_MS)
+    qtbot.waitUntil(lambda: tab.form.board_value("afe.rate_sps") is not None, timeout=T_CONNECT_MS)
+    return win
+
+
+def _status_of(form, key):
+    return form.status_of(key)
+
+
+@pytest.mark.req("SYS-008", "SW-PLT-003", "SW-ACQ-001", "SW-RT-002", "SW-RT-005")
+def test_connect_stream_plot(sim_window, sim_backend, qtbot) -> None:
+    """Verifies: SYS-008, SW-PLT-003, SW-ACQ-001, SW-RT-002, SW-RT-005 (G-36 M1) — connect through the GUI, the
+    stream runs, Plot 1 draws raw + status bits from data.snapshot, readouts show raw / rate, link counters grow,
+    the device line names the simulator FW; Stream toolbar button stops and restarts the stream."""
+    win = sim_window
+    tab = win.connection_tab
+    assert "Device: FW" in tab.device_label.text() and "✓" in tab.device_label.text()
+    assert tab.version_label.text().startswith("Version check: ✓")
+    plot = win.plot_dock
+    assert "bit.valid" in plot.tree.all_keys() and not plot.tree.is_available("F_N")
+    plot.tree.set_checked("raw", True)
+    plot.tree.set_checked("bit.moving", True)
+    def finite_points() -> int:
+        _x, y = plot.time_view.curves["raw"].items[0].getData()
+        return 0 if y is None else int(np.isfinite(y).sum())
+    qtbot.waitUntil(lambda: plot.updates > 5 and finite_points() > 40, timeout=5000)   # ≥ 0.25 s of 80 Hz data
+    assert plot.lanes.visible
+    qtbot.waitUntil(lambda: win.readout_dock.state_of("raw") == "OK", timeout=3000)
+    rate = float(win.readout_dock.value_text("rate_sps"))
+    assert 70.0 < rate < 90.0
+    qtbot.waitUntil(lambda: "frames" in tab.link_label.text() and "frames 0 " not in tab.link_label.text(),
+                    timeout=3000)
+    assert win.stream_button.isChecked()
+    win.stream_button.click()
+    qtbot.waitUntil(lambda: not sim_backend.status().stream.on and not win.stream_button.isChecked(), timeout=5000)
+    win.stream_button.click()
+    qtbot.waitUntil(lambda: sim_backend.status().stream.on and win.stream_button.isChecked(), timeout=5000)
+    assert win.indicator_bar.chip("LINK").level == "ok"
+    assert win.indicator_bar.chip("ESTOP").level == "ok"            # live data → known, not grey
+
+
+@pytest.mark.req("SW-CFG-001", "SW-CFG-003", "SW-CFG-004")
+def test_config_write_verify_nvm(sim_window, sim_backend, qtbot) -> None:
+    """Verifies: SW-CFG-001, SW-CFG-003, SW-CFG-004 (G-17 / G-41 sim) — board values equal the simulator; write &
+    verify → OK; injected store mismatch → MISMATCH; injected NACK → REJECTED; CFG dirty → Save to NVM → clean."""
+    win = sim_window
+    tab = win.connection_tab
+    form = tab.form
+    from bend_stand.gui.widgets.param_form import normalize
+    values = sim_backend.config.values()
+    metas = {m.key: m for m in sim_backend.config.metas()}
+    assert set(values) == set(form.keys())
+    for k, v in values.items():
+        assert form.board_value(k) == normalize(metas[k], v), k
+
+    def write(key, value, want):
+        form.set_edit_value(key, value)
+        qtbot.waitUntil(lambda: not tab._rule_timer.isActive(), timeout=2000)
+        tick(win)
+        assert tab.write_button.isEnabled(), tab.write_button.toolTip()
+        tab.write_button.click()
+        qtbot.waitUntil(lambda: form.status_of(key) == want, timeout=5000)
+
+    write("afe.settle_discard", 5, "OK")
+    assert form.board_value("afe.settle_discard") == 5
+    sim_backend.sim.inject_store_mismatch("afe.settle_discard", 7)
+    write("afe.settle_discard", 6, "MISMATCH")
+    sim_backend.sim.inject_nack("SET_PARAM", int(pg.Status.E_RANGE), 0x0104, 1)
+    write("afe.settle_discard", 4, "REJECTED")
+    assert "outside" in form.item_for("afe.settle_discard").toolTip(6)
+    qtbot.waitUntil(lambda: "dirty" in tab.cfg_label.text(), timeout=5000)
+    tab.save_nvm_button.click()
+    qtbot.waitUntil(lambda: tab.cfg_label.text() == "CFG: ● clean (RAM = NVM)", timeout=5000)
+
+
+@pytest.mark.req("SW-CFG-003")
+def test_live_rule_check_from_backend(sim_window, qtbot) -> None:
+    """Verifies: SW-CFG-003 (G-41 sim) — the backend's config.check marks a violation and blocks Write & verify."""
+    tab = sim_window.connection_tab
+    travel = tab.form.board_value("motion.v_max_travel_um_s")
+    tab.form.set_edit_value("motion.v_max_load_um_s", min(travel + 1000, 250000))
+    qtbot.waitUntil(lambda: "✗" in tab.rule_label.text(), timeout=3000)
+    tick(sim_window)
+    assert not tab.write_button.isEnabled()
+    tab.form.revert_edits()
+    qtbot.waitUntil(lambda: tab.rule_label.text() == "Rule check: ✓", timeout=3000)
+
+
+@pytest.mark.req("SW-CFG-003")
+def test_reboot_required_flow(sim_window, sim_backend, qtbot) -> None:
+    """Verifies: SW-CFG-003 (G-41 sim) — reboot-required write → REBOOT_REQUIRED + notice; Save & reboot (C-11) →
+    save then reboot; the GUI follows the board until the flag clears."""
+    win = sim_window
+    tab = win.connection_tab
+    tab.form.show_advanced.setChecked(True)
+    tab.form.set_edit_value("motion.pul_invert", True)
+    qtbot.waitUntil(lambda: not tab._rule_timer.isActive(), timeout=2000)
+    tick(win)
+    tab.write_button.click()
+    qtbot.waitUntil(lambda: tab.form.status_of("motion.pul_invert") == "REBOOT_REQUIRED", timeout=5000)
+    qtbot.waitUntil(lambda: "reboot_pending" in win.notice_strip.keys() and tab.reboot_button.isEnabled(),
+                    timeout=5000)
+    tab.reboot_button.click()
+    qtbot.mouseClick(tab.confirm_dialog.confirm_button, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: sim_backend.status().reboot_pending is False and
+                    str(sim_backend.status().link.state.value) == "CONNECTED", timeout=15000)
+    qtbot.waitUntil(lambda: "reboot_pending" not in win.notice_strip.keys(), timeout=3000)
+
+
+@pytest.mark.req("SW-CFG-002")
+def test_board_file_round_trip(sim_window, tmp_path, qtbot) -> None:
+    """Verifies: SW-CFG-002 (sim) — save the Edit column through the backend, reload into the Edit column only."""
+    tab = sim_window.connection_tab
+    path = str(tmp_path / "board.bbboard.json")
+    safe_dialog.FILE_DIALOG_HOOK[0] = lambda kind, cap, flt: path
+    tab.form.set_edit_value("afe.settle_discard", 9)
+    tab.save_file_button.click()
+    data = open(path, encoding="utf-8").read()
+    assert "afe.settle_discard" in data and "safety.zero_raw" not in json.dumps(json.loads(data))
+    tab.form.revert_edits()
+    tab.load_file_button.click()
+    assert tab.form.editor_value("afe.settle_discard") == 9 and tab.form.is_dirty("afe.settle_discard")
+    assert tab.form.board_value("afe.settle_discard") != 9
+
+
+@pytest.mark.req("SW-STOP-001", "SW-STOP-003", "SW-STOP-004", "SAF-SW-005")
+def test_stop_pause_resume_clear_on_simulator(sim_window, sim_backend, qtbot) -> None:
+    """Verifies: SW-STOP-001/003/004, SAF-SW-005 — toolbar STOP is sent; Pause → PAUSED chip + Resume button;
+    Resume clears it; app-shortcut HALT (global hotkey unavailable in M1) → HALT banner; Clear stop clears it."""
+    win = sim_window
+    qtbot.mousePress(win.stop_button, Qt.MouseButton.LeftButton)
+    assert "STOP sent (toolbar" in win.stop_banner.top_text()
+    qtbot.waitUntil(lambda: win.pause_button.isEnabled(), timeout=3000)
+    qtbot.mousePress(win.pause_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseRelease(win.pause_button, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: win.pause_button.text() == "▶ Resume", timeout=5000)
+    assert win.indicator_bar.chip("PAUSED").level == "warn"
+    qtbot.mouseClick(win.pause_button, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: win.pause_button.text() == "‖ Pause", timeout=5000)
+    assert win.app_shortcuts(), "M1 backend reports the global hotkey UNAVAILABLE → app shortcut expected"
+    win.app_shortcuts()[0].activated.emit()
+    qtbot.waitUntil(lambda: win.indicator_bar.chip("HALT").level == "alarm", timeout=5000)
+    assert "HALT latched" in " ".join(r.text for r in win.stop_banner.rows)
+    win.open_clear_stop()
+    dlg = win.dialogs["clear"]
+    qtbot.waitUntil(lambda: dlg.halt_button.isEnabled(), timeout=3000)
+    qtbot.mouseClick(dlg.halt_button, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: win.indicator_bar.chip("HALT").level == "ok", timeout=5000)
+    assert dlg.halt_result.text().startswith("cleared")
+    dlg.close()
+
+
+@pytest.mark.req("NFR-001")
+def test_perf_smoke_on_simulator(sim_window, qtbot, capsys) -> None:
+    """Verifies: NFR-001 (smoke, informative; binding at M3 on the reference PC) — real timer, real backend, raw +
+    setpoint + all status bits in Plot 1 for 5 s offscreen; frame interval and stage times recorded."""
+    win = sim_window
+    plot = win.plot_dock
+    for g in plot.tree.group_names():
+        if g.startswith("status"):
+            plot.tree.set_group_checked(g, True)
+    plot.tree.set_checked("raw", True)
+    plot.tree.set_checked("x_mm", True)
+    start = win.perf_stats()["ticks"]
+    qtbot.wait(5000)
+    ps = win.perf_stats()
+    with capsys.disabled():
+        print(f"\n[perf smoke sim, offscreen, 5 s] ticks {ps['ticks'] - start}, interval p50 "
+              f"{ps['interval_p50_ms']:.1f} ms p95 {ps['interval_p95_ms']:.1f} ms max {ps['interval_max_ms']:.1f} ms;"
+              f" plots p95 {ps['plots_p95_ms']:.2f} ms; status p95 {ps['status_p95_ms']:.2f} ms")
+    assert ps["ticks"] - start > 50 and ps["errors"] == {}
+    assert sim_window.backend.status().gates[GateId.STREAM_STOP].ok

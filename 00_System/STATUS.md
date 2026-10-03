@@ -61,4 +61,23 @@ From R4 (recommended defaults in R4 §14): Q-R4-01 **safety: holding E-stop (D-1
 - Validator E OBS-P1-09 (stale generators) closed — transient. SWD-P1-13 (R4 TV-L assumes 22 B frame; ICD = 26 B) → R4 erratum, ICD governs.
 - Open for the PO: REVIEW_PACKAGE §3 G1…G7.
 
-## P1 gate (PO, 2026-10-03) — ACCEPTED → D-35. Open: D-36 combined E-stop/STOP button semantics (PO question pending); G5 no scope → HW-gate measurement plan to be revised (Validator E, before HW gate); G6 lab PC spec before M3.
+## P1 gate (PO, 2026-10-03) — ACCEPTED → D-35. D-36 decided (one red STOP = E-stop with power cut; no physical holding STOP; PAUSE on separate panel) → **CR-01 at the M1 gate**; G5 no scope → HW-gate measurement plan to be revised (Validator E, before HW gate); G6 lab PC spec before M3.
+
+## Change requests
+| CR | Content | Applies | State |
+|---|---|---|---|
+| CR-01 | D-36: withdraw physical STOP/BREAK holding-stop button (SAF-FW-022, FW-SW-003 STOP part, PC7, `io.stop_active_level`, STOP_BTN, HALT src BUTTON); single red button = E-stop (power cut + sense); PAUSE on operator panel; R-01 resolved | SRS v0.5, ICD v0.5 + protocol/params regen, pinout/wiring, FW/SW/GUI designs, test plans | planned for M1 gate |
+| CR-02 | D-35 G5: HW-gate evidence without scope/logic analyzer (on-chip DWT/timer-capture loopback, PC-side timing) | FW_test_plan HG list, wiring check list, possibly a loopback jumper in pinout | planned before M2 |
+
+## M1 progress (Orchestrator, 2026-10-03)
+| Role | Result | Orchestrator re-run |
+|---|---|---|
+| A FW | WP0–WP7 done; FW_design v0.4 (§9.6 deviations) | `pio test -e native` 94/94; `pio run -e nucleo_f446re` SUCCESS, flash 24 676 B, RAM 6 536 B; check_map PASS |
+| C twin + integration | fw_twin builds A's code unmodified; vocabulary v2 M1 subset; 832 tools tests | integration vs FW twin: 43 passed, 4 skipped (stop timing needs motion → M2), 1 xfail (IF-C-M1-02) |
+| B SW backend | in progress | — |
+| D GUI | WP-D0…D7 done (connect/config tab/toolbar/indicators/plot dock; smoke `--sim` 80.4 SPS, 0 lost); SW_design_GUI v0.3.1 §15.1 as-built | GUI suite offscreen 163/163 |
+
+M1-gate queue: IF-C-M1-02 meaning of ALM/PEND/DRV_PWR bits while FEAT_DRV_SIGNALS = 0 (ICD v0.5, then A/B align) · OI-C-M1-03 `hal_wdg_set_timeout` semantics (nominal vs worst-case LSI) + boot-time call (A) · `afe_sample_t.status` bit meanings (A) · seam meanings for uart_tx_free/peek cursor/flash erase+program/wdg window → tools/README (C) · SW-C-M1-01 sim server cannot select the M1 feature mask (B) · OI-FW-34 validator native env vs A's fake_hal (E) · OI-FW-32 HardFault-record getter seam v1.2 (M2) · CR-01 (D-36) · CR-02 (no scope).
+- M1-gate queue (from D): GRQ-B-20 bit-channel prefix in core.api · GF-18 latch source NONE → None · GF-19 HALT clear hint mentions STOP button (CR-01) · GF-20 status() rebuild per call (relevant for NFR-001 at M3) · GF-21 ClearResult.cleared after HALT_CLEAR.
+- **Incident 2026-10-03 (Implementer B):** a PowerShell stop filter `*fw_twin*` force-killed 3 Thrust_Stand_HAW twin processes (python PIDs 8224, 34160, 37812 + fw_twin.exe children; command lines pointed at old pytest temp dirs → probably orphans). Nothing written to Thrust_Stand_HAW. Corrective action: role rule "stop only processes you started, by recorded PID" added to all agents. Reported to the PO.
+| B SW backend | WP-B0…B11 done, WP-B12 partial (simple sim motion); SW_design v0.3.2 as-built; unit 1869 passed fixed + random; 509 vectors replayed ×2; 3000-case differential 0 divergences; branch coverage 93 %; headless smoke vs sim and vs FW twin (80.00 SPS, 0 errors) | see below |

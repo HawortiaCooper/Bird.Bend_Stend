@@ -20,6 +20,6 @@ Produce guidelines implementers can act on: cite datasheet sections / sources / 
 - Toolchain: Python 3.14, project venv `.venv` (`.venv\Scripts\python`), STM32CubeCLT 1.20 arm-none-eabi-gcc.
 - Other role agents may be editing the tree concurrently; if a result looks like a half-applied edit, re-run before reporting.
 - Scratchpad: work only in your own subfolder of the session scratchpad named after your role (e.g. `scratchpad/<role>/`); never delete or overwrite other folders.
-- Processes: stop every process you start before you hand back; never leave a background command running or a command waiting for stdin.
+- Processes: stop every process you start before you hand back; never leave a background command running or a command waiting for stdin. **Stop only processes you started, by the exact PID you recorded at start — never kill by name, image or command-line pattern** (other sessions, e.g. Thrust_Stand_HAW, run the same tool names such as `fw_twin.exe`/`python`).
 - Do not commit; the Orchestrator commits at gates. Do not contact the product owner: return results to the Orchestrator.
 - Final message: what you changed (files), evidence (commands + pass/fail counts), open items/questions with IDs and addressee.

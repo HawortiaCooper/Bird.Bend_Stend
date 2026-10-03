@@ -12,7 +12,8 @@ Python ≥ 3.11, standard library + PyYAML (generators only). Use the project ve
 | `ref_cmdcheck.py` | Reference acceptance model of ICD §4–§6 (check order, BLOCK mask, busy, clears, SET_PARAM checks, hard rules). Acceptance only, no execution. |
 | `gen_vectors.py` | **The single vector generator** → `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (M1); `vectors/motion_vectors.json` (R4 TV-M) is planned for M2 in the same generator. |
 | `vectors/` | Generated shared vectors (never hand-edited). |
-| `tests/` | pytest proving the codec, the model and the generators against the vectors. |
+| `fw_twin/` | **FW host twin** (P2/M1): `build.py` (host gcc build of A's unmodified `02_FW/src/{pure,core,gen}` + twin seams), `engine/` (C: scheduler, seam implementations, world model), `twin.py` (launcher: virtual time, TCP ports, vocabulary v2, logs; Python API `Twin` / `TwinLink`), `contract/` (seam v1 header copies, used only while A's headers are absent), `probe/` (harness probe core — **not the FW**). See "FW host twin — how to run it" below. |
+| `tests/` | pytest proving the codec, the model and the generators against the vectors; `test_fw_twin.py` = twin harness self-tests (probe core). |
 
 ## Regenerate (Integrator, after every params.yaml / ICD change)
 
@@ -131,7 +132,13 @@ void hal_wdg_kick(void);  void hal_wdg_set_timeout(uint32_t ms);
 uint8_t hal_reset_cause(void);            /* RST_* (proto_gen.h) */
 void hal_reset(void);  void hal_uid(uint8_t uid[12]);  bool hal_clk_fallback(void);
 uint16_t hal_stack_free_min(void);
-/* critical sections: CRIT_HALT, CRIT_AFE, CRIT_MOTION, CRIT_DATA, CRIT_TICK (no-ops / mutex in the twin) */
+/* critical sections (seam v1.1, A's proposal adopted in P2/M1): HALT = PRIMASK, AFE/MOTION = BASEPRI 0x20,
+   DATA = 0x30, TICK = 0x40; no-ops in the twin (single thread, ISRs never preempt; nesting checked) */
+typedef enum { HAL_CRIT_HALT = 0, HAL_CRIT_AFE = 1, HAL_CRIT_MOTION = 2, HAL_CRIT_DATA = 3, HAL_CRIT_TICK = 4 } hal_crit_level_t;
+typedef uint32_t hal_crit_t;
+hal_crit_t hal_crit_enter(hal_crit_level_t level);
+void       hal_crit_exit(hal_crit_t saved);
+/* usage: CRIT_BEGIN(HAL_CRIT_DATA); ... CRIT_END();  (macros in hal_sys.h) */
 ```
 
 | Seam | Target implementation | Twin implementation (virtual time) |
@@ -143,17 +150,91 @@ uint16_t hal_stack_free_min(void);
 | `hal_outputs` | GPIO | levels recorded for `query` |
 | `hal_hx711` | EXTI on DOUT + bit-bang (`hx711_seq.h`, Thrust origin) | sample source from the load model at rate·(1+ε); `hold` = no samples delivered; `kick` = no-op; gain pulses per read recorded |
 | `hal_flash` | F4 sector erase / word program | file `flash.bin` (persists across twin resets); power cut injectable after program word n / during erase k; write counter |
-| `hal_sys` | IWDG, RCC, SCB | IWDG model (timeout from `hal_wdg_set_timeout`, LSI selectable), reset = process-internal restart with the selected cause, HSE-fail flag |
+| `hal_sys` | IWDG, RCC, SCB | IWDG model (timeout from `hal_wdg_set_timeout`, LSI selectable), reset = engine process restart by `twin.py` with the selected cause (flash kept, frames in flight cut), HSE-fail flag; `hal_crit_*` no-ops (nesting checked) |
 
 Rules for A: the protocol, command check, state machines, NVM codec, ramp planner and safety logic call only
 these seams (no direct register access outside `src/hal/`); every seam call that the twin cannot serve
 deterministically takes `t_us` as an argument or reads `hal_time_us()`. FW-side debug hooks are not needed:
 the twin keeps the seam-call log and the edge log itself (OI-FW-31).
 
-### Twin build and control (Integrator owns `00_System/tools/fw_twin/`, P2/M1)
-`build.py` compiles the FW sources + twin seams with the host gcc (CLion MinGW, R3 §3.4) into `fw_twin.exe`;
-`fw_twin.exe --port 5760 --ctl 5761 --scenario <file.json> --clock lockstep|realtime [--t0-us <u32>]`
-(`--t0-us` = virtual start time, to test the 2³² µs wrap). Ports: `PROTO_TWIN_TCP_PORT` / `PROTO_TWIN_CTL_PORT`.
+### FW host twin — how to run it (Integrator, `00_System/tools/fw_twin/`, P2/M1)
+
+```powershell
+.venv\Scripts\python 00_System\tools\fw_twin\build.py                  # --core auto: fw if 02_FW/src/core/*.c exists, else probe
+.venv\Scripts\python 00_System\tools\fw_twin\build.py --core fw        # build\fw_twin.exe  (A's firmware)
+.venv\Scripts\python 00_System\tools\fw_twin\build.py --check-seams    # A's hal_*.h == the seam v1 block above?
+.venv\Scripts\python 00_System\tools\fw_twin\twin.py --port 5760 --ctl 5761 --clock realtime      # SW: tcp://127.0.0.1:5760
+.venv\Scripts\python 00_System\tools\fw_twin\twin.py --clock lockstep --scenario my.simscn.json [--t0-us 0xFFFB6C20]
+.venv\Scripts\python -m pytest 00_System\tools\tests\test_fw_twin.py -q                      # harness self-tests (probe)
+.venv\Scripts\python -m pytest 03_SW\tests\integration -q                                    # SW <-> twin (A's FW)
+$env:BEND_TWIN_CORE="probe"; .venv\Scripts\python -m pytest 03_SW\tests\integration -q       # harness check only
+```
+
+- **Build** (`build.py`): host gcc = CLion MinGW 13.1 (CLAUDE.md; else `gcc` on PATH or `$env:TWIN_GCC`), `-std=c11
+  -O2 -DFW_TWIN=1 -DFW_VERSION_*` (as `platformio.ini`) `-DPARAMS_GEN_WITH_KEYS=0 -DFW_FEATURE_EXTRA=FEAT_TWIN`
+  (A's `core/fw.h` adds it to the INFO feature mask; no `#ifdef` in the core, TC-SYS-008-01). Sources compiled **in place,
+  unmodified**: `02_FW/src/pure/*.c`, `src/core/*.c`, `src/gen/*.c` + `fw_twin/engine/*.c`; includes `02_FW/include`,
+  `src`, `src/{pure,gen,core}` and `src/hal` (A's seam headers; `fw_twin/contract/` while they are absent).
+  Log `build/build_<core>.log` (gcc command, warnings, seam check). `twin.ensure_built()` rebuilds when a source is
+  newer than the exe. The core must provide `app_init()`, `app_loop()` and the callbacks `core_tick_1ms`,
+  `step_isr`, `on_input_edge`, `on_afe_sample` (FW_design §3.2, §4.2, §8.1).
+- **Architecture** (lean, R3 §3.6: no register emulation): `build/fw_twin.exe` = engine + FW, a slave process
+  that runs only when `twin.py` advances the virtual clock (stdin/stdout line protocol, `engine/twin_engine.c`
+  header). `twin.py` owns virtual time, the TCP data port (one client; a new connection replaces the old one,
+  bytes go to the FW at the current virtual time), the JSON-lines control port, the logs and the timed actions.
+  One engine process = one MCU power-on period; a reset ends the process and `twin.py` boots a new one after
+  2 ms (`boot_delay_ms`) with the reset cause, the same `flash.bin` and the replayed world state.
+- **Clocks**: `lockstep` — virtual time moves only on `clock` actions / `Twin.advance_*()` (deterministic: two
+  runs give identical wire logs); `realtime` — `twin.py` advances virtual time with the wall clock × `--speed`
+  (for B's backend over TCP). Execution rule (FW_design §8.2): ISR callbacks run atomically at their virtual time
+  in NVIC order (inputs 0/1, step 2, sample 3, tick 4, TX-done 5), the main loop runs once after every virtual
+  instant with an event. A main-loop pass takes no virtual time except flash operations (CPU stall: erase 500 ms,
+  16 µs per programmed word); interrupts falling into a stall are taken after it (input fixed reactions happen
+  at once, their core callback is deferred), the TX frame on the wire completes, the next one starts after the
+  stall. A pass with > 2·10⁶ `hal_time_*` calls is a busy-wait → reported, treated as a hang (IWDG reset).
+- **Seam models** (constants = FW_design §2.5): TX classes D 2 frames / 52 B, R 1 024 B, E 16 frames / 384 B;
+  wire order D > R > E; 92 160 B/s, byte i of a frame ends at `t0 + ceil((i+1)·10⁹/92160)` ns (RX the same);
+  RX ring 2 048 B (overrun counted, reader lapped). Step: f_tick 90 MHz, pulse at the end of each period
+  (PWM mode 2), first rising edge ≥ `dir_setup` after `hal_step_start`; at each period end the count moves,
+  the next period starts with the preload, then `step_isr()` is called (`.period` → preload, `.last` → the
+  period just started is the last, `.stop` → halt now); `stop_now` CLEAN (a pulse in its high phase completes),
+  `abort` TRUNCATE (pulse cut, not counted, POS_UNCERTAIN in `query pulses`). ENA electrical level
+  = `!enabled ^ ena_invert`. Inputs (electrical, 1 = pin high, pinout §1): E-stop open = 1, limits active = 1,
+  PAUSE pressed = 0 (NO), ALM active or driver unpowered = 1, PEND in position = 1, DRV_PWR present = 0; a broken
+  wire reads 1 on every input; HAL fixed reactions: E-stop open → `hal_step_abort()` + ENA disabled, limit
+  active → `hal_step_stop_now()`; every EXTI-input edge calls `on_input_edge` (lines never masked, `rearm` no-op);
+  ALM / PEND / DRV_PWR are only polled. AFE: 80 SPS from reset (RATE pull-up), `hal_rate_pin` /
+  `hal_hx711_config` select 10/80 SPS, conversions at `1/(sps·(1+rate_error))`, raw = round-half-away(offset +
+  `cell_counts_per_n`·F(x) + N(0, noise)) clamped to the rails, `afe_sample_t.status` = 0 (bit 0 = the
+  `sck_overrun` symptom, semantics to be confirmed by A); `hold` = conversions continue, none delivered.
+  Flash: sectors 1+2 (0x0800 4000…0x0800 BFFF) in `flash.bin`, program = AND (a 0→1 bit returns false), sector =
+  1/2 or an address in it. IWDG armed by the first kick / `set_timeout`; `hal_wdg_set_timeout(ms)`: `ms` = worst-case timeout (slowest LSI 17 kHz), the twin fires after `ms·17000/LSI` (default LSI 32 kHz, default 90 ms → 47.8 ms = the target run window; semantics to be confirmed by A, OI-C-M1-03).
+  `hal_uid` = `--uid` (default "TWIN-UID-001"), `hal_stack_free_min` = 3072 (no stack painting).
+- **D-36**: the separate STOP/BREAK button input is **not modelled** (electrical level 0 = released); `button
+  stop`, `wire stop`, `chatter stop` answer `{"ok": false}` until ICD v0.5 (CR-01) retires the names.
+- **Python API** (validators, integration tests): `Twin(clock, core|exe, run_dir, scenario, t0_us, speed)`,
+  `advance_us/ms/to`, `act(...)` (= control port), `feed_rx(bytes)`, `read_client()`, `serve(port, ctl)`,
+  `fw_t_us()`, logs `wire_log`, `sent`, `edges`, `seam_log`, `conversions`, `input_log`, `resets`;
+  `TwinLink(twin)` = in-process PC side on `ref_codec` (oracle, tests only): `send(name, fields, at_us=)`,
+  `cmd(name, fields)`, `poll()`, `data()`, `events()`, `find(name, seq)`.
+- **Probe core** (`probe/probe_core.c`, `--core probe`): a small ICD-shaped stand-in (link, parameters, a
+  power-safe record log, stream, SET_VALID, stop/clear latches, and the probe-only TYPE 0x3F step train) used to
+  self-test the harness and the integration tests before A's core exists. **Never M1 evidence** (INFO build string
+  `PROBE-NOT-FW`).
+
+**Vocabulary v2 in the twin (M1 subset complete):** all M1 actions are implemented — `estop` (bounce,
+`drv_power_follows`, `k1_delay_ms`: the driver power also returns `k1_delay_ms` after the E-stop closes), `drv_power`,
+`button` (pause), `limit` (forced / position), `alm`, `pend`, `specimen` (none / spring / bilinear / break;
+relaxation not yet: M3), `load_offset`, `afe` (all arguments), `inject` (`tx_congestion`, `link_silence`,
+`rx_corrupt`, `hang` main/tick, `step_fault` = the next step ISR is skipped, per-command `drop_next` /
+`duplicate_next` / `delay_next` / `corrupt_next` on requests and responses), `rx_bytes` (`at_us` = start of the
+first byte, world µs), `on_frame` (after the last byte of the nth matching request), `on_event` (after the last
+byte of the nth matching EVENT on the wire), `flash`, `clock`, `reset`, `query` (`world`, `pulses`, `outputs`,
+`edges`, `seam_log`, `wire_log`, `sent`, `flash`); also `wire`, `chatter`, `world_shift`, `iwdg`, `clk`.
+Not yet: `inject isr_storm` / `where: isr1` (M2). Twin-only `query` extensions: `conversions` (every HX711
+conversion: world `t_us`, FW `fw_t_us`, raw, delivered) and `inputs` (electrical input changes). Times in logs
+are world µs since the twin start (float, ns resolution); `wire_log` `first_us` = start of the first byte,
+`last_us` = end of the last byte.
 
 ## Shared simulator / twin world-control vocabulary v2 (F-B-06, DEF-P1-03) — names FROZEN (ICD v0.4)
 
