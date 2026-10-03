@@ -1,6 +1,6 @@
 # Project status
 
-**Phase:** P1 Specification — **package complete, awaiting product-owner review** (`00_System/REVIEW_PACKAGE.md`) · baseline SRS v0.4.1 (172 req), ICD v0.4.1, params dict v3 (0xF0376293), FW_design v0.3, SW_design v0.3.1, SW_design_GUI v0.3, pinout/wiring v0.3, FW/SW test plans v0.1 · validator verdicts FW/SW = YES WITH CONDITIONS · traceability 172/172 designed + planned · **Date:** 2026-10-03
+**Phase:** **P2 Implementation — M1 (Link & skeleton) in progress** (P1 gate passed 2026-10-03, D-35) · baseline SRS v0.4.1, ICD v0.4.1, params dict v3 (0xF0376293) · D-06 in force (no hardware) · **Date:** 2026-10-03
 
 ## P0 gate (Orchestrator, 2026-10-03) — ACCEPTED
 R1–R4 written; conflicts resolved: (a) Stefan step-timer error: checked `Stefan/FW/stanok/Core/Src/main.c:136-158` + `tim.c:45` → TIM2 84 MHz / (9+1) = 8.4 MHz vs assumed 10 MHz → 16 % slow (R1/R4 correct, R2's 6.7 % ignores the prescaler); irrelevant for us (D-09). (b) Step timing: SRS takes R2's conservative defaults (≥ 10 µs high/low, ≤ 50 kHz, DIR setup 20 µs) as parameters; R4's TIM2 PWM-mode-2 scheme stays (CCR scaled). Key safety finding R2 §8: motor force ≈ 9 kN ≫ cell safe overload 2.35 kN → FW per-sample load limit is safety-critical.
@@ -60,3 +60,5 @@ From R4 (recommended defaults in R4 §14): Q-R4-01 **safety: holding E-stop (D-1
 - `00_System/tools/gen_traceability.py` (Orchestrator) → `specs/TRACEABILITY.md`: 172 req, 0 without design, 0 without TC; FW 129 / SW 167 TC IDs.
 - Validator E OBS-P1-09 (stale generators) closed — transient. SWD-P1-13 (R4 TV-L assumes 22 B frame; ICD = 26 B) → R4 erratum, ICD governs.
 - Open for the PO: REVIEW_PACKAGE §3 G1…G7.
+
+## P1 gate (PO, 2026-10-03) — ACCEPTED → D-35. Open: D-36 combined E-stop/STOP button semantics (PO question pending); G5 no scope → HW-gate measurement plan to be revised (Validator E, before HW gate); G6 lab PC spec before M3.
