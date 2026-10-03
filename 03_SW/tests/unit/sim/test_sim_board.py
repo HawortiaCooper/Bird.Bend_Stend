@@ -205,18 +205,15 @@ def test_latches_and_events() -> None:
     cl.ctl.act("button", name="pause", pressed=True)
     cl.run(5)
     cl.ctl.act("button", name="pause", pressed=False)
-    cl.run(5)
+    cl.run(25)                                           # re-armed after a stable release of io.release_ms
     assert cl.ev("PAUSED")[0].arg == pg.Source.BUTTON
     cl.ctl.act("button", name="pause", pressed=True)
     cl.run(5)
     assert cl.ev("RESUME_REQUEST")
-    cl.ctl.act("button", name="stop", pressed=True)
-    cl.run(5)
-    assert cl.ev("HALT_SET")[0].arg == pg.Source.BUTTON
+    assert not cl.ctl.act("button", name="stop", pressed=True)["ok"]     # retired (ICD v0.5, D-36)
+    assert cl.cmd(Cmd.HALT).ok and cl.ev("HALT_SET")[0].arg == pg.Source.PC
     r = cl.cmd(Cmd.RESUME)
     assert (r.status_name, r.detail) == ("E_STATE", int(pg.Block.HALT))
-    cl.ctl.act("button", name="stop", pressed=False)
-    cl.run(30)
     assert cl.cmd(Cmd.HALT_CLEAR).ok and cl.ev("PAUSE_CLEARED")[0].arg == pg.PauseClearedReason.HALT_CLEAR
     cl.ctl.act("limit", name="end", active=True)
     cl.run(5)
@@ -254,7 +251,10 @@ def test_simple_motion_home_move_jog_stop() -> None:
     _enable(cl)
     cl.cmd(Cmd.SET_PARAM, P.build_set_param("home.v_fast_um_s", 20000))
     assert cl.cmd(Cmd.HOME, b"\x00").ok
-    cl.run(8000)
+    for _ in range(40):                                  # fast seek, back-off, slow approach, move to 0
+        cl.run(1000)
+        if cl.ev("HOMED"):
+            break
     assert cl.ev("HOMED") and cl.ev("MOVE_DONE")[-1].arg == pg.MoveDoneReason.TARGET and cl.b.homed
     assert cl.b.pos_um == 0
     r = cl.cmd(Cmd.MOVE_ABS, P.build_request(Cmd.MOVE_ABS, target_um=10_000, v_um_s=20_000, a_um_s2=0))
@@ -270,13 +270,13 @@ def test_simple_motion_home_move_jog_stop() -> None:
     assert cl.cmd(Cmd.JOG, P.build_request(Cmd.JOG, v_um_s=-2000, a_um_s2=0, bound_um=pg.JOG_NO_BOUND)).ok
     cl.run(600)
     assert cl.ev("STOPPED")[-1].arg == pg.StopCause.JOG_DEADMAN and not cl.b.motion
-    # immediate STOP while moving → STOPPED + MOVE_DONE STOPPED + POS_UNCERTAIN
+    # immediate STOP while moving → STOPPED + MOVE_DONE STOPPED; CLEAN halt: exact count, no POS_UNCERTAIN
     cl.cmd(Cmd.MOVE_ABS, P.build_request(Cmd.MOVE_ABS, target_um=50_000, v_um_s=20_000, a_um_s2=0))
     cl.run(200)
     cl.cmd(Cmd.STOP, b"\x00")
     cl.run(20)
     assert cl.ev("STOPPED")[-1].arg == pg.StopCause.PC_STOP and cl.ev("MOVE_DONE")[-1].arg == pg.MoveDoneReason.STOPPED
-    assert cl.data[-1].status & DS.POS_UNCERTAIN
+    assert not cl.data[-1].status & DS.POS_UNCERTAIN and cl.ev("MOVE_DONE")[-1].value2 == cl.b.steps
     # PAUSE while moving: controlled stop, latch blocks motion
     cl.cmd(Cmd.MOVE_ABS, P.build_request(Cmd.MOVE_ABS, target_um=60_000, v_um_s=20_000, a_um_s2=0))
     cl.run(200)
@@ -346,12 +346,12 @@ def test_per_command_faults_and_timed_actions() -> None:
     assert cl.seq in cl.resp                             # processed 20 ms late
     cl.ctl.act("inject", fault="duplicate_next", cmd="GET_STATUS", what="request")
     cl.cmd(Cmd.GET_STATUS)
-    cl.ctl.act("on_frame", cmd="RESUME", nth=1, delay_us=2000, then={"action": "button", "name": "stop",
+    cl.ctl.act("on_frame", cmd="RESUME", nth=1, delay_us=2000, then={"action": "button", "name": "pause",
                                                                        "pressed": True})
     cl.cmd(Cmd.RESUME, wait=1)
-    assert not cl.b.world.stop_btn
+    assert not cl.b.world.pause_btn
     cl.run(3)
-    assert cl.b.world.stop_btn                           # ran 2 ms (virtual) after the RESUME was received
+    assert cl.b.world.pause_btn                           # ran 2 ms (virtual) after the RESUME was received
     cl.ctl.act("on_event", code="ALM_CHANGED", delay_us=1000, then={"action": "pend", "active": False})
     cl.ctl.act("alm", active=True)
     cl.run(5)

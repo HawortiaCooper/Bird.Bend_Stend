@@ -131,14 +131,17 @@ static void afe_conversion(void)
     T.afe_conv_n++;
     int32_t raw = afe_raw();
     bool deliver = !T.afe_hold;
-    if (T.afe_miss_next) { T.afe_miss_next--; deliver = false; }
-    if (T.afe_drop_every && T.afe_conv_n % T.afe_drop_every == 0u) deliver = false;
+    bool missed = false;
+    if (T.afe_miss_next) { T.afe_miss_next--; deliver = false; missed = true; }
+    if (T.afe_drop_every && T.afe_conv_n % T.afe_drop_every == 0u) { deliver = false; missed = true; }
     uint32_t t_us = tw_fw_us(T.now);
     tw_out("S %llu %lu %ld %d", (unsigned long long)T.now, (unsigned long)t_us, (long)raw, deliver);
-    if (!deliver) return;
+    if (!deliver) { if (missed) T.afe_missed_flag = true; return; }
     T.pend_sample.t_us = t_us; T.pend_sample.raw = raw; T.pend_sample.pos = T.count;
-    T.pend_sample.st = T.afe_sck_overrun ? 1u : 0u;
-    T.afe_sck_overrun = false;
+    /* afe_sample_t.status (tools/README seam semantics, protocol.yaml afe_sample_status):
+     * bit 0 SCK_OVERRUN, bit 1 MISSED_EDGE (>= 1 DOUT-ready edge missed before this sample) */
+    T.pend_sample.st = (uint8_t)((T.afe_sck_overrun ? 1u : 0u) | (T.afe_missed_flag ? 2u : 0u));
+    T.afe_sck_overrun = false; T.afe_missed_flag = false;
     T.sample_pending = true;
 }
 
@@ -198,6 +201,7 @@ static vt_t next_event(void)
     }
     if (T.step_running) t = min_t(t, T.step_high ? T.step_end : T.step_rise);
     if (T.wdg_armed) t = min_t(t, T.wdg_deadline);
+    if (T.storm_until > T.now) t = min_t(t, T.storm_until);
     return t;
 }
 
@@ -211,14 +215,18 @@ static void dispatch_now(void)
         twin_step_event();
     }
     if (afe_converting() && T.next_sample <= T.now) afe_conversion();
-    if (T.sample_pending && !T.in_stall) deliver_sample();
+    if (T.sample_pending && !T.in_stall && T.now >= T.storm_until) deliver_sample();
     if (T.next_tick <= T.now) {
         while (T.next_tick <= T.now) T.next_tick += 1000000ull;
         T.tick_pending = true;
     }
-    if (T.tick_pending && !T.in_stall) {
+    if (T.tick_pending && !T.in_stall && T.now >= T.storm_until) {
         T.tick_pending = false;
         if (T.now >= T.hang_tick_until) core_tick_1ms();
+    }
+    if (T.storm_until && T.now >= T.storm_until) {     /* storm over: pending ISRs / callbacks are taken */
+        T.storm_until = 0;
+        if (!T.in_stall) twin_deliver_deferred();
     }
     if (T.tx_busy && T.tx_end <= T.now) {
         T.tx_busy = false;
@@ -248,7 +256,7 @@ void tw_stall(vt_t ns)
 
 static void run_main(void)
 {
-    if (T.now < T.hang_main_until) return;
+    if (T.now < T.hang_main_until || T.now < T.storm_until) return;
     T.in_main = true; T.time_calls = 0;
     app_loop();
     T.in_main = false;
@@ -315,7 +323,11 @@ static void cmd_world(char *args)
     else if (!strcmp(key, "cong")) { unsigned long long u; if (sscanf(a, "%llu", &u) == 1) T.congestion_until = u; }
     else if (!strcmp(key, "hang")) {
         char w[16]; unsigned long long u;
-        if (sscanf(a, "%15s %llu", w, &u) == 2) { if (!strcmp(w, "main")) T.hang_main_until = u; else if (!strcmp(w, "tick")) T.hang_tick_until = u; }
+        if (sscanf(a, "%15s %llu", w, &u) == 2) {
+            if (!strcmp(w, "main")) T.hang_main_until = u;
+            else if (!strcmp(w, "tick")) T.hang_tick_until = u;
+            else if (!strcmp(w, "isr1")) T.storm_until = u;
+        }
     }
     else if (!strcmp(key, "stepfault")) T.step_fault_next = true;
     else if (!strcmp(key, "fcut")) {
@@ -323,6 +335,10 @@ static void cmd_world(char *args)
         if (sscanf(a, "%15s %ld", w, &n) == 2) { if (!strcmp(w, "word")) T.cut_after_word = n; else if (!strcmp(w, "erase")) T.cut_in_erase = n; }
     }
     else if (!strcmp(key, "lsi")) { double v; if (sscanf(a, "%lf", &v) == 1 && v > 1000.0) T.lsi_hz = v; }
+    else if (!strcmp(key, "faultrec")) {                    /* seam v1.2: planted HardFault record */
+        unsigned long pc, cf;
+        if (sscanf(a, "%lx %lx", &pc, &cf) == 2) { T.fault_rec_valid = true; T.fault_rec_pc = (uint32_t)pc; T.fault_rec_cfsr = (uint32_t)cf; }
+    }
     else tw_out("! unknown world key %s", key);
 }
 
@@ -410,6 +426,10 @@ int main(int argc, char **argv)
         else if (!strcmp(k, "--uid")) { for (int j = 0; j < 12 && v[2 * j] && v[2 * j + 1]; j++) T.uid[j] = (uint8_t)(hexval(v[2 * j]) << 4 | hexval(v[2 * j + 1])); }
         else if (!strcmp(k, "--hse-fail")) T.hse_fail = atoi(v) != 0;
         else if (!strcmp(k, "--lsi")) T.lsi_hz = atof(v);
+        else if (!strcmp(k, "--fault-rec")) {          /* "<pc_hex>:<cfsr_hex>" (seam v1.2) */
+            unsigned long pc, cf;
+            if (sscanf(v, "%lx:%lx", &pc, &cf) == 2) { T.fault_rec_valid = true; T.fault_rec_pc = (uint32_t)pc; T.fault_rec_cfsr = (uint32_t)cf; }
+        }
         else if (!strcmp(k, "--seed")) T.rng = strtoull(v, NULL, 0) | 1u;
     }
     memset(T.flash, 0xFF, sizeof T.flash);

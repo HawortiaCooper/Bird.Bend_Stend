@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.model import ChannelSpec
@@ -30,25 +31,25 @@ BIT_CHANNELS: tuple[tuple[str, str, int, str], ...] = tuple(
 RING_KEYS: tuple[str, ...] = ("raw", "x_mm", "rate_sps", "lost_frames", "vstate") + tuple(k for k, *_ in BIT_CHANNELS)
 
 _BASE: tuple[ChannelSpec, ...] = (
-    ChannelSpec("raw", "HX711 raw", "counts", "load"),
-    ChannelSpec("x_mm", "Setpoint (machine)", "mm", "travel"),
-    ChannelSpec("rate_sps", "Sample rate (measured)", "SPS", "link"),
-    ChannelSpec("lost_frames", "Lost frames (cumulative)", "", "link"),
-    ChannelSpec("vstate", "Display state", "", "link"),
+    ChannelSpec("raw", "HX711 raw", "counts", "load", dimension="counts"),
+    ChannelSpec("x_mm", "Setpoint (machine)", "mm", "travel", dimension="length"),
+    ChannelSpec("rate_sps", "Sample rate (measured)", "SPS", "link", dimension="rate"),
+    ChannelSpec("lost_frames", "Lost frames (cumulative)", "", "link", dimension="count"),
+    ChannelSpec("vstate", "Display state", "", "link", dimension="state"),
 )
 _UNAVAILABLE: tuple[ChannelSpec, ...] = (
-    ChannelSpec("F_N", "Force", "N", "load", False, "no load calibration (M3)"),
-    ChannelSpec("F_kgf", "Force", "kgf", "load", False, "no load calibration (M3)"),
-    ChannelSpec("x_test_mm", "Test travel", "mm", "travel", False, "test travel zero not set (M3)"),
-    ChannelSpec("speed_mm_s", "Speed", "mm/s", "travel", False, "derived channels: M3"),
-    ChannelSpec("force_rate_n_s", "Force rate", "N/s", "load", False, "no load calibration (M3)"),
+    ChannelSpec("F_N", "Force", "N", "load", False, "no load calibration (M3)", "force"),
+    ChannelSpec("F_kgf", "Force", "kgf", "load", False, "no load calibration (M3)", "force"),
+    ChannelSpec("x_test_mm", "Test travel", "mm", "travel", False, "test travel zero not set (M3)", "length"),
+    ChannelSpec("speed_mm_s", "Speed", "mm/s", "travel", False, "derived channels: M3", "speed"),
+    ChannelSpec("force_rate_n_s", "Force rate", "N/s", "load", False, "no load calibration (M3)", "force_rate"),
 )
 
 
 class ChannelRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        bits = tuple(ChannelSpec(k, n, "", f"status.{grp}") for k, n, _i, grp in BIT_CHANNELS)
+        bits = tuple(ChannelSpec(k, n, "", f"status.{grp}", dimension="bits") for k, n, _i, grp in BIT_CHANNELS)
         self._specs: dict[str, ChannelSpec] = {c.key: c for c in _BASE + bits + _UNAVAILABLE}
         self.on_change: Callable[[], None] | None = None
 
@@ -69,7 +70,7 @@ class ChannelRegistry:
             c = self._specs[key]
             if c.available == available and c.reason == reason:
                 return
-            self._specs[key] = ChannelSpec(c.key, c.label, c.unit, c.group, available, reason)
+            self._specs[key] = replace(c, available=available, reason=reason)
         cb = self.on_change
         if cb is not None:
             cb()

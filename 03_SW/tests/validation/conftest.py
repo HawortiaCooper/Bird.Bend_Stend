@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -35,21 +36,48 @@ for _p in (HERE, TOOLS, TOOLS / "fw_twin"):
         sys.path.insert(0, str(_p))
 
 _TRACE: dict[str, list[tuple[str, str]]] = defaultdict(list)
+_TC = re.compile(r"test_tc_((?:[a-z]+_)+?)(\d{3})_(\d{2})")
+
+
+def tc_of(nodeid: str) -> str | None:
+    """Plan TC id from the test name (``test_tc_sw_cfg_004_02_…`` → ``TC-SW-CFG-004-02``), else None."""
+    m = _TC.search(nodeid.split("::")[-1])
+    return f"TC-{m.group(1).rstrip('_').upper().replace('_', '-')}-{m.group(2)}-{m.group(3)}" if m else None
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--arm", action="store", default=os.environ.get("BEND_VALIDATION_ARM", ""),
+                     help="comma list of pre-written validation groups to run (e.g. 'M2'; 'all'); "
+                          "default: env BEND_VALIDATION_ARM or none (SW_test_plan v0.3 §2.6)")
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "defect(id): regression / open-defect test of a Validator F defect")
     config.addinivalue_line("markers", "twin: needs the FW host twin (A's firmware, 00_System/tools/fw_twin)")
+    config.addinivalue_line("markers", "pending(group, needs): pre-written validation test (SW_test_plan v0.3 §2.6); "
+                                       "skipped until the group is armed with --arm <group>")
+
+
+def _armed(config: pytest.Config) -> set[str]:
+    return {g.strip().upper() for g in str(config.getoption("--arm") or "").split(",") if g.strip()}
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     missing = []
+    armed = _armed(config)
     for item in items:
         if HERE not in Path(str(item.path)).resolve().parents:
             continue
         item.add_marker(pytest.mark.validation)
         if item.get_closest_marker("req") is None:
             missing.append(item.nodeid)
+        pend = item.get_closest_marker("pending")
+        if pend is not None:
+            group = str(pend.args[0]).upper()
+            if group not in armed and "ALL" not in armed:
+                needs = pend.kwargs.get("needs", "")
+                item.add_marker(pytest.mark.skip(reason=f"pending {group} (pre-written; arm with --arm {group})"
+                                                        + (f": needs {needs}" if needs else "")))
     if missing:
         raise pytest.UsageError("validation tests without @pytest.mark.req: " + ", ".join(missing))
 
@@ -62,6 +90,9 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
         return
     if rep.when == "call" or (rep.when == "setup" and rep.outcome != "passed"):
         state = "xfailed" if hasattr(rep, "wasxfail") and rep.skipped else rep.outcome
+        pend = item.get_closest_marker("pending")
+        if pend is not None and state == "skipped":
+            state = f"pending:{str(pend.args[0]).upper()}"
         for m in item.iter_markers("req"):
             for rid in m.args:
                 _TRACE[rid].append((item.nodeid, state))
@@ -74,7 +105,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     try:
         out.mkdir(exist_ok=True)
         (out / "trace.json").write_text(json.dumps(
-            {rid: [{"node": n, "outcome": o} for n, o in v] for rid, v in sorted(_TRACE.items())}, indent=1),
+            {rid: [{"node": n, "outcome": o, **({"tc": tc_of(n)} if tc_of(n) else {})} for n, o in v]
+             for rid, v in sorted(_TRACE.items())}, indent=1),
             encoding="utf-8")
     except OSError:  # pragma: no cover - reporting only
         pass

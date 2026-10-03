@@ -66,8 +66,8 @@ static void test_check_vectors(void)
         c.estop_input_open = s[5] != 0u;
         c.estop_closed_ms = s[6];
         c.halt_latched = s[7] != 0u;
-        c.stop_btn_active = s[8] != 0u;
-        c.stop_btn_released_ms = s[9];
+        /* s[8], s[9] = retired STOP-button keys (ICD v0.5, D-36: kept in state_schema 2, never set) */
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, s[8], "retired stop_btn_active set in a vector");
         c.faults = (uint16_t)s[10];
         c.fault_causes = (uint16_t)s[11];
         c.limit_start = s[12] != 0u;

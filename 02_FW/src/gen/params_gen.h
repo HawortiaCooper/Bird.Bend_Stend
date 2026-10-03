@@ -1,7 +1,7 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/params.yaml (dict_version 3, schema 1)
+ * Source : 00_System/specs/params.yaml (dict_version 4, schema 1)
  * Tool   : 00_System/tools/gen_params.py
- * Hash   : PARAM_DICT_HASH = 0xF0376293
+ * Hash   : PARAM_DICT_HASH = 0xFCC54C90
  * Implements: FW-CFG-001, IF-010
  */
 #ifndef PARAMS_GEN_H
@@ -19,10 +19,10 @@ extern "C" {
 #define PARAMS_GEN_WITH_KEYS 1
 #endif
 
-#define PARAM_DICT_HASH       0xF0376293UL
-#define PARAM_DICT_VERSION    3u
+#define PARAM_DICT_HASH       0xFCC54C90UL
+#define PARAM_DICT_VERSION    4u
 #define PARAM_SCHEMA_VERSION  1u
-#define PARAM_COUNT           48u
+#define PARAM_COUNT           47u
 
 /* Wire type codes (ICD §7.5). */
 typedef enum {
@@ -89,7 +89,6 @@ typedef enum {
     PID_SAFETY_LINK_TIMEOUT_MS         = 0x0508, /* u16 */
     PID_IO_RELEASE_MS                  = 0x0601, /* u8 */
     PID_IO_ESTOP_RELEASE_MS            = 0x0602, /* u16 */
-    PID_IO_STOP_ACTIVE_LEVEL           = 0x0603, /* enum */
     PID_IO_PAUSE_ACTIVE_LEVEL          = 0x0604, /* enum */
     PID_DRV_ALM_ACTIVE_LEVEL           = 0x0701, /* enum */
     PID_DRV_PEND_ACTIVE_LEVEL          = 0x0702, /* enum */
@@ -110,11 +109,6 @@ typedef enum {
     AFE_RATE_SPS_SPS10 = 0, /* 10 SPS (RATE pin low) */
     AFE_RATE_SPS_SPS80 = 1, /* 80 SPS (RATE pin high) */
 } afe_rate_sps_t;
-
-typedef enum {
-    IO_STOP_ACTIVE_LEVEL_OPEN_ACTIVE = 0, /* NC contact: open / high = pressed */
-    IO_STOP_ACTIVE_LEVEL_CLOSED_ACTIVE = 1, /* NO contact: closed / low = pressed */
-} io_stop_active_level_t;
 
 typedef enum {
     IO_PAUSE_ACTIVE_LEVEL_OPEN_ACTIVE = 0, /* NC contact: open / high = pressed */
@@ -188,7 +182,6 @@ typedef struct {
 typedef struct {
     uint8_t   release_ms; /* ms */
     uint16_t  estop_release_ms; /* ms */
-    uint8_t   stop_active_level;
     uint8_t   pause_active_level;
 } params_io_t;
 

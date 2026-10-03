@@ -80,9 +80,12 @@ def test_reboot_required_params_old_behaviour_until_save_reboot(v: V):
     # Verifies: FW-CFG-003, FW-PAR-002, FW-PAR-006
     # TC: TC-FW-CFG-003-02
     assert REBOOT_REQ == {"motion.pul_invert", "motion.ena_invert", "drv.pwr_sense_enable"}
+    if "DRV_SIGNALS" in v.info()["features"]:                    # M2 build: make driver power absent
+        v.tw.act("drv_power", on=False)
+        v.advance(40)
     ena0 = v.tw.act("query", what="outputs")["ENA"]
     st0 = v.status()
-    assert "DRV_PWR" not in st0["status"]                         # sense enabled, M1: not confirmed
+    assert "DRV_PWR" not in st0["status"]                         # sense enabled: M1 not confirmed / M2 off
     en0 = v.cmd("ENABLE")
     assert (en0["status"], en0["detail"]) == ("E_STATE", 1 << rc.BLOCK.index("DRV_UNPOWERED"))
     for k in ("motion.ena_invert", "motion.pul_invert"):

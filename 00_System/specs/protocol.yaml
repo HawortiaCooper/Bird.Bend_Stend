@@ -19,7 +19,12 @@
 #   tables    : list of TABLE
 #     TABLE = {id, kind (enum|bitset|events), title, icd (section), c_prefix, py_name,
 #              width (bitset: 8|16|32), wire (default true), columns? (enum: extra column name),
-#              items: [{name, value|bit, desc, detail?|arg?|values?}]}
+#              items: [{name, value|bit, desc, detail?|arg?|values?, retired?, feature?}]}
+#     retired: "<ICD version>" — the name is withdrawn: reserved, sent as 0 / never sent, value never
+#              reused; generated identifiers are kept (marked RETIRED) so existing code compiles until
+#              its owner removes the use. Excluded from <ID>_BITS / DEFINED_MASK / ICD active rows.
+#     feature: <features item> — the bit is valid only while that INFO feature bit is 1; otherwise it is
+#              sent as 0 and receivers treat it as UNKNOWN (ICD §7.6, D-37 b).
 #   Names: [A-Z][A-Z0-9_]*, unique per table; values unique per table; never renumber a
 #   value that was released (ICD §0.2: new codes/bits only in reserved positions).
 # C identifiers: <c_prefix><NAME> (enum value / bit mask) and <c_prefix><NAME>_BIT (bit index).
@@ -28,7 +33,7 @@
 # =====================================================================================
 
 schema_version: 1
-icd_version: "0.4.1"
+icd_version: "0.5"
 proto_major: 1
 proto_minor: 0
 payload_version: 1
@@ -87,7 +92,7 @@ commands:
     - {name: MOVE_UNTIL_LOAD, value: 0x35, req_len: 17, request: "`i32 bound_um, u32 v_um_s, u32 a_um_s2, i32 raw_stop, u8 cmp`", response: "–", retry: VERIFY, priority: false, srs: "FW-MOT-006"}
     - {name: STOP, value: 0x36, req_len: 1, request: "`u8 mode` (stop_mode): 0 = immediate, 1 = controlled", response: "–", retry: CONFIRM, priority: true, sniffed: true, srs: "FW-MOT-007, SW-STOP-001"}
     - {name: HALT, value: 0x37, req_len: 0, request: "–", response: "–", retry: CONFIRM, priority: true, sniffed: true, srs: "FW-MOT-007, SW-STOP-002"}
-    - {name: HALT_CLEAR, value: 0x38, req_len: 0, request: "–", response: "–", retry: VERIFY, retry_text: "VERIFY (priority lane, D-34)", priority: true, srs: "FW-MOT-007, SAF-FW-022, SAF-FW-023, D-34"}
+    - {name: HALT_CLEAR, value: 0x38, req_len: 0, request: "–", response: "–", retry: VERIFY, retry_text: "VERIFY (priority lane, D-34)", priority: true, srs: "FW-MOT-007, SAF-FW-023, D-34, D-36"}
     - {name: ESTOP_CLEAR, value: 0x39, req_len: 0, request: "–", response: "–", retry: VERIFY, retry_text: "VERIFY (priority lane, D-34)", priority: true, srs: "SAF-FW-006, D-34"}
     - {name: FAULT_CLEAR, value: 0x3A, req_len: 0, request: "–", response: "`u16 cleared` (FAULT mask §7.6)", retry: VERIFY, retry_text: "VERIFY (priority lane, D-34)", priority: true, srs: "FW-CMD-003, SAF-FW-011, D-34"}
     - {name: PAUSE, value: 0x3B, req_len: 0, request: "–", response: "–", retry: CONFIRM, priority: true, sniffed: true, srs: "SAF-FW-023, D-14, D-26, D-29a"}
@@ -124,7 +129,7 @@ tables:
       - {name: E_CONFIG, value: 6, desc: "SET_PARAM violates a hard rule (§11.4)", detail: "id of the other parameter of the rule"}
       - {name: E_BUSY, value: 7, desc: "not possible now, retry later", detail: "busy_detail (Appendix B): 1 = MOTION (moving, homing or stopping), 2 = ENABLING (ENA settle running)"}
       - {name: E_STATE, value: 8, desc: "motion / enable / RESUME refused in the current state", detail: "BLOCK mask (§4.3): all blocking conditions evaluated for that command"}
-      - {name: E_CAUSE_ACTIVE, value: 9, desc: "clear refused, cause still present", detail: "ESTOP_CLEAR: 0xFFFF = sense input open, else ms still missing until io.estop_release_ms; HALT_CLEAR: 0xFFFF = STOP button active, else ms still missing until io.release_ms; FAULT_CLEAR: FAULT mask (§7.6) of the latched faults whose cause is still present"}
+      - {name: E_CAUSE_ACTIVE, value: 9, desc: "clear refused, cause still present", detail: "ESTOP_CLEAR: 0xFFFF = sense input open (latched or not), else ms still missing until io.estop_release_ms; HALT_CLEAR: never refused since v0.5 (D-36); FAULT_CLEAR: FAULT mask (§7.6) of the latched faults whose cause is still present"}
       - {name: E_CONFIRM, value: 10, desc: "HOME with load above home.max_load_raw without the confirmed flag", detail: "0"}
       - {name: E_NVM, value: 11, desc: "NVM failure", detail: "nvm_detail (Appendix B): 1 = no valid record (LOAD), 2 = erase/program error, 3 = verify error"}
       - {name: E_INTERNAL, value: 12, desc: "implementation error or command not in this build; nothing executed", detail: "internal_detail (Appendix B): 1 = NOT_IN_BUILD, 2 = INVARIANT; other values implementation-defined"}
@@ -169,7 +174,7 @@ tables:
     width: 16
     items:
       - {name: ESTOP, bit: 0, desc: "ESTOP latched or E-stop sense input open (also evaluated by RESUME)"}
-      - {name: HALT, bit: 1, desc: "HALT latched (also evaluated by RESUME)"}
+      - {name: HALT, bit: 1, desc: "HALT latched (PC: HALT command / Pause-Break key) (also evaluated by RESUME)"}
       - {name: FAULT, bit: 2, desc: "any FAULT latched (§7.6) (also evaluated by RESUME)"}
       - {name: NOT_ENABLED, bit: 3, desc: "motion state NOT_ENABLED (ENABLE never done, or DISABLE / E-stop / idle disable / driver power loss since)"}
       - {name: NOT_HOMED, bit: 4, desc: "MOVE_ABS, MOVE_UNTIL_LOAD or JOG with a bound while not homed"}
@@ -189,7 +194,7 @@ tables:
     py_name: StopMode
     items:
       - {name: IMMEDIATE, value: 0, desc: "no further PUL edge ≤ 2 ms after the last command byte (SAF-FW-002)"}
-      - {name: CONTROLLED, value: 1, desc: "planned deceleration at motion.a_stop_um_s2 (clean halt allowed at step period > 2 ms, §6.5)"}
+      - {name: CONTROLLED, value: 1, desc: "planned deceleration at motion.a_stop_um_s2 (clean halt only at step period > 2 ms and planned stop distance <= 1 step, §6.5)"}
 
   - id: mul_cmp
     kind: enum
@@ -253,7 +258,7 @@ tables:
     items:
       - {name: NONE, value: 0, desc: "not latched"}
       - {name: PC, value: 1, desc: "PC command (HALT, PAUSE)"}
-      - {name: BUTTON, value: 2, desc: "physical STOP/BREAK or PAUSE button"}
+      - {name: BUTTON, value: 2, desc: "physical PAUSE button (pause_src / PAUSED only; halt_src is never BUTTON since v0.5, D-36)"}
 
   - id: reset_cause
     kind: enum
@@ -300,7 +305,7 @@ tables:
       - {name: MOVE_UNTIL_LOAD, bit: 4, desc: "MOVE_UNTIL_LOAD command"}
       - {name: NVM, bit: 5, desc: "SAVE/LOAD_PARAMS"}
       - {name: TWIN, bit: 6, desc: "host twin build"}
-      - {name: BUTTONS, bit: 7, desc: "STOP/PAUSE inputs"}
+      - {name: BUTTONS, bit: 7, desc: "PAUSE button input (the STOP/BREAK input is retired, D-36)"}
       - {name: DRV_SIGNALS, bit: 8, desc: "ALM/PEND/DRV_POWER inputs"}
 
   # ---------------------------------------------------------------- DATA / STATUS bits
@@ -317,7 +322,7 @@ tables:
       - {name: HOMED, bit: 2, desc: "machine zero valid"}
       - {name: ENABLED, bit: 3, desc: "driver enabled and settled (motion state ≥ IDLE)"}
       - {name: ESTOP, bit: 4, desc: "ESTOP latched or E-stop sense input open"}
-      - {name: HALT, bit: 5, desc: "HALT latched (source: STATUS halt_src)"}
+      - {name: HALT, bit: 5, desc: "HALT latched (PC HALT command / Pause-Break key; STATUS halt_src = PC)"}
       - {name: FAULT, bit: 6, desc: "any FAULT latched (STATUS faults)"}
       - {name: OVERRUN, bit: 7, desc: "≥ 1 DATA frame dropped or ≥ 1 conversion missed by the FW since the previous sent frame"}
 
@@ -338,13 +343,13 @@ tables:
       - {name: AFE_SETTLING, bit: 6, desc: "sample within afe.settle_discard after a (re)configuration"}
       - {name: AFE_RATE_MISMATCH, bit: 7, desc: "measured rate deviates more than afe.rate_tol_pct"}
       - {name: LINK_WDG, bit: 8, desc: "link watchdog tripped, until the next valid command frame"}
-      - {name: STOP_BTN, bit: 9, desc: "physical STOP/BREAK button input active"}
-      - {name: PAUSE_BTN, bit: 10, desc: "physical PAUSE button input active"}
-      - {name: ALM, bit: 11, desc: "driver ALM active"}
-      - {name: PEND, bit: 12, desc: "driver PEND (in position) active"}
+      - {name: STOP_BTN, bit: 9, retired: "0.5", desc: "was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)"}
+      - {name: PAUSE_BTN, bit: 10, feature: BUTTONS, desc: "physical PAUSE button input active"}
+      - {name: ALM, bit: 11, feature: DRV_SIGNALS, desc: "driver ALM active"}
+      - {name: PEND, bit: 12, feature: DRV_SIGNALS, desc: "driver PEND (in position) active"}
       - {name: POS_UNCERTAIN, bit: 13, desc: "an immediate stop may have truncated a pulse (±1 step), cleared by the next HOME"}
       - {name: NO_AFE_DATA, bit: 14, desc: "fallback frame (afe_raw = 0x80000000)"}
-      - {name: DRV_PWR, bit: 15, desc: "driver power present (reads 1 when drv.pwr_sense_enable = false)"}
+      - {name: DRV_PWR, bit: 15, feature: DRV_SIGNALS, desc: "driver power present (reads 1 when drv.pwr_sense_enable = false and FEAT_DRV_SIGNALS = 1)"}
 
   - id: faults
     kind: bitset
@@ -374,11 +379,11 @@ tables:
       - {name: ESTOP_OPEN, bit: 0, desc: "E-stop sense input open"}
       - {name: LIMIT_START, bit: 1, desc: "START limit input active"}
       - {name: LIMIT_END, bit: 2, desc: "END limit input active"}
-      - {name: STOP_BTN, bit: 3, desc: "STOP/BREAK button input active"}
-      - {name: PAUSE_BTN, bit: 4, desc: "PAUSE button input active"}
-      - {name: ALM, bit: 5, desc: "driver ALM input active"}
-      - {name: PEND, bit: 6, desc: "driver PEND input active"}
-      - {name: DRV_PWR, bit: 7, desc: "raw driver-power sense input 'powered'"}
+      - {name: STOP_BTN, bit: 3, retired: "0.5", desc: "was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)"}
+      - {name: PAUSE_BTN, bit: 4, feature: BUTTONS, desc: "PAUSE button input active"}
+      - {name: ALM, bit: 5, feature: DRV_SIGNALS, desc: "driver ALM input active"}
+      - {name: PEND, bit: 6, feature: DRV_SIGNALS, desc: "driver PEND input active"}
+      - {name: DRV_PWR, bit: 7, feature: DRV_SIGNALS, desc: "raw driver-power sense input 'powered'"}
       - {name: ENA_DISABLED, bit: 8, desc: "ENA output at the disabled level"}
       - {name: RATE_80, bit: 9, desc: "HX711 RATE output high"}
 
@@ -395,7 +400,7 @@ tables:
       - {name: MOVE_DONE, value: 3, arg: "move_done_reason (§8.3)", values: "final pos_um / pos_steps"}
       - {name: ESTOP_SET, value: 4, arg: "0", values: "pos_um / pos_steps"}
       - {name: ESTOP_CLEARED, value: 5, arg: "0", values: "0 / 0"}
-      - {name: HALT_SET, value: 6, arg: "source: 1 PC, 2 BUTTON", values: "0 / 0"}
+      - {name: HALT_SET, value: 6, arg: "source: 1 PC (HALT command / Pause-Break key); 2 BUTTON never since v0.5 (D-36)", values: "0 / 0"}
       - {name: HALT_CLEARED, value: 7, arg: "0", values: "0 / 0"}
       - {name: PAUSED, value: 8, arg: "source: 1 PC, 2 BUTTON (sent when PAUSED goes 0 → 1 only)", values: "0 / 0"}
       - {name: PAUSE_CLEARED, value: 9, arg: "pause_cleared_reason: 2 HALT_CLEAR, 3 RESUME (code 1 unused since ICD v0.3)", values: "0 / 0"}
@@ -411,7 +416,7 @@ tables:
       - {name: HOME_FAILED, value: 19, arg: "home_fail_reason: 1 NOT_FOUND, 2 WIRING, 3 ABORTED", values: "pos_um / pos_steps"}
       - {name: DRIVER_ENABLED, value: 20, arg: "0", values: "0 / 0"}
       - {name: DRIVER_DISABLED, value: 21, arg: "driver_disabled_cause: 1 PC DISABLE, 2 IDLE, 3 ESTOP, 4 DRV_POWER_LOST", values: "0 / 0"}
-      - {name: STOP_BUTTON, value: 22, arg: "1 pressed, 0 released (debounced)", values: "0 / 0"}
+      - {name: STOP_BUTTON, value: 22, retired: "0.5", arg: "–", values: "–", desc: "was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)"}
       - {name: PAUSE_BUTTON, value: 23, arg: "1 pressed, 0 released", values: "0 / 0"}
       - {name: ALM_CHANGED, value: 24, arg: "1 active, 0 inactive", values: "0 / 0"}
       - {name: AFE_REINIT, value: 25, arg: "re-init count (low 16 bit)", values: "0 / 0"}
@@ -436,7 +441,7 @@ tables:
       - {name: PC_STOP, value: 1, desc: "STOP mode 0"}
       - {name: PC_STOP_CONTROLLED, value: 2, desc: "STOP mode 1"}
       - {name: PC_HALT, value: 3, desc: "HALT command"}
-      - {name: STOP_BUTTON, value: 4, desc: "physical STOP/BREAK button"}
+      - {name: STOP_BUTTON, value: 4, retired: "0.5", desc: "was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)"}
       - {name: PAUSE_BUTTON, value: 5, desc: "physical PAUSE button"}
       - {name: PC_PAUSE, value: 6, desc: "PAUSE command"}
       - {name: ESTOP, value: 7, desc: "E-stop sense opened"}
@@ -521,6 +526,18 @@ tables:
     items:
       - {name: START, value: 0, desc: "START switch (−x end, home reference)"}
       - {name: END, value: 1, desc: "END switch (+x end)"}
+
+  # ---------------------------------------------------------------- FW seam (not on the wire)
+  - id: afe_sample_status
+    kind: bitset
+    title: "afe_sample_t.status (seam hal_hx711, tools/README; not on the wire)"
+    icd: "tools/README seam v1.2"
+    c_prefix: AFES_
+    py_name: AfeSampleStatus
+    width: 8
+    items:
+      - {name: SCK_OVERRUN, bit: 0, desc: "the read of this sample overran (SCK high > 60 us or DOUT still low after the last pulse): the HX711 may have entered power-down; the core re-initialises it (afe_reinit_count, EVENT AFE_REINIT) and flags the next afe.settle_discard samples AFE_SETTLING"}
+      - {name: MISSED_EDGE, bit: 1, desc: "at least one DOUT-ready edge was missed before this sample (recovered by hal_hx711_kick or a late edge): the core sets OVERRUN in the next DATA frame"}
 
   # ---------------------------------------------------------------- SW only (not on the wire)
   - id: retry_class

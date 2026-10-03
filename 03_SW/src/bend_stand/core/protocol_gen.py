@@ -1,6 +1,6 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.4.1, PROTO 1.0, PAYLOAD 1)
+Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.5, PROTO 1.0, PAYLOAD 1)
 Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
 
 Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes and
@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from enum import IntEnum, IntFlag
 from types import MappingProxyType
 
-ICD_VERSION = '0.4.1'
+ICD_VERSION = '0.5'
 PROTO_MAJOR = 1
 PROTO_MINOR = 0
 PAYLOAD_VERSION = 1
@@ -59,6 +59,7 @@ class AsyncType(IntEnum):
 
 ASYNC_TYPE_NAMES: tuple[str, ...] = ('DATA', 'EVENT')
 ASYNC_TYPE_DESC: Mapping[str, str] = MappingProxyType({'DATA': 'DATA frame (§7.3), one per HX711 conversion while the stream is on', 'EVENT': 'EVENT frame (§7.4), sent regardless of the stream state'})
+ASYNC_TYPE_RETIRED: frozenset[str] = frozenset()
 
 
 class Status(IntEnum):
@@ -81,7 +82,8 @@ class Status(IntEnum):
 
 STATUS_CODE_NAMES: tuple[str, ...] = ('OK', 'E_UNKNOWN_CMD', 'E_LENGTH', 'E_PARAM_ID', 'E_TYPE', 'E_RANGE', 'E_CONFIG', 'E_BUSY', 'E_STATE', 'E_CAUSE_ACTIVE', 'E_CONFIRM', 'E_NVM', 'E_INTERNAL')
 STATUS_CODE_DESC: Mapping[str, str] = MappingProxyType({'OK': 'accepted / executed', 'E_UNKNOWN_CMD': 'TYPE in 0x01..0x3F not defined', 'E_LENGTH': "LEN ≠ the command's fixed LEN", 'E_PARAM_ID': 'unknown parameter id', 'E_TYPE': "PARAM_ENTRY type byte ≠ the parameter's type", 'E_RANGE': 'argument out of range (never clamped)', 'E_CONFIG': 'SET_PARAM violates a hard rule (§11.4)', 'E_BUSY': 'not possible now, retry later', 'E_STATE': 'motion / enable / RESUME refused in the current state', 'E_CAUSE_ACTIVE': 'clear refused, cause still present', 'E_CONFIRM': 'HOME with load above home.max_load_raw without the confirmed flag', 'E_NVM': 'NVM failure', 'E_INTERNAL': 'implementation error or command not in this build; nothing executed'})
-STATUS_CODE_DETAIL: Mapping[str, str] = MappingProxyType({'OK': '(none)', 'E_UNKNOWN_CMD': 'the TYPE', 'E_LENGTH': 'the expected LEN', 'E_PARAM_ID': 'the requested id', 'E_TYPE': 'the parameter id', 'E_RANGE': 'SET_PARAM: parameter id; other commands: byte offset of the offending field in the request payload', 'E_CONFIG': 'id of the other parameter of the rule', 'E_BUSY': 'busy_detail (Appendix B): 1 = MOTION (moving, homing or stopping), 2 = ENABLING (ENA settle running)', 'E_STATE': 'BLOCK mask (§4.3): all blocking conditions evaluated for that command', 'E_CAUSE_ACTIVE': 'ESTOP_CLEAR: 0xFFFF = sense input open, else ms still missing until io.estop_release_ms; HALT_CLEAR: 0xFFFF = STOP button active, else ms still missing until io.release_ms; FAULT_CLEAR: FAULT mask (§7.6) of the latched faults whose cause is still present', 'E_CONFIRM': '0', 'E_NVM': 'nvm_detail (Appendix B): 1 = no valid record (LOAD), 2 = erase/program error, 3 = verify error', 'E_INTERNAL': 'internal_detail (Appendix B): 1 = NOT_IN_BUILD, 2 = INVARIANT; other values implementation-defined'})
+STATUS_CODE_RETIRED: frozenset[str] = frozenset()
+STATUS_CODE_DETAIL: Mapping[str, str] = MappingProxyType({'OK': '(none)', 'E_UNKNOWN_CMD': 'the TYPE', 'E_LENGTH': 'the expected LEN', 'E_PARAM_ID': 'the requested id', 'E_TYPE': 'the parameter id', 'E_RANGE': 'SET_PARAM: parameter id; other commands: byte offset of the offending field in the request payload', 'E_CONFIG': 'id of the other parameter of the rule', 'E_BUSY': 'busy_detail (Appendix B): 1 = MOTION (moving, homing or stopping), 2 = ENABLING (ENA settle running)', 'E_STATE': 'BLOCK mask (§4.3): all blocking conditions evaluated for that command', 'E_CAUSE_ACTIVE': 'ESTOP_CLEAR: 0xFFFF = sense input open (latched or not), else ms still missing until io.estop_release_ms; HALT_CLEAR: never refused since v0.5 (D-36); FAULT_CLEAR: FAULT mask (§7.6) of the latched faults whose cause is still present', 'E_CONFIRM': '0', 'E_NVM': 'nvm_detail (Appendix B): 1 = no valid record (LOAD), 2 = erase/program error, 3 = verify error', 'E_INTERNAL': 'internal_detail (Appendix B): 1 = NOT_IN_BUILD, 2 = INVARIANT; other values implementation-defined'})
 
 
 class BusyDetail(IntEnum):
@@ -93,6 +95,7 @@ class BusyDetail(IntEnum):
 
 BUSY_DETAIL_NAMES: tuple[str, ...] = ('MOTION', 'ENABLING')
 BUSY_DETAIL_DESC: Mapping[str, str] = MappingProxyType({'MOTION': 'a motion is running (motion state MOVE_ABS, JOG, MOVE_UNTIL_LOAD, HOMING or STOPPING)', 'ENABLING': 'ENA settle (motion.ena_settle_ms) running'})
+BUSY_DETAIL_RETIRED: frozenset[str] = frozenset()
 
 
 class InternalDetail(IntEnum):
@@ -104,6 +107,7 @@ class InternalDetail(IntEnum):
 
 INTERNAL_DETAIL_NAMES: tuple[str, ...] = ('NOT_IN_BUILD', 'INVARIANT')
 INTERNAL_DETAIL_DESC: Mapping[str, str] = MappingProxyType({'NOT_IN_BUILD': 'command defined in the ICD but implemented in a later milestone (its feature bit is 0); nothing executed', 'INVARIANT': 'internal consistency check failed; nothing executed'})
+INTERNAL_DETAIL_RETIRED: frozenset[str] = frozenset()
 
 
 class NvmDetail(IntEnum):
@@ -116,6 +120,7 @@ class NvmDetail(IntEnum):
 
 NVM_DETAIL_NAMES: tuple[str, ...] = ('NO_RECORD', 'ERASE_PROGRAM', 'VERIFY')
 NVM_DETAIL_DESC: Mapping[str, str] = MappingProxyType({'NO_RECORD': 'no valid NVM record (LOAD_PARAMS), or a record that violates a hard rule', 'ERASE_PROGRAM': 'flash erase or program error', 'VERIFY': 'read-back verify error'})
+NVM_DETAIL_RETIRED: frozenset[str] = frozenset()
 
 
 class Block(IntFlag):
@@ -135,7 +140,8 @@ class Block(IntFlag):
 
 
 BLOCK_BITS: tuple[str, ...] = ('ESTOP', 'HALT', 'FAULT', 'NOT_ENABLED', 'NOT_HOMED', 'LIMIT', 'AFE_STALE', 'AFE_SATURATED', 'DRV_UNPOWERED', 'DRIVER_ALARM', 'PAUSED')
-BLOCK_DESC: Mapping[str, str] = MappingProxyType({'ESTOP': 'ESTOP latched or E-stop sense input open (also evaluated by RESUME)', 'HALT': 'HALT latched (also evaluated by RESUME)', 'FAULT': 'any FAULT latched (§7.6) (also evaluated by RESUME)', 'NOT_ENABLED': 'motion state NOT_ENABLED (ENABLE never done, or DISABLE / E-stop / idle disable / driver power loss since)', 'NOT_HOMED': 'MOVE_ABS, MOVE_UNTIL_LOAD or JOG with a bound while not homed', 'LIMIT': 'motion toward an active or latched limit switch (direction = sign(target − x) or sign(v)); only motion away is accepted while latched (D-33h)', 'AFE_STALE': 'no HX711 sample for afe.timeout_ms', 'AFE_SATURATED': 'last HX711 sample at a rail', 'DRV_UNPOWERED': "drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c)", 'DRIVER_ALARM': 'ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)', 'PAUSED': 'PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)'})
+BLOCK_DESC: Mapping[str, str] = MappingProxyType({'ESTOP': 'ESTOP latched or E-stop sense input open (also evaluated by RESUME)', 'HALT': 'HALT latched (PC: HALT command / Pause-Break key) (also evaluated by RESUME)', 'FAULT': 'any FAULT latched (§7.6) (also evaluated by RESUME)', 'NOT_ENABLED': 'motion state NOT_ENABLED (ENABLE never done, or DISABLE / E-stop / idle disable / driver power loss since)', 'NOT_HOMED': 'MOVE_ABS, MOVE_UNTIL_LOAD or JOG with a bound while not homed', 'LIMIT': 'motion toward an active or latched limit switch (direction = sign(target − x) or sign(v)); only motion away is accepted while latched (D-33h)', 'AFE_STALE': 'no HX711 sample for afe.timeout_ms', 'AFE_SATURATED': 'last HX711 sample at a rail', 'DRV_UNPOWERED': "drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c)", 'DRIVER_ALARM': 'ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)', 'PAUSED': 'PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)'})
+BLOCK_RETIRED: frozenset[str] = frozenset()
 
 
 class StopMode(IntEnum):
@@ -146,7 +152,8 @@ class StopMode(IntEnum):
 
 
 STOP_MODE_NAMES: tuple[str, ...] = ('IMMEDIATE', 'CONTROLLED')
-STOP_MODE_DESC: Mapping[str, str] = MappingProxyType({'IMMEDIATE': 'no further PUL edge ≤ 2 ms after the last command byte (SAF-FW-002)', 'CONTROLLED': 'planned deceleration at motion.a_stop_um_s2 (clean halt allowed at step period > 2 ms, §6.5)'})
+STOP_MODE_DESC: Mapping[str, str] = MappingProxyType({'IMMEDIATE': 'no further PUL edge ≤ 2 ms after the last command byte (SAF-FW-002)', 'CONTROLLED': 'planned deceleration at motion.a_stop_um_s2 (clean halt only at step period > 2 ms and planned stop distance <= 1 step, §6.5)'})
+STOP_MODE_RETIRED: frozenset[str] = frozenset()
 
 
 class MulCmp(IntEnum):
@@ -158,6 +165,7 @@ class MulCmp(IntEnum):
 
 MUL_CMP_NAMES: tuple[str, ...] = ('GE', 'LE')
 MUL_CMP_DESC: Mapping[str, str] = MappingProxyType({'GE': 'stop when raw ≥ raw_stop', 'LE': 'stop when raw ≤ raw_stop'})
+MUL_CMP_RETIRED: frozenset[str] = frozenset()
 
 
 class HomeFlags(IntFlag):
@@ -168,6 +176,7 @@ class HomeFlags(IntFlag):
 
 HOME_FLAGS_BITS: tuple[str, ...] = ('LOAD_CONFIRMED',)
 HOME_FLAGS_DESC: Mapping[str, str] = MappingProxyType({'LOAD_CONFIRMED': 'operator confirmed homing with load above home.max_load_raw (SAF-FW-021)'})
+HOME_FLAGS_RETIRED: frozenset[str] = frozenset()
 
 
 class MotionState(IntEnum):
@@ -185,6 +194,7 @@ class MotionState(IntEnum):
 
 MOTION_STATE_NAMES: tuple[str, ...] = ('NOT_ENABLED', 'ENABLING', 'IDLE', 'MOVE_ABS', 'JOG', 'MOVE_UNTIL_LOAD', 'HOMING', 'STOPPING')
 MOTION_STATE_DESC: Mapping[str, str] = MappingProxyType({'NOT_ENABLED': 'after boot, DISABLE, E-stop, idle disable or driver power loss; no pulse possible (DATA ENABLED = 0)', 'ENABLING': 'ENA asserted, motion.ena_settle_ms running (ENABLED = 0)', 'IDLE': 'enabled, standing (holding) (ENABLED = 1, MOVING = 0)', 'MOVE_ABS': 'executing MOVE_ABS (MOVING = 1)', 'JOG': 'executing JOG (MOVING = 1)', 'MOVE_UNTIL_LOAD': 'executing MOVE_UNTIL_LOAD (MOVING = 1)', 'HOMING': 'executing HOME, see home_phase (MOVING = 1)', 'STOPPING': 'controlled deceleration in progress (MOVING = 1)'})
+MOTION_STATE_RETIRED: frozenset[str] = frozenset()
 
 
 class HomePhase(IntEnum):
@@ -202,6 +212,7 @@ class HomePhase(IntEnum):
 
 HOME_PHASE_NAMES: tuple[str, ...] = ('NONE', 'PRECHECK', 'RELEASE', 'FAST_SEEK', 'BACKOFF', 'SLOW_APPROACH', 'MOVE_TO_ZERO', 'DONE')
 HOME_PHASE_DESC: Mapping[str, str] = MappingProxyType({'NONE': 'no homing since boot', 'PRECHECK': 'load pre-check', 'RELEASE': 'moving off an active START switch (+x)', 'FAST_SEEK': 'fast seek toward START (−x) at home.v_fast_um_s', 'BACKOFF': 'back-off home.backoff_um (+x)', 'SLOW_APPROACH': 'slow approach toward START at home.v_slow_um_s, edge capture', 'MOVE_TO_ZERO': 'move to x = 0', 'DONE': 'last homing completed or failed'})
+HOME_PHASE_RETIRED: frozenset[str] = frozenset()
 
 
 class Source(IntEnum):
@@ -213,7 +224,8 @@ class Source(IntEnum):
 
 
 SOURCE_NAMES: tuple[str, ...] = ('NONE', 'PC', 'BUTTON')
-SOURCE_DESC: Mapping[str, str] = MappingProxyType({'NONE': 'not latched', 'PC': 'PC command (HALT, PAUSE)', 'BUTTON': 'physical STOP/BREAK or PAUSE button'})
+SOURCE_DESC: Mapping[str, str] = MappingProxyType({'NONE': 'not latched', 'PC': 'PC command (HALT, PAUSE)', 'BUTTON': 'physical PAUSE button (pause_src / PAUSED only; halt_src is never BUTTON since v0.5, D-36)'})
+SOURCE_RETIRED: frozenset[str] = frozenset()
 
 
 class ResetCause(IntEnum):
@@ -231,6 +243,7 @@ class ResetCause(IntEnum):
 
 RESET_CAUSE_NAMES: tuple[str, ...] = ('UNKNOWN', 'POWER_ON', 'PIN', 'SOFTWARE', 'IWDG', 'WWDG', 'LOW_POWER', 'BROWN_OUT')
 RESET_CAUSE_DESC: Mapping[str, str] = MappingProxyType({'UNKNOWN': 'no flag recognised', 'POWER_ON': 'power-on / POR', 'PIN': 'NRST pin', 'SOFTWARE': 'software reset (REBOOT)', 'IWDG': 'independent watchdog', 'WWDG': 'window watchdog', 'LOW_POWER': 'low-power reset', 'BROWN_OUT': 'brown-out reset'})
+RESET_CAUSE_RETIRED: frozenset[str] = frozenset()
 
 
 class SysFlags(IntFlag):
@@ -245,6 +258,7 @@ class SysFlags(IntFlag):
 
 SYS_FLAGS_BITS: tuple[str, ...] = ('CLK_FALLBACK', 'CFG_DIRTY', 'STREAM_ON', 'REBOOT_PENDING', 'NVM_DEFAULTED')
 SYS_FLAGS_DESC: Mapping[str, str] = MappingProxyType({'CLK_FALLBACK': 'running on HSI fallback clock (FW-PLT-002); timing ±1 %', 'CFG_DIRTY': 'RAM parameters differ from the NVM record (§11.2)', 'STREAM_ON': 'DATA stream on', 'REBOOT_PENDING': 'a reboot_required parameter was changed (effective after SAVE_PARAMS + REBOOT)', 'NVM_DEFAULTED': 'defaults after boot/LOAD rules 2/4/5, until the next SAVE or clean LOAD'})
+SYS_FLAGS_RETIRED: frozenset[str] = frozenset()
 
 
 class Features(IntFlag):
@@ -262,7 +276,8 @@ class Features(IntFlag):
 
 
 FEATURES_BITS: tuple[str, ...] = ('AFE', 'AFE_SYNTHETIC', 'MOTION', 'HOMING', 'MOVE_UNTIL_LOAD', 'NVM', 'TWIN', 'BUTTONS', 'DRV_SIGNALS')
-FEATURES_DESC: Mapping[str, str] = MappingProxyType({'AFE': 'real HX711', 'AFE_SYNTHETIC': 'M1 placeholder samples', 'MOTION': 'step generation', 'HOMING': 'HOME command', 'MOVE_UNTIL_LOAD': 'MOVE_UNTIL_LOAD command', 'NVM': 'SAVE/LOAD_PARAMS', 'TWIN': 'host twin build', 'BUTTONS': 'STOP/PAUSE inputs', 'DRV_SIGNALS': 'ALM/PEND/DRV_POWER inputs'})
+FEATURES_DESC: Mapping[str, str] = MappingProxyType({'AFE': 'real HX711', 'AFE_SYNTHETIC': 'M1 placeholder samples', 'MOTION': 'step generation', 'HOMING': 'HOME command', 'MOVE_UNTIL_LOAD': 'MOVE_UNTIL_LOAD command', 'NVM': 'SAVE/LOAD_PARAMS', 'TWIN': 'host twin build', 'BUTTONS': 'PAUSE button input (the STOP/BREAK input is retired, D-36)', 'DRV_SIGNALS': 'ALM/PEND/DRV_POWER inputs'})
+FEATURES_RETIRED: frozenset[str] = frozenset()
 
 
 class DataFlags(IntFlag):
@@ -279,7 +294,8 @@ class DataFlags(IntFlag):
 
 
 DATA_FLAGS_BITS: tuple[str, ...] = ('VALID', 'MOVING', 'HOMED', 'ENABLED', 'ESTOP', 'HALT', 'FAULT', 'OVERRUN')
-DATA_FLAGS_DESC: Mapping[str, str] = MappingProxyType({'VALID': 'data validity (D-05): SET_VALID, cleared by every operational stop except the jog dead-man', 'MOVING': 'motion state MOVE_ABS, JOG, MOVE_UNTIL_LOAD, HOMING or STOPPING', 'HOMED': 'machine zero valid', 'ENABLED': 'driver enabled and settled (motion state ≥ IDLE)', 'ESTOP': 'ESTOP latched or E-stop sense input open', 'HALT': 'HALT latched (source: STATUS halt_src)', 'FAULT': 'any FAULT latched (STATUS faults)', 'OVERRUN': '≥ 1 DATA frame dropped or ≥ 1 conversion missed by the FW since the previous sent frame'})
+DATA_FLAGS_DESC: Mapping[str, str] = MappingProxyType({'VALID': 'data validity (D-05): SET_VALID, cleared by every operational stop except the jog dead-man', 'MOVING': 'motion state MOVE_ABS, JOG, MOVE_UNTIL_LOAD, HOMING or STOPPING', 'HOMED': 'machine zero valid', 'ENABLED': 'driver enabled and settled (motion state ≥ IDLE)', 'ESTOP': 'ESTOP latched or E-stop sense input open', 'HALT': 'HALT latched (PC HALT command / Pause-Break key; STATUS halt_src = PC)', 'FAULT': 'any FAULT latched (STATUS faults)', 'OVERRUN': '≥ 1 DATA frame dropped or ≥ 1 conversion missed by the FW since the previous sent frame'})
+DATA_FLAGS_RETIRED: frozenset[str] = frozenset()
 
 
 class DataStatus(IntFlag):
@@ -303,8 +319,10 @@ class DataStatus(IntFlag):
     DRV_PWR = 0x8000
 
 
-DATA_STATUS_BITS: tuple[str, ...] = ('PAUSED', 'LIMIT_START', 'LIMIT_END', 'LOAD_LIMIT', 'AFE_STALE', 'AFE_SATURATED', 'AFE_SETTLING', 'AFE_RATE_MISMATCH', 'LINK_WDG', 'STOP_BTN', 'PAUSE_BTN', 'ALM', 'PEND', 'POS_UNCERTAIN', 'NO_AFE_DATA', 'DRV_PWR')
-DATA_STATUS_DESC: Mapping[str, str] = MappingProxyType({'PAUSED': 'PAUSED latch (source: STATUS pause_src, EVENT PAUSED arg); blocks new motion (BLOCK PAUSED); cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (§5.5, D-30, D-31)', 'LIMIT_START': 'START limit input active or LIMIT_START latched', 'LIMIT_END': 'END limit input active or LIMIT_END latched', 'LOAD_LIMIT': 'FAULT LOAD_LIMIT latched', 'AFE_STALE': 'no HX711 sample for afe.timeout_ms', 'AFE_SATURATED': 'this sample at a rail', 'AFE_SETTLING': 'sample within afe.settle_discard after a (re)configuration', 'AFE_RATE_MISMATCH': 'measured rate deviates more than afe.rate_tol_pct', 'LINK_WDG': 'link watchdog tripped, until the next valid command frame', 'STOP_BTN': 'physical STOP/BREAK button input active', 'PAUSE_BTN': 'physical PAUSE button input active', 'ALM': 'driver ALM active', 'PEND': 'driver PEND (in position) active', 'POS_UNCERTAIN': 'an immediate stop may have truncated a pulse (±1 step), cleared by the next HOME', 'NO_AFE_DATA': 'fallback frame (afe_raw = 0x80000000)', 'DRV_PWR': 'driver power present (reads 1 when drv.pwr_sense_enable = false)'})
+DATA_STATUS_BITS: tuple[str, ...] = ('PAUSED', 'LIMIT_START', 'LIMIT_END', 'LOAD_LIMIT', 'AFE_STALE', 'AFE_SATURATED', 'AFE_SETTLING', 'AFE_RATE_MISMATCH', 'LINK_WDG', '', 'PAUSE_BTN', 'ALM', 'PEND', 'POS_UNCERTAIN', 'NO_AFE_DATA', 'DRV_PWR')
+DATA_STATUS_DESC: Mapping[str, str] = MappingProxyType({'PAUSED': 'PAUSED latch (source: STATUS pause_src, EVENT PAUSED arg); blocks new motion (BLOCK PAUSED); cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (§5.5, D-30, D-31)', 'LIMIT_START': 'START limit input active or LIMIT_START latched', 'LIMIT_END': 'END limit input active or LIMIT_END latched', 'LOAD_LIMIT': 'FAULT LOAD_LIMIT latched', 'AFE_STALE': 'no HX711 sample for afe.timeout_ms', 'AFE_SATURATED': 'this sample at a rail', 'AFE_SETTLING': 'sample within afe.settle_discard after a (re)configuration', 'AFE_RATE_MISMATCH': 'measured rate deviates more than afe.rate_tol_pct', 'LINK_WDG': 'link watchdog tripped, until the next valid command frame', 'STOP_BTN': 'was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)', 'PAUSE_BTN': 'physical PAUSE button input active', 'ALM': 'driver ALM active', 'PEND': 'driver PEND (in position) active', 'POS_UNCERTAIN': 'an immediate stop may have truncated a pulse (±1 step), cleared by the next HOME', 'NO_AFE_DATA': 'fallback frame (afe_raw = 0x80000000)', 'DRV_PWR': 'driver power present (reads 1 when drv.pwr_sense_enable = false and FEAT_DRV_SIGNALS = 1)'})
+DATA_STATUS_RETIRED: frozenset[str] = frozenset({'STOP_BTN'})  # reserved, never sent, never reused (members kept for compatibility)
+DATA_STATUS_FEATURE: Mapping[str, str] = MappingProxyType({'PAUSE_BTN': 'BUTTONS', 'ALM': 'DRV_SIGNALS', 'PEND': 'DRV_SIGNALS', 'DRV_PWR': 'DRV_SIGNALS'})  # bit valid only while this INFO feature bit is 1 (ICD §7.6)
 
 
 class Faults(IntFlag):
@@ -322,6 +340,7 @@ class Faults(IntFlag):
 
 FAULTS_BITS: tuple[str, ...] = ('LOAD_LIMIT', 'AFE_FAULT', 'STEP_FAULT', 'LIMIT_WIRING', 'HOME_NOT_FOUND', 'HOME_WIRING', 'K1_WELDED', 'HOME_DRIFT')
 FAULTS_DESC: Mapping[str, str] = MappingProxyType({'LOAD_LIMIT': 'FW load limit or rail sample; always clearable (re-trip on regrow, SAF-FW-011)', 'AFE_FAULT': 'AFE stale while moving; cause: AFE stale or last sample saturated', 'STEP_FAULT': 'step overrun / count fault; HOMED cleared; no persistent cause', 'LIMIT_WIRING': 'both limit inputs active; cause: both still active', 'HOME_NOT_FOUND': 'no START edge within home.max_travel_um; no persistent cause', 'HOME_WIRING': 'END switch reached during homing; no persistent cause', 'K1_WELDED': 'E-stop sense open while driver power stays present > drv.k1_weld_ms (D-29c); cause: E-stop open and power present', 'HOME_DRIFT': 're-homing edge deviates > home.drift_tol_um; no persistent cause'})
+FAULTS_RETIRED: frozenset[str] = frozenset()
 
 
 class IoBits(IntFlag):
@@ -339,8 +358,10 @@ class IoBits(IntFlag):
     RATE_80 = 0x0200
 
 
-IO_BITS: tuple[str, ...] = ('ESTOP_OPEN', 'LIMIT_START', 'LIMIT_END', 'STOP_BTN', 'PAUSE_BTN', 'ALM', 'PEND', 'DRV_PWR', 'ENA_DISABLED', 'RATE_80')
-IO_DESC: Mapping[str, str] = MappingProxyType({'ESTOP_OPEN': 'E-stop sense input open', 'LIMIT_START': 'START limit input active', 'LIMIT_END': 'END limit input active', 'STOP_BTN': 'STOP/BREAK button input active', 'PAUSE_BTN': 'PAUSE button input active', 'ALM': 'driver ALM input active', 'PEND': 'driver PEND input active', 'DRV_PWR': "raw driver-power sense input 'powered'", 'ENA_DISABLED': 'ENA output at the disabled level', 'RATE_80': 'HX711 RATE output high'})
+IO_BITS: tuple[str, ...] = ('ESTOP_OPEN', 'LIMIT_START', 'LIMIT_END', '', 'PAUSE_BTN', 'ALM', 'PEND', 'DRV_PWR', 'ENA_DISABLED', 'RATE_80')
+IO_DESC: Mapping[str, str] = MappingProxyType({'ESTOP_OPEN': 'E-stop sense input open', 'LIMIT_START': 'START limit input active', 'LIMIT_END': 'END limit input active', 'STOP_BTN': 'was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)', 'PAUSE_BTN': 'PAUSE button input active', 'ALM': 'driver ALM input active', 'PEND': 'driver PEND input active', 'DRV_PWR': "raw driver-power sense input 'powered'", 'ENA_DISABLED': 'ENA output at the disabled level', 'RATE_80': 'HX711 RATE output high'})
+IO_RETIRED: frozenset[str] = frozenset({'STOP_BTN'})  # reserved, never sent, never reused (members kept for compatibility)
+IO_FEATURE: Mapping[str, str] = MappingProxyType({'PAUSE_BTN': 'BUTTONS', 'ALM': 'DRV_SIGNALS', 'PEND': 'DRV_SIGNALS', 'DRV_PWR': 'DRV_SIGNALS'})  # bit valid only while this INFO feature bit is 1 (ICD §7.6)
 
 
 class Event(IntEnum):
@@ -382,10 +403,11 @@ class Event(IntEnum):
     NOT_SETTLED = 34
 
 
-EVENT_NAMES: tuple[str, ...] = ('BOOT', 'STOPPED', 'MOVE_DONE', 'ESTOP_SET', 'ESTOP_CLEARED', 'HALT_SET', 'HALT_CLEARED', 'PAUSED', 'PAUSE_CLEARED', 'RESUME_REQUEST', 'FAULT_SET', 'FAULT_CLEARED', 'LIMIT_SET', 'LIMIT_CLEARED', 'LINK_WDG', 'LINK_RESTORED', 'VALID_CLEARED', 'HOMED', 'HOME_FAILED', 'DRIVER_ENABLED', 'DRIVER_DISABLED', 'STOP_BUTTON', 'PAUSE_BUTTON', 'ALM_CHANGED', 'AFE_REINIT', 'AFE_RATE_MISMATCH', 'AFE_STALE', 'PARAMS_SAVED', 'PARAMS_LOADED', 'PARAMS_DEFAULTED', 'NVM_ERROR', 'CLK_FALLBACK', 'DRIVER_POWER', 'NOT_SETTLED')
-EVENT_DESC: Mapping[str, str] = MappingProxyType({'BOOT': 'reset_cause', 'STOPPED': 'stop_cause (§8.2)', 'MOVE_DONE': 'move_done_reason (§8.3)', 'ESTOP_SET': '0', 'ESTOP_CLEARED': '0', 'HALT_SET': 'source: 1 PC, 2 BUTTON', 'HALT_CLEARED': '0', 'PAUSED': 'source: 1 PC, 2 BUTTON (sent when PAUSED goes 0 → 1 only)', 'PAUSE_CLEARED': 'pause_cleared_reason: 2 HALT_CLEAR, 3 RESUME (code 1 unused since ICD v0.3)', 'RESUME_REQUEST': '0 (PAUSE button pressed while PAUSED)', 'FAULT_SET': 'FAULT bit index (§7.6)', 'FAULT_CLEARED': 'FAULT mask cleared', 'LIMIT_SET': 'limit_id: 0 START, 1 END', 'LIMIT_CLEARED': 'limit_id: 0 START, 1 END', 'LINK_WDG': '0', 'LINK_RESTORED': '0', 'VALID_CLEARED': 'stop_cause (§8.2)', 'HOMED': '0', 'HOME_FAILED': 'home_fail_reason: 1 NOT_FOUND, 2 WIRING, 3 ABORTED', 'DRIVER_ENABLED': '0', 'DRIVER_DISABLED': 'driver_disabled_cause: 1 PC DISABLE, 2 IDLE, 3 ESTOP, 4 DRV_POWER_LOST', 'STOP_BUTTON': '1 pressed, 0 released (debounced)', 'PAUSE_BUTTON': '1 pressed, 0 released', 'ALM_CHANGED': '1 active, 0 inactive', 'AFE_REINIT': 're-init count (low 16 bit)', 'AFE_RATE_MISMATCH': '1 set, 0 cleared', 'AFE_STALE': '1 stale, 0 fresh again', 'PARAMS_SAVED': '0', 'PARAMS_LOADED': 'values replaced by defaults', 'PARAMS_DEFAULTED': 'params_defaulted_reason', 'NVM_ERROR': 'nvm_detail (E_NVM detail)', 'CLK_FALLBACK': '0', 'DRIVER_POWER': '1 power present, 0 lost (debounced; only with drv.pwr_sense_enable)', 'NOT_SETTLED': '0 (PEND not active within drv.pend_timeout_ms after the last pulse; warning only)'})
-EVENT_ARG: Mapping[str, str] = MappingProxyType({'BOOT': 'reset_cause', 'STOPPED': 'stop_cause (§8.2)', 'MOVE_DONE': 'move_done_reason (§8.3)', 'ESTOP_SET': '0', 'ESTOP_CLEARED': '0', 'HALT_SET': 'source: 1 PC, 2 BUTTON', 'HALT_CLEARED': '0', 'PAUSED': 'source: 1 PC, 2 BUTTON (sent when PAUSED goes 0 → 1 only)', 'PAUSE_CLEARED': 'pause_cleared_reason: 2 HALT_CLEAR, 3 RESUME (code 1 unused since ICD v0.3)', 'RESUME_REQUEST': '0 (PAUSE button pressed while PAUSED)', 'FAULT_SET': 'FAULT bit index (§7.6)', 'FAULT_CLEARED': 'FAULT mask cleared', 'LIMIT_SET': 'limit_id: 0 START, 1 END', 'LIMIT_CLEARED': 'limit_id: 0 START, 1 END', 'LINK_WDG': '0', 'LINK_RESTORED': '0', 'VALID_CLEARED': 'stop_cause (§8.2)', 'HOMED': '0', 'HOME_FAILED': 'home_fail_reason: 1 NOT_FOUND, 2 WIRING, 3 ABORTED', 'DRIVER_ENABLED': '0', 'DRIVER_DISABLED': 'driver_disabled_cause: 1 PC DISABLE, 2 IDLE, 3 ESTOP, 4 DRV_POWER_LOST', 'STOP_BUTTON': '1 pressed, 0 released (debounced)', 'PAUSE_BUTTON': '1 pressed, 0 released', 'ALM_CHANGED': '1 active, 0 inactive', 'AFE_REINIT': 're-init count (low 16 bit)', 'AFE_RATE_MISMATCH': '1 set, 0 cleared', 'AFE_STALE': '1 stale, 0 fresh again', 'PARAMS_SAVED': '0', 'PARAMS_LOADED': 'values replaced by defaults', 'PARAMS_DEFAULTED': 'params_defaulted_reason', 'NVM_ERROR': 'nvm_detail (E_NVM detail)', 'CLK_FALLBACK': '0', 'DRIVER_POWER': '1 power present, 0 lost (debounced; only with drv.pwr_sense_enable)', 'NOT_SETTLED': '0 (PEND not active within drv.pend_timeout_ms after the last pulse; warning only)'})
-EVENT_VALUES: Mapping[str, str] = MappingProxyType({'BOOT': 'HardFault record of the previous run: faulting PC / CFSR (bit patterns as i32); 0 / 0 if none (OI-FW-21)', 'STOPPED': 'pos_um / pos_steps', 'MOVE_DONE': 'final pos_um / pos_steps', 'ESTOP_SET': 'pos_um / pos_steps', 'ESTOP_CLEARED': '0 / 0', 'HALT_SET': '0 / 0', 'HALT_CLEARED': '0 / 0', 'PAUSED': '0 / 0', 'PAUSE_CLEARED': '0 / 0', 'RESUME_REQUEST': '0 / 0', 'FAULT_SET': 'deciding value: raw (LOAD_LIMIT), deviation µm (HOME_DRIFT), ms the driver power stayed present with the E-stop open (K1_WELDED) / 0; else pos_um / pos_steps', 'FAULT_CLEARED': '0 / 0', 'LIMIT_SET': 'pos_um / pos_steps', 'LIMIT_CLEARED': '0 / 0', 'LINK_WDG': '0 / 0', 'LINK_RESTORED': '0 / 0', 'VALID_CLEARED': '0 / 0', 'HOMED': 'drift µm vs. the previous zero (0 if not homed before) / 0', 'HOME_FAILED': 'pos_um / pos_steps', 'DRIVER_ENABLED': '0 / 0', 'DRIVER_DISABLED': '0 / 0', 'STOP_BUTTON': '0 / 0', 'PAUSE_BUTTON': '0 / 0', 'ALM_CHANGED': '0 / 0', 'AFE_REINIT': '0 / 0', 'AFE_RATE_MISMATCH': 'measured rate 0.1 SPS / 0', 'AFE_STALE': '0 / 0', 'PARAMS_SAVED': 'record sequence number / 0', 'PARAMS_LOADED': '0 / 0', 'PARAMS_DEFAULTED': '0 / 0', 'NVM_ERROR': '0 / 0', 'CLK_FALLBACK': '0 / 0', 'DRIVER_POWER': '0 / 0', 'NOT_SETTLED': 'elapsed ms / 0'})
+EVENT_NAMES: tuple[str, ...] = ('BOOT', 'STOPPED', 'MOVE_DONE', 'ESTOP_SET', 'ESTOP_CLEARED', 'HALT_SET', 'HALT_CLEARED', 'PAUSED', 'PAUSE_CLEARED', 'RESUME_REQUEST', 'FAULT_SET', 'FAULT_CLEARED', 'LIMIT_SET', 'LIMIT_CLEARED', 'LINK_WDG', 'LINK_RESTORED', 'VALID_CLEARED', 'HOMED', 'HOME_FAILED', 'DRIVER_ENABLED', 'DRIVER_DISABLED', 'PAUSE_BUTTON', 'ALM_CHANGED', 'AFE_REINIT', 'AFE_RATE_MISMATCH', 'AFE_STALE', 'PARAMS_SAVED', 'PARAMS_LOADED', 'PARAMS_DEFAULTED', 'NVM_ERROR', 'CLK_FALLBACK', 'DRIVER_POWER', 'NOT_SETTLED')
+EVENT_DESC: Mapping[str, str] = MappingProxyType({'BOOT': 'reset_cause', 'STOPPED': 'stop_cause (§8.2)', 'MOVE_DONE': 'move_done_reason (§8.3)', 'ESTOP_SET': '0', 'ESTOP_CLEARED': '0', 'HALT_SET': 'source: 1 PC (HALT command / Pause-Break key); 2 BUTTON never since v0.5 (D-36)', 'HALT_CLEARED': '0', 'PAUSED': 'source: 1 PC, 2 BUTTON (sent when PAUSED goes 0 → 1 only)', 'PAUSE_CLEARED': 'pause_cleared_reason: 2 HALT_CLEAR, 3 RESUME (code 1 unused since ICD v0.3)', 'RESUME_REQUEST': '0 (PAUSE button pressed while PAUSED)', 'FAULT_SET': 'FAULT bit index (§7.6)', 'FAULT_CLEARED': 'FAULT mask cleared', 'LIMIT_SET': 'limit_id: 0 START, 1 END', 'LIMIT_CLEARED': 'limit_id: 0 START, 1 END', 'LINK_WDG': '0', 'LINK_RESTORED': '0', 'VALID_CLEARED': 'stop_cause (§8.2)', 'HOMED': '0', 'HOME_FAILED': 'home_fail_reason: 1 NOT_FOUND, 2 WIRING, 3 ABORTED', 'DRIVER_ENABLED': '0', 'DRIVER_DISABLED': 'driver_disabled_cause: 1 PC DISABLE, 2 IDLE, 3 ESTOP, 4 DRV_POWER_LOST', 'STOP_BUTTON': '–', 'PAUSE_BUTTON': '1 pressed, 0 released', 'ALM_CHANGED': '1 active, 0 inactive', 'AFE_REINIT': 're-init count (low 16 bit)', 'AFE_RATE_MISMATCH': '1 set, 0 cleared', 'AFE_STALE': '1 stale, 0 fresh again', 'PARAMS_SAVED': '0', 'PARAMS_LOADED': 'values replaced by defaults', 'PARAMS_DEFAULTED': 'params_defaulted_reason', 'NVM_ERROR': 'nvm_detail (E_NVM detail)', 'CLK_FALLBACK': '0', 'DRIVER_POWER': '1 power present, 0 lost (debounced; only with drv.pwr_sense_enable)', 'NOT_SETTLED': '0 (PEND not active within drv.pend_timeout_ms after the last pulse; warning only)'})
+EVENT_RETIRED: frozenset[str] = frozenset({'STOP_BUTTON'})  # reserved, never sent, never reused (members kept for compatibility)
+EVENT_ARG: Mapping[str, str] = MappingProxyType({'BOOT': 'reset_cause', 'STOPPED': 'stop_cause (§8.2)', 'MOVE_DONE': 'move_done_reason (§8.3)', 'ESTOP_SET': '0', 'ESTOP_CLEARED': '0', 'HALT_SET': 'source: 1 PC (HALT command / Pause-Break key); 2 BUTTON never since v0.5 (D-36)', 'HALT_CLEARED': '0', 'PAUSED': 'source: 1 PC, 2 BUTTON (sent when PAUSED goes 0 → 1 only)', 'PAUSE_CLEARED': 'pause_cleared_reason: 2 HALT_CLEAR, 3 RESUME (code 1 unused since ICD v0.3)', 'RESUME_REQUEST': '0 (PAUSE button pressed while PAUSED)', 'FAULT_SET': 'FAULT bit index (§7.6)', 'FAULT_CLEARED': 'FAULT mask cleared', 'LIMIT_SET': 'limit_id: 0 START, 1 END', 'LIMIT_CLEARED': 'limit_id: 0 START, 1 END', 'LINK_WDG': '0', 'LINK_RESTORED': '0', 'VALID_CLEARED': 'stop_cause (§8.2)', 'HOMED': '0', 'HOME_FAILED': 'home_fail_reason: 1 NOT_FOUND, 2 WIRING, 3 ABORTED', 'DRIVER_ENABLED': '0', 'DRIVER_DISABLED': 'driver_disabled_cause: 1 PC DISABLE, 2 IDLE, 3 ESTOP, 4 DRV_POWER_LOST', 'STOP_BUTTON': '–', 'PAUSE_BUTTON': '1 pressed, 0 released', 'ALM_CHANGED': '1 active, 0 inactive', 'AFE_REINIT': 're-init count (low 16 bit)', 'AFE_RATE_MISMATCH': '1 set, 0 cleared', 'AFE_STALE': '1 stale, 0 fresh again', 'PARAMS_SAVED': '0', 'PARAMS_LOADED': 'values replaced by defaults', 'PARAMS_DEFAULTED': 'params_defaulted_reason', 'NVM_ERROR': 'nvm_detail (E_NVM detail)', 'CLK_FALLBACK': '0', 'DRIVER_POWER': '1 power present, 0 lost (debounced; only with drv.pwr_sense_enable)', 'NOT_SETTLED': '0 (PEND not active within drv.pend_timeout_ms after the last pulse; warning only)'})
+EVENT_VALUES: Mapping[str, str] = MappingProxyType({'BOOT': 'HardFault record of the previous run: faulting PC / CFSR (bit patterns as i32); 0 / 0 if none (OI-FW-21)', 'STOPPED': 'pos_um / pos_steps', 'MOVE_DONE': 'final pos_um / pos_steps', 'ESTOP_SET': 'pos_um / pos_steps', 'ESTOP_CLEARED': '0 / 0', 'HALT_SET': '0 / 0', 'HALT_CLEARED': '0 / 0', 'PAUSED': '0 / 0', 'PAUSE_CLEARED': '0 / 0', 'RESUME_REQUEST': '0 / 0', 'FAULT_SET': 'deciding value: raw (LOAD_LIMIT), deviation µm (HOME_DRIFT), ms the driver power stayed present with the E-stop open (K1_WELDED) / 0; else pos_um / pos_steps', 'FAULT_CLEARED': '0 / 0', 'LIMIT_SET': 'pos_um / pos_steps', 'LIMIT_CLEARED': '0 / 0', 'LINK_WDG': '0 / 0', 'LINK_RESTORED': '0 / 0', 'VALID_CLEARED': '0 / 0', 'HOMED': 'drift µm vs. the previous zero (0 if not homed before) / 0', 'HOME_FAILED': 'pos_um / pos_steps', 'DRIVER_ENABLED': '0 / 0', 'DRIVER_DISABLED': '0 / 0', 'STOP_BUTTON': '–', 'PAUSE_BUTTON': '0 / 0', 'ALM_CHANGED': '0 / 0', 'AFE_REINIT': '0 / 0', 'AFE_RATE_MISMATCH': 'measured rate 0.1 SPS / 0', 'AFE_STALE': '0 / 0', 'PARAMS_SAVED': 'record sequence number / 0', 'PARAMS_LOADED': '0 / 0', 'PARAMS_DEFAULTED': '0 / 0', 'NVM_ERROR': '0 / 0', 'CLK_FALLBACK': '0 / 0', 'DRIVER_POWER': '0 / 0', 'NOT_SETTLED': 'elapsed ms / 0'})
 
 
 class StopCause(IntEnum):
@@ -411,8 +433,9 @@ class StopCause(IntEnum):
     DRV_POWER_LOST = 17
 
 
-STOP_CAUSE_NAMES: tuple[str, ...] = ('NONE', 'PC_STOP', 'PC_STOP_CONTROLLED', 'PC_HALT', 'STOP_BUTTON', 'PAUSE_BUTTON', 'PC_PAUSE', 'ESTOP', 'LIMIT_START', 'LIMIT_END', 'LIMIT_WIRING', 'LOAD_LIMIT', 'AFE_FAULT', 'LINK_WDG', 'JOG_DEADMAN', 'STEP_FAULT', 'HOME_FAIL', 'DRV_POWER_LOST')
-STOP_CAUSE_DESC: Mapping[str, str] = MappingProxyType({'NONE': '—', 'PC_STOP': 'STOP mode 0', 'PC_STOP_CONTROLLED': 'STOP mode 1', 'PC_HALT': 'HALT command', 'STOP_BUTTON': 'physical STOP/BREAK button', 'PAUSE_BUTTON': 'physical PAUSE button', 'PC_PAUSE': 'PAUSE command', 'ESTOP': 'E-stop sense opened', 'LIMIT_START': 'START limit switch', 'LIMIT_END': 'END limit switch', 'LIMIT_WIRING': 'both limit inputs active', 'LOAD_LIMIT': 'FW load limit (incl. rail sample)', 'AFE_FAULT': 'AFE stale while moving', 'LINK_WDG': 'link watchdog', 'JOG_DEADMAN': 'jog dead-man (VALID unchanged)', 'STEP_FAULT': 'step overrun / count fault', 'HOME_FAIL': 'homing failure', 'DRV_POWER_LOST': 'driver power lost while a motion was running (SAF-FW-024, D-29c)'})
+STOP_CAUSE_NAMES: tuple[str, ...] = ('NONE', 'PC_STOP', 'PC_STOP_CONTROLLED', 'PC_HALT', 'PAUSE_BUTTON', 'PC_PAUSE', 'ESTOP', 'LIMIT_START', 'LIMIT_END', 'LIMIT_WIRING', 'LOAD_LIMIT', 'AFE_FAULT', 'LINK_WDG', 'JOG_DEADMAN', 'STEP_FAULT', 'HOME_FAIL', 'DRV_POWER_LOST')
+STOP_CAUSE_DESC: Mapping[str, str] = MappingProxyType({'NONE': '—', 'PC_STOP': 'STOP mode 0', 'PC_STOP_CONTROLLED': 'STOP mode 1', 'PC_HALT': 'HALT command', 'STOP_BUTTON': 'was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)', 'PAUSE_BUTTON': 'physical PAUSE button', 'PC_PAUSE': 'PAUSE command', 'ESTOP': 'E-stop sense opened', 'LIMIT_START': 'START limit switch', 'LIMIT_END': 'END limit switch', 'LIMIT_WIRING': 'both limit inputs active', 'LOAD_LIMIT': 'FW load limit (incl. rail sample)', 'AFE_FAULT': 'AFE stale while moving', 'LINK_WDG': 'link watchdog', 'JOG_DEADMAN': 'jog dead-man (VALID unchanged)', 'STEP_FAULT': 'step overrun / count fault', 'HOME_FAIL': 'homing failure', 'DRV_POWER_LOST': 'driver power lost while a motion was running (SAF-FW-024, D-29c)'})
+STOP_CAUSE_RETIRED: frozenset[str] = frozenset({'STOP_BUTTON'})  # reserved, never sent, never reused (members kept for compatibility)
 
 
 class MoveDoneReason(IntEnum):
@@ -428,6 +451,7 @@ class MoveDoneReason(IntEnum):
 
 MOVE_DONE_REASON_NAMES: tuple[str, ...] = ('TARGET', 'LOAD_THRESHOLD', 'BOUND', 'SOFT_LIMIT', 'JOG_ZERO', 'STOPPED')
 MOVE_DONE_REASON_DESC: Mapping[str, str] = MappingProxyType({'TARGET': 'MOVE_ABS / HOME end', 'LOAD_THRESHOLD': 'MOVE_UNTIL_LOAD threshold', 'BOUND': 'MOVE_UNTIL_LOAD or JOG bound', 'SOFT_LIMIT': 'JOG end at a soft limit or un-homed travel bound', 'JOG_ZERO': 'JOG 0', 'STOPPED': 'ended by a stop source; see the preceding STOPPED / HOME_FAILED'})
+MOVE_DONE_REASON_RETIRED: frozenset[str] = frozenset()
 
 
 class HomeFailReason(IntEnum):
@@ -440,6 +464,7 @@ class HomeFailReason(IntEnum):
 
 HOME_FAIL_REASON_NAMES: tuple[str, ...] = ('NOT_FOUND', 'WIRING', 'ABORTED')
 HOME_FAIL_REASON_DESC: Mapping[str, str] = MappingProxyType({'NOT_FOUND': 'no START edge within home.max_travel_um (fault HOME_NOT_FOUND)', 'WIRING': 'END switch reached (fault HOME_WIRING)', 'ABORTED': 'any other stop during homing (no latch of its own)'})
+HOME_FAIL_REASON_RETIRED: frozenset[str] = frozenset()
 
 
 class DriverDisabledCause(IntEnum):
@@ -453,6 +478,7 @@ class DriverDisabledCause(IntEnum):
 
 DRIVER_DISABLED_CAUSE_NAMES: tuple[str, ...] = ('PC_DISABLE', 'IDLE', 'ESTOP', 'DRV_POWER_LOST')
 DRIVER_DISABLED_CAUSE_DESC: Mapping[str, str] = MappingProxyType({'PC_DISABLE': 'DISABLE command', 'IDLE': 'idle auto-disable (safety.idle_disable_s)', 'ESTOP': 'E-stop sense opened', 'DRV_POWER_LOST': 'driver power lost while enabled / enabling (SAF-FW-024, D-29c)'})
+DRIVER_DISABLED_CAUSE_RETIRED: frozenset[str] = frozenset()
 
 
 class PauseClearedReason(IntEnum):
@@ -464,6 +490,7 @@ class PauseClearedReason(IntEnum):
 
 PAUSE_CLEARED_REASON_NAMES: tuple[str, ...] = ('HALT_CLEAR', 'RESUME')
 PAUSE_CLEARED_REASON_DESC: Mapping[str, str] = MappingProxyType({'HALT_CLEAR': 'accepted HALT_CLEAR (clears HALT and PAUSED, D-31)', 'RESUME': 'accepted RESUME (clears only PAUSED, D-31)'})
+PAUSE_CLEARED_REASON_RETIRED: frozenset[str] = frozenset()
 
 
 class ParamsDefaultedReason(IntEnum):
@@ -478,6 +505,7 @@ class ParamsDefaultedReason(IntEnum):
 
 PARAMS_DEFAULTED_REASON_NAMES: tuple[str, ...] = ('COMMAND', 'NO_RECORD', 'CRC_ERROR', 'MIGRATION', 'HARD_RULE')
 PARAMS_DEFAULTED_REASON_DESC: Mapping[str, str] = MappingProxyType({'COMMAND': 'DEFAULT_PARAMS', 'NO_RECORD': 'no NVM record (blank)', 'CRC_ERROR': 'both records CRC-bad', 'MIGRATION': 'record with another PARAM_DICT_HASH (migration by id)', 'HARD_RULE': 'resulting image violates a hard rule'})
+PARAMS_DEFAULTED_REASON_RETIRED: frozenset[str] = frozenset()
 
 
 class LimitId(IntEnum):
@@ -489,6 +517,19 @@ class LimitId(IntEnum):
 
 LIMIT_ID_NAMES: tuple[str, ...] = ('START', 'END')
 LIMIT_ID_DESC: Mapping[str, str] = MappingProxyType({'START': 'START switch (−x end, home reference)', 'END': 'END switch (+x end)'})
+LIMIT_ID_RETIRED: frozenset[str] = frozenset()
+
+
+class AfeSampleStatus(IntFlag):
+    """afe_sample_t.status (seam hal_hx711, tools/README; not on the wire) (ICD tools/README seam v1.2)."""
+
+    SCK_OVERRUN = 0x01
+    MISSED_EDGE = 0x02
+
+
+AFE_SAMPLE_STATUS_BITS: tuple[str, ...] = ('SCK_OVERRUN', 'MISSED_EDGE')
+AFE_SAMPLE_STATUS_DESC: Mapping[str, str] = MappingProxyType({'SCK_OVERRUN': 'the read of this sample overran (SCK high > 60 us or DOUT still low after the last pulse): the HX711 may have entered power-down; the core re-initialises it (afe_reinit_count, EVENT AFE_REINIT) and flags the next afe.settle_discard samples AFE_SETTLING', 'MISSED_EDGE': 'at least one DOUT-ready edge was missed before this sample (recovered by hal_hx711_kick or a late edge): the core sets OVERRUN in the next DATA frame'})
+AFE_SAMPLE_STATUS_RETIRED: frozenset[str] = frozenset()
 
 
 class RetryClass(IntEnum):
@@ -502,6 +543,7 @@ class RetryClass(IntEnum):
 
 RETRY_CLASS_NAMES: tuple[str, ...] = ('RETRY', 'CONFIRM', 'ONCE_PRIORITY', 'VERIFY')
 RETRY_CLASS_DESC: Mapping[str, str] = MappingProxyType({'RETRY': 'timeout 100 ms, ≤ 2 retries with a new SEQ and the newest value', 'CONFIRM': 'priority path, repeated every 50 ms until confirmed (≤ 20 in 1 s)', 'ONCE_PRIORITY': 'unused since ICD v0.4.1 (D-34: the clears are VERIFY); value kept, never reassigned', 'VERIFY': 'never retried; after a timeout GET_STATUS decides (commands with priority = true still use the SW priority lane)'})
+RETRY_CLASS_RETIRED: frozenset[str] = frozenset()
 
 
 class Cmd(IntEnum):
@@ -624,6 +666,7 @@ TABLES: Mapping[str, type] = MappingProxyType({
     'pause_cleared_reason': PauseClearedReason,
     'params_defaulted_reason': ParamsDefaultedReason,
     'limit_id': LimitId,
+    'afe_sample_status': AfeSampleStatus,
     'retry_class': RetryClass,
     'command': Cmd,
 })

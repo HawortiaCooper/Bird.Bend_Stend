@@ -119,7 +119,8 @@ def test_importing_whole_backend_loads_no_qt() -> None:
 @pytest.mark.req("SW-PLT-002")
 def test_backend_reads_time_only_through_clock() -> None:
     """All backend time comes from the Clock protocol (§12.6); ``time.*`` only in clock/timing modules."""
-    allowed = {"clock.py", "timing.py", "server.py", "transport.py"}
+    allowed = {"clock.py", "timing.py", "server.py", "transport.py",
+               "win_hotkey.py"}           # OS hotkey thread: measures the key → HALT latency with perf_counter
     bad = []
     for sub in ("core", "io"):
         for p in _modules(sub):

@@ -1,9 +1,10 @@
 /* Core link on the fake seams: boot EVENTs, exactly one response per valid command frame (SEQ
  * echoed), INFO/STATUS content, GET_ALL_PARAMS = the vectors' default pages, invalid TYPE counted
  * without response, flood with response back-pressure (no response lost, shortened or reordered),
- * dispatch budget, NVM HOLD blocks dispatch, latch commands, M1 NOT_IN_BUILD, REBOOT, sniffer hold.
+ * dispatch budget, NVM HOLD blocks dispatch, latch commands, motion gating with the real inputs
+ * (M2), REBOOT, sniffer hold.
  * Verifies: FW-CMD-001, FW-CMD-002, FW-CMD-004, FW-CFG-002, FW-CFG-004, FW-NVM-003, IF-005, IF-008,
- *           SAF-FW-018 (boot state), SAF-FW-022/023, NFR-008, DEF-P1-07
+ *           SAF-FW-018 (boot state), SAF-FW-023, SAF-FW-024 (DRV_UNPOWERED), NFR-008, DEF-P1-07
  */
 #include <unity.h>
 
@@ -31,7 +32,9 @@ static void test_boot_events_and_state(void)
     TEST_ASSERT_EQUAL_UINT16(0xFFFFu, le_get16(&s.b[70]));
     TEST_ASSERT_EQUAL_UINT8(SRC_NONE, s.b[84]);
     TEST_ASSERT_EQUAL_UINT8(0u, s.b[85]);
-    TEST_ASSERT_EQUAL_HEX16(IO_RATE_80, le_get16(&s.b[14]));
+    /* fake idle levels: E-stop closed, limits inactive, PAUSE released, PEND in position, powered */
+    TEST_ASSERT_EQUAL_HEX16(IO_RATE_80 | IO_PEND | IO_DRV_PWR, le_get16(&s.b[14]));
+    TEST_ASSERT_EQUAL_HEX16(DS_DRV_PWR | DS_PEND, le_get16(&s.b[10]));
     TEST_ASSERT_TRUE(fake_rate_pin);
     TEST_ASSERT_EQUAL_UINT8(25u, fake_hx_gain_pulses);
 }
@@ -51,7 +54,8 @@ static void test_get_info(void)
     TEST_ASSERT_EQUAL_HEX8(0x10u, b[10]);                              /* hal_uid */
     TEST_ASSERT_EQUAL_STRING("host", (const char *)&b[22]);
     TEST_ASSERT_EQUAL_UINT16(PARAM_COUNT, le_get16(&b[38]));
-    TEST_ASSERT_EQUAL_HEX32(FEAT_AFE_SYNTHETIC | FEAT_NVM, le_get32(&b[40]));
+    TEST_ASSERT_EQUAL_HEX32(FEAT_AFE | FEAT_MOTION | FEAT_HOMING | FEAT_NVM | FEAT_BUTTONS | FEAT_DRV_SIGNALS,
+                            le_get32(&b[40]));                 /* M2; MOVE_UNTIL_LOAD is M4 */
 }
 
 /* production path GET_ALL_PARAMS with defaults == the vectors' default-table pages */
@@ -156,14 +160,17 @@ static void test_set_get_param_and_nack_no_effect(void)
     TEST_ASSERT_EQUAL_HEX8(0u, h_status().b[19] & SYSF_REBOOT_PENDING);
 }
 
-static void test_motion_not_in_build_m1(void)
+static void test_motion_gating_and_reboot_params(void)
 {
     uint8_t mv[12] = {0};
     uint8_t jog0[12] = {0};
     uint8_t home[1] = {0u};
-    /* M1: not enabled / not homed / driver power not confirmed -> E_STATE with every bit */
+    /* boot: not enabled / not homed; driver power lost (input high = K1 open) -> DRV_UNPOWERED */
     le_put32(mv, 100000u);
     le_put32(&mv[4], 1000u);
+    h_expect_nack(h_cmd(CMD_MOVE_ABS, 1u, mv, 12u), ST_E_STATE, BLOCK_NOT_ENABLED | BLOCK_NOT_HOMED);
+    fake_input_set(IO_DRV_PWR_BIT, true);
+    fake_run_ms(DRV_PWR_FILTER_MS + 1u);
     h_expect_nack(h_cmd(CMD_MOVE_ABS, 1u, mv, 12u), ST_E_STATE,
                   BLOCK_NOT_ENABLED | BLOCK_NOT_HOMED | BLOCK_DRV_UNPOWERED);
     h_expect_nack(h_cmd(CMD_ENABLE, 2u, NULL, 0u), ST_E_STATE, BLOCK_DRV_UNPOWERED);
@@ -191,10 +198,17 @@ static void test_motion_not_in_build_m1(void)
         TEST_ASSERT_EQUAL_HEX16(DS_DRV_PWR, le_get16(&s.b[10]) & DS_DRV_PWR);
     }
     TEST_ASSERT_TRUE(g_fw.boot_p.motion.pul_invert && g_fw.boot_p.motion.ena_invert);
-    /* driver-power sensing disabled (bring-up): checks pass -> NOT_IN_BUILD, no side effect */
-    h_expect_nack(h_cmd(CMD_ENABLE, 4u, NULL, 0u), ST_E_INTERNAL, INTERNAL_NOT_IN_BUILD);
-    h_expect_nack(h_cmd(CMD_DISABLE, 5u, NULL, 0u), ST_E_INTERNAL, INTERNAL_NOT_IN_BUILD);
+    /* driver-power sensing disabled (bring-up): power assumed present -> ENABLE accepted */
+    fake_input_set(IO_DRV_PWR_BIT, true);                     /* input still reads "off" */
+    fake_run_ms(DRV_PWR_FILTER_MS + 1u);
     h_expect_nack(h_cmd(CMD_HOME, 6u, home, 1u), ST_E_STATE, BLOCK_NOT_ENABLED);
+    {
+        const fake_frame_t *r = h_cmd(CMD_ENABLE, 4u, NULL, 0u);
+        h_expect_ok(r);
+        TEST_ASSERT_EQUAL_UINT16(500u, le_get16(&r->payload[1]));    /* settle left (FW-MOT-008) */
+    }
+    TEST_ASSERT_EQUAL_UINT8(MS_ENABLING, h_status().b[9]);
+    h_expect_ok(h_cmd(CMD_DISABLE, 5u, NULL, 0u));
     TEST_ASSERT_EQUAL_UINT8(MS_NOT_ENABLED, h_status().b[9]);
 }
 
@@ -242,7 +256,7 @@ static void test_halt_pause_resume_flow(void)
     le_put32(mv, 100000u);
     le_put32(&mv[4], 1000u);
     h_expect_nack(h_cmd(CMD_MOVE_ABS, 5u, mv, 12u), ST_E_STATE,
-                  BLOCK_HALT | BLOCK_NOT_ENABLED | BLOCK_NOT_HOMED | BLOCK_DRV_UNPOWERED | BLOCK_PAUSED);
+                  BLOCK_HALT | BLOCK_NOT_ENABLED | BLOCK_NOT_HOMED | BLOCK_PAUSED);
     h_expect_ok(h_cmd(CMD_HALT_CLEAR, 6u, NULL, 0u));                         /* HALT + PAUSED */
     s = h_status();
     TEST_ASSERT_EQUAL_HEX8(0u, s.b[8] & DF_HALT);
@@ -352,7 +366,7 @@ int main(void)
     RUN_TEST(test_one_response_per_frame_and_invalid_type);
     RUN_TEST(test_flood_backpressure);
     RUN_TEST(test_set_get_param_and_nack_no_effect);
-    RUN_TEST(test_motion_not_in_build_m1);
+    RUN_TEST(test_motion_gating_and_reboot_params);
     RUN_TEST(test_effective_overlay_from_generated_flags);
     RUN_TEST(test_halt_pause_resume_flow);
     RUN_TEST(test_set_valid_response_time);

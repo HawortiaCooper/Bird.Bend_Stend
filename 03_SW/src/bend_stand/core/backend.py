@@ -9,13 +9,18 @@ Supervisor → Worker → Recorder (§12.4 hook a). Fully deterministic.
 M1: connect / disconnect (``sim``, ``sim:<file>``, ``COMx`` only on the operator's choice (D-06), ``tcp://``),
 stream, configuration (read / check / write+verify / NVM / reboot / board-config file), STOP / HALT / PAUSE
 (priority path), RESUME and the clears (VERIFY), recording skeleton, ``status()`` with link / stream / indicators
-(UNKNOWN handling) / sys_flags / gates, data view and channel registry. M2–M4 members exist (``core.api``) and
-refuse with a ``NOT_IMPLEMENTED`` gate item or raise ``NotImplementedError`` for pure accessors.
+(UNKNOWN handling) / sys_flags / gates, data view and channel registry.
+M2 (WP-B12/B13): ``backend.motion`` = ``core.motion.MotionController`` (enable / disable / home / move_to /
+move_by / jog / test zero, motion gates), SW travel limits (``limits.set``), the FW load-threshold manager with the
+default and manual-raw paths (``core.safety``), the system-wide Pause/Break → HALT key (``io.win_hotkey``) with its
+test mode, feature-dependent indicators UNKNOWN (D-37 b). M3–M4 members exist (``core.api``) and refuse with a
+``NOT_IMPLEMENTED`` gate item or raise ``NotImplementedError`` for pure accessors.
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/core/backend.py @37c87471 (facade pattern; rewritten for §15).
 
 Implements: SW-PLT-003, SW-ACQ-001, SW-ACQ-002 (record start/stop), SW-CFG-001…004 (API), SW-STOP-001/002
-(backend part), SAF-SW-005 (indicators incl. UNKNOWN), NFR-002 (priority path from the GUI thread)
+(backend part), SAF-SW-005 (indicators incl. UNKNOWN, D-37 b), NFR-002 (priority path from the GUI thread),
+SW-MAN-001…006 / SW-LIM-001 (M2 backend part), SW-STOP-002 (hotkey), SAF-SW-002 (M2 part)
 """
 from __future__ import annotations
 
@@ -36,14 +41,15 @@ from bend_stand.core.dataview import DataView
 from bend_stand.core.device import Device, DeviceSettings
 from bend_stand.core.errors import ConfirmationRequired, GateRefused, RecorderError
 from bend_stand.core.events import EventBus
-from bend_stand.core.gates import CLEAR_HINTS, GateSnapshot, all_gates
+from bend_stand.core.gates import CLEAR_HINTS, GateSnapshot, all_gates, g_hotkey_test
 from bend_stand.core.jobs import Job, Worker
 from bend_stand.core.link import SUPERVISOR_TICK_NS
 from bend_stand.core.liveness import LivenessMonitor
+from bend_stand.core.motion import MotionController
 from bend_stand.core.model import (
     INDICATOR_UNKNOWN, BackendStatus, BoardConfigFile, CalibrationStatus, ClearResult, DeviceInfo, EndpointInfo,
-    EngineState, GateCode, GateId, GateItem, GateResult, HotkeyStatus, Indicator, Indicators, Issue, LimitConfig,
-    LinkState, LinkStatus, MotionKind, MotionLimits, MotionStatus, OperationStatus, SafetyStatus,
+    EngineState, GateCode, GateId, GateItem, GateResult, HotkeyStatus, Indicator, Indicators, Issue, IssueSeverity,
+    LimitConfig, LinkState, LinkStatus, MotionStatus, OperationStatus, SafetyStatus,
     SeqStatus, SessionSettings, Severity, StopResult, StreamStatus, TestMarks, ThresholdState, Token,
     TravelDiffState, VerifyReport,
 )
@@ -76,6 +82,7 @@ class BackendSettings:
     sim_bytes_per_s: float | None = LINK_BYTES_PER_S
     sim_latency_ns: int = 0
     sim_nvm_path: str | None = None
+    hotkey: Literal["auto", "win32", "fake", "off"] = "auto"    # auto: env BEND_STAND_HOTKEY, else win32
 
 
 def _not_implemented(what: str, milestone: str) -> GateResult:
@@ -135,63 +142,10 @@ class ConfigAPI:
         return load_board_config(path)
 
 
-class MotionAPI:
-    """``backend.motion`` — M2 (WP-B12). M1: every command refuses locally; nothing is sent."""
-
-    def __init__(self, be: Backend) -> None:
-        self._be = be
-
-    def _refused(self) -> ReleasingFuture:
-        return failed_future(GateRefused(_not_implemented("motion", "M2")))
-
-    def move_to(self, target_mm: float, *, speed_mm_s: float | None = None,
-                accel_mm_s2: float | None = None) -> ReleasingFuture:
-        return self._refused()
-
-    def move_by(self, delta_mm: float, *, speed_mm_s: float | None = None,
-                accel_mm_s2: float | None = None) -> ReleasingFuture:
-        return self._refused()
-
-    def jog_start(self, direction: int, speed_mm_s: float) -> None:
-        return None
-
-    def jog_update(self, speed_mm_s: float) -> None:
-        return None
-
-    def jog_stop(self) -> None:
-        return None
-
-    def enable(self) -> GateResult:
-        return _not_implemented("enable", "M2")
-
-    def disable(self, *, confirmed: bool = False) -> GateResult:
-        return _not_implemented("disable", "M2")
-
-    def home(self, *, load_confirmed: bool = False) -> ReleasingFuture:
-        return self._refused()
-
-    def set_test_zero(self) -> float:
-        raise NotImplementedError("test zero: M3")
-
-    def reset_test_zero(self) -> None:
-        raise NotImplementedError("test zero: M3")
-
-    def set_valid(self, flag: bool) -> GateResult:
-        """Manual VALID toggle (SW-MAN-006) — wire part available in M1."""
-        g = self._be.status().gates[GateId.VALID_TOGGLE]
-        if g.ok:
-            self._be._job(self._be.device.set_valid_job, bool(flag))  # noqa: SLF001
-        return g
-
-    def limits(self) -> MotionLimits | None:
-        return None
-
-    def check(self, kind: MotionKind, *, speed_mm_s: float | None = None, accel_mm_s2: float | None = None,
-              target_mm: float | None = None) -> GateResult:
-        return _not_implemented(f"{kind.value.lower()} check", "M2")
-
-
 class LimitsAPI:
+    """``backend.limits``: SW travel limits (SW-LIM-001, M2), FW load thresholds (SAF-SW-002: default / manual raw
+    in M2, calibrated in M3); SW load limits and the no-specimen mode are M3."""
+
     def __init__(self, be: Backend) -> None:
         self._be = be
         self._cfg = LimitConfig()
@@ -199,14 +153,60 @@ class LimitsAPI:
     def get(self) -> LimitConfig:
         return self._cfg
 
+    def check(self, cfg: LimitConfig) -> list[Issue]:
+        """Travel limits inside the FW soft limits, min < max (SW-LIM-001); SW load limits / FW level: M3 (kept)."""
+        out: list[Issue] = []
+        vals = self._be.device.params.values()
+        lo = vals.get("limits.soft_min_um")
+        hi = vals.get("limits.soft_max_um")
+        E = IssueSeverity.ERROR
+        for name, en, v in (("travel_min_mm", cfg.travel_min_enabled, cfg.travel_min_mm),
+                            ("travel_max_mm", cfg.travel_max_enabled, cfg.travel_max_mm)):
+            if not en:
+                continue
+            if v is None:
+                out.append(Issue(name, E, "MISSING", f"{name}: enabled without a value"))
+            elif (lo is not None and v * 1000.0 < lo) or (hi is not None and v * 1000.0 > hi):
+                out.append(Issue(name, E, "OUTSIDE_SOFT_LIMITS", f"{name} = {v:g} mm outside the FW soft limits "
+                                 f"{(lo or 0) / 1000:g}…{(hi or 0) / 1000:g} mm"))
+        if cfg.travel_min_enabled and cfg.travel_max_enabled and cfg.travel_min_mm is not None and \
+                cfg.travel_max_mm is not None and cfg.travel_min_mm >= cfg.travel_max_mm:
+            out.append(Issue("travel_min_mm", E, "ORDER", "travel min must be < travel max"))
+        if cfg.fw_level_n > 2157.46 + 1e-6:
+            out.append(Issue("fw_level_n", E, "FW_LEVEL", "FW load-limit level above 110 % FS (SW-LIM-002)"))
+        return out
+
     def set(self, cfg: LimitConfig) -> list[Issue]:
-        return [Issue(None, "ERROR", "NOT_IMPLEMENTED", "SW limits: available from M3")]  # type: ignore[arg-type]
+        """Apply the limits (refused while moving); returns the ERROR issues (empty = applied)."""
+        if self._be.device.last_flags & pg.DataFlags.MOVING:
+            return [Issue(None, IssueSeverity.ERROR, "MOVING", "limits cannot be changed while the axis moves")]
+        issues = [i for i in self.check(cfg) if i.severity == IssueSeverity.ERROR]
+        if not issues:
+            self._cfg = cfg
+            self._be.events.publish("log", {"text": "SW travel limits set"})
+        return issues
 
     def thresholds(self) -> ThresholdState:
         return self._be.device.thresholds
 
     def recheck_async(self) -> Future[ThresholdState]:
         return self._be._job(self._be.device.session_values_job)  # noqa: SLF001
+
+    def set_manual_thresholds_async(self, raw_min: int, raw_max: int, zero_raw: int = 0) -> Future[ThresholdState]:
+        """M2 bring-up path: operator-entered raw thresholds, written and verified (state VERIFIED, cal_id
+        ``manual-raw``). Refused while moving."""
+        if self._be.device.last_flags & pg.DataFlags.MOVING:
+            return failed_future(GateRefused(GateResult((GateItem(GateCode.MOTION_ACTIVE, Severity.REFUSE,
+                                                                  "axis moving"),))))
+        issues = self._be.device.threshold_mgr.set_manual(raw_min, raw_max, zero_raw)
+        if issues:
+            return failed_future(GateRefused(GateResult(tuple(GateItem(i.code, Severity.REFUSE, i.text)
+                                                              for i in issues))))
+        return self.recheck_async()
+
+    def set_default_thresholds_async(self) -> Future[ThresholdState]:
+        self._be.device.threshold_mgr.set_default()
+        return self.recheck_async()
 
     def set_no_specimen_mode(self, on: bool, *, confirmed: bool = False) -> GateResult:
         return _not_implemented("no-specimen mode", "M3")
@@ -374,7 +374,7 @@ class Backend:
                                             seq_seed=s.seq_seed))
         self.device.threaded_reader = not self.lockstep
         self.device.submit_job = lambda fn: self.worker.submit(fn)
-        self.pipeline = Pipeline(self.clock, self.events, self.liveness, on_fw_event=self.device.handle_fw_event,
+        self.pipeline = Pipeline(self.clock, self.events, self.liveness, on_fw_event=self._on_fw_event,
                                  on_events_lost=self.device._poll_now)  # noqa: SLF001
         self.device.on_async = self.pipeline.put
         self.device.on_link_change = self._on_link_change
@@ -385,8 +385,8 @@ class Backend:
         self.channels.on_change = lambda: self.events.publish("channels.changed", None)
         self.data = DataView(self.pipeline, self.clock.monotonic_ns)
         self.config = ConfigAPI(self)
-        self.motion = MotionAPI(self)
         self.limits = LimitsAPI(self)
+        self.motion = MotionController(self)
         self.marks = MarksAPI()
         self.session = SessionAPI()
         self.tare_engine = StubEngine("tare", ("CHECK", "CAPTURE", "EVALUATE", "DONE"))
@@ -406,6 +406,10 @@ class Backend:
         self._sup_stop = threading.Event()
         self._started = False
         self._status_seq = 0
+        self.hotkey: Any = None
+        self._hotkey_mode = "UNAVAILABLE"
+        self._hotkey_reason = "not started"
+        self._next_hotkey_ping_ns = 0
 
     # ---- lifecycle -----------------------------------------------------------------------------------
     def start(self) -> None:
@@ -414,6 +418,7 @@ class Backend:
             return
         self._started = True
         self.liveness.install_excepthook()
+        self._start_hotkey()
         if self.lockstep:
             return
         from bend_stand.core import timing  # noqa: PLC0415
@@ -452,6 +457,9 @@ class Backend:
             self.worker.stop()
             self.pipeline.stop()
             self._stop_sim()
+            hk, self.hotkey = self.hotkey, None
+            if hk is not None:
+                hk.stop()
             self.liveness.uninstall_excepthook()
             self._started = False
 
@@ -466,9 +474,18 @@ class Backend:
         while ticker.wait(self._sup_stop):
             ticker.due()
             try:
-                self.device.tick(self.clock.monotonic_ns())
+                self._tick(self.clock.monotonic_ns())
             except Exception:  # noqa: BLE001 — the supervisor must survive a bad tick
                 log.exception("supervisor tick failed")
+
+    def _tick(self, now: int) -> None:
+        """Supervisor body: link / heartbeat / confirmations (Device), jog refresh (motion), hotkey ping."""
+        self.device.tick(now)
+        self.motion.tick(now)
+        hk = self.hotkey
+        if hk is not None and now >= self._next_hotkey_ping_ns:
+            self._next_hotkey_ping_ns = now + 250 * MS
+            hk.ping()
 
     def _step_all(self, now: int) -> None:
         """One lockstep step: simulator → Reader → Pipeline → Supervisor → Worker → Recorder."""
@@ -478,7 +495,7 @@ class Backend:
         if rd is not None:
             rd.step(now)
         self.pipeline.step(now)
-        self.device.tick(now)
+        self._tick(now)
         self.worker.step(now)
         self.recorder.step(now)
 
@@ -534,25 +551,87 @@ class Backend:
     def _on_link_change(self, state: LinkState) -> None:
         if state == LinkState.LOST:
             self.events.log("LINK LOST", logging.ERROR)
+        if state in (LinkState.LOST, LinkState.DISCONNECTED):
+            self.motion.on_link_down()
+
+    def _on_fw_event(self, ev: Any) -> None:
+        """Pipeline thread: link-level reactions first (epoch, BOOT resync), then the motion controller."""
+        self.device.handle_fw_event(ev)
+        self.motion.on_fw_event(ev)
+
+    # ---- Pause/Break hotkey (SW-STOP-002) -------------------------------------------------------------
+    def _hotkey_choice(self) -> str:
+        h = self.settings.hotkey
+        if h == "auto":
+            h = os.environ.get("BEND_STAND_HOTKEY", "win32").strip().lower() or "win32"
+        return h
+
+    def _start_hotkey(self) -> None:
+        from bend_stand.io import win_hotkey as wh  # noqa: PLC0415
+
+        choice = self._hotkey_choice()
+        if choice == "off":
+            self._hotkey_mode, self._hotkey_reason = "UNAVAILABLE", "disabled (BEND_STAND_HOTKEY=off)"
+            return
+        backend = wh.FakeHotkeyBackend() if choice == "fake" or self.lockstep else None
+
+        def on_status(mode: str, detail: str) -> None:
+            self._hotkey_mode, self._hotkey_reason = mode, detail
+            self.events.publish("hotkey.state", HotkeyStatus(mode, detail, False))  # type: ignore[arg-type]
+
+        def on_test(delay_ms: float | None) -> None:
+            self.events.publish("hotkey.test", delay_ms)
+
+        from bend_stand.core.timing import raise_thread_priority  # noqa: PLC0415
+
+        self.hotkey = wh.GlobalHaltHotkey(lambda src: self.halt(src), backend=backend, on_status=on_status,
+                                          on_test=on_test, clock_ns=self.clock.monotonic_ns,
+                                          thread_init=lambda: raise_thread_priority(2))
+        self.hotkey.can_test = lambda: not (self.device.last_flags & pg.DataFlags.MOVING)
+        if self.lockstep:                         # no threads on the lockstep clock: test_hooks.hotkey_press()
+            self._hotkey_mode, self._hotkey_reason = "UNAVAILABLE", "lockstep clock (no hotkey thread)"
+            return
+        self.hotkey.start()
+
+    def hotkey_status(self) -> HotkeyStatus:
+        hk = self.hotkey
+        test = bool(hk is not None and hk.test_mode_active)
+        if hk is None:
+            return HotkeyStatus(self._hotkey_mode, self._hotkey_reason, False)  # type: ignore[arg-type]
+        mode = hk.mode if hk.alive else self._hotkey_mode
+        return HotkeyStatus(mode, hk.status_detail or self._hotkey_reason, test)  # type: ignore[arg-type]
 
     # ---- global actions (GUI thread, non-blocking, never raise) --------------------------------------
     def stop(self, source: str = "gui") -> StopResult:
         try:
-            return self.device.stop(pg.StopMode.IMMEDIATE, source)
+            res = self.device.stop(pg.StopMode.IMMEDIATE, source)       # act first …
         except Exception as exc:  # noqa: BLE001 — never raises (§14)
-            return StopResult("STOP", source, False, None, str(exc))
+            res = StopResult("STOP", source, False, None, str(exc))
+        self._after_stop("STOP")
+        return res
 
     def halt(self, source: str = "gui") -> StopResult:
         try:
-            return self.device.halt(source)
+            res = self.device.halt(source)
         except Exception as exc:  # noqa: BLE001
-            return StopResult("HALT", source, False, None, str(exc))
+            res = StopResult("HALT", source, False, None, str(exc))
+        self._after_stop("HALT")
+        return res
 
     def pause(self, source: str = "gui") -> StopResult:
         try:
-            return self.device.pause(source)
+            res = self.device.pause(source)
         except Exception as exc:  # noqa: BLE001
-            return StopResult("PAUSE", source, False, None, str(exc))
+            res = StopResult("PAUSE", source, False, None, str(exc))
+        self._after_stop("PAUSE")
+        return res
+
+    def _after_stop(self, cmd: str) -> None:
+        """… then drop the jog session and the pending target (SW_design §4.5 (2))."""
+        try:
+            self.motion.on_stop_issued(cmd)
+        except Exception:  # noqa: BLE001 pragma: no cover - never raises
+            log.exception("motion.on_stop_issued failed")
 
     def resume(self, source: str = "gui") -> GateResult:
         """M1 manual Resume = RESUME 0x3C only (no motion re-issue; the sequencer's re-issue is M4)."""
@@ -605,7 +684,18 @@ class Backend:
         return g
 
     def hotkey_test_start(self, timeout_s: float = 10.0) -> GateResult:
-        return _not_implemented("Pause/Break key test", "M3")
+        """GRQ-B-15: arm the Pause/Break key test window (≤ 10 s); motion is refused while it runs; result on the
+        topic ``hotkey.test`` (delay ms or None at the timeout)."""
+        g = self._gates()[GateId.HOTKEY_TEST]
+        hk = self.hotkey
+        if not g.ok or hk is None:
+            return g
+        hk.test_timeout_s = max(0.1, min(10.0, float(timeout_s)))
+        try:
+            hk.start_test_mode()
+        except Exception as exc:  # noqa: BLE001
+            return GateResult((GateItem(GateCode.HOTKEY_UNAVAILABLE, Severity.REFUSE, str(exc)),))
+        return g
 
     # ---- actions that wait for the board ---------------------------------------------------------------
     def _clear_refusal(self, gid: GateId) -> GateResult | None:
@@ -673,6 +763,7 @@ class Backend:
         status_ok = connected and st is not None and now - d.board_ns <= STATUS_STALE_NS
         flags, status = d.latest()
         live = data_ok or status_ok
+        vmask = d.valid_status_mask()                   # D-37 b: bits of an absent feature are invalid → UNKNOWN
         items: dict[str, Indicator] = {}
 
         def put(name: str, on: bool, known: bool, **kw: Any) -> None:
@@ -696,7 +787,7 @@ class Backend:
                 if n == "PAUSED":
                     src = self._latch_source(bool(status & pg.DataStatus.PAUSED), d.pause_src_ev,
                                              st.pause_src if st is not None else None)
-                put(n, bool(status >> i & 1), live, source=src)
+                put(n, bool(status >> i & 1), live and bool(vmask >> i & 1), source=src)
         for i, n in enumerate(pg.FAULTS_BITS):
             if n:
                 put(n, bool(st is not None and st.faults >> i & 1), status_ok)
@@ -714,20 +805,53 @@ class Backend:
         items["afe_synthetic"] = Indicator("ON" if synth else "OFF") if d.info else INDICATOR_UNKNOWN
         items["recording_failed"] = Indicator("ON" if self.recorder.state == "FAILED" else "OFF", None,
                                               None, None, self.recorder.failure)
-        items["hotkey"] = Indicator("OFF", None, "UNAVAILABLE")
+        hs = self.hotkey_status()
+        items["hotkey"] = Indicator("ON" if hs.mode in ("REGISTERED", "LL_HOOK") else "OFF", None, hs.mode, None,
+                                    None if hs.mode != "UNAVAILABLE" else "Pause/Break key unavailable: " + hs.reason)
         return Indicators(items)
 
-    def _gates(self, now: int | None = None) -> Mapping[GateId, GateResult]:
+    def _gate_snapshot(self, now: int | None = None) -> GateSnapshot:
         d = self.device
         now = self.clock.monotonic_ns() if now is None else now
         st = d.board
         flags, status_bits = d.latest()
+        vmask = d.valid_status_mask()
         fresh = d.last_data_ns is not None and now - d.last_data_ns <= 500 * MS
-        snap = GateSnapshot(link=d.state, compat=d.compat, stream_on=d.stream_on, data_fresh=fresh, flags=flags,
-                            status=status_bits, faults=st.faults if st else 0, io=st.io if st else 0,
-                            moving=bool(flags & pg.DataFlags.MOVING), recording=self.recorder.state != "IDLE",
-                            status_known=st is not None)
-        return all_gates(snap)
+        lt = self.pipeline.latest_copy()
+        raw = None if not lt.t_host_ns or lt.raw != lt.raw else float(lt.raw)
+        hk = self.hotkey
+        params = d.params.values()
+        return GateSnapshot(
+            link=d.state, compat=d.compat, stream_on=d.stream_on, data_fresh=fresh, flags=flags,
+            status=status_bits & vmask, faults=st.faults if st else 0, io=(st.io & d.valid_io_mask()) if st else 0,
+            moving=bool(flags & pg.DataFlags.MOVING) or self.motion.busy, recording=self.recorder.state != "IDLE",
+            status_known=st is not None, hotkey_available=bool(hk is not None and hk.available),
+            features=d.info.features if d.info is not None else frozenset(), valid_status=vmask,
+            motion_state=st.motion if st is not None else None, thresholds_state=d.thresholds.state,
+            hotkey_test=bool(hk is not None and hk.test_mode_active), jogging=self.motion.jogging, raw=raw,
+            zero_raw=int(params.get("safety.zero_raw", 0) or 0),
+            home_max_load_raw=int(params.get("home.max_load_raw", 322_123) or 322_123), load_known=False)
+
+    def _gates(self, now: int | None = None) -> Mapping[GateId, GateResult]:
+        return all_gates(self._gate_snapshot(now))
+
+    def _motion_status(self, now: int, flags: int, status_bits: int, st: Any) -> MotionStatus:
+        m = self.motion
+        pos = m.position_mm() if self.device.connected else None
+        hp = None
+        if st is not None:
+            try:
+                hp = pg.HomePhase(st.home_phase).name
+            except ValueError:
+                hp = str(st.home_phase)
+        return MotionStatus(
+            moving=bool(flags & pg.DataFlags.MOVING), homed=bool(flags & pg.DataFlags.HOMED),
+            enabled=bool(flags & pg.DataFlags.ENABLED), enabling_left_ms=m.enabling_left_ms(now),
+            paused=bool(status_bits & pg.DataStatus.PAUSED), position_mm=pos,
+            test_position_mm=None if pos is None else pos - m.x_zero_mm, commanded_target_mm=m.commanded_target_mm,
+            pending_target_mm=m.pending_target_mm, x_zero_mm=m.x_zero_mm, owner="MANUAL",
+            motion_state=st.motion if st is not None else None, limits=m.limits() if self.device.connected else None,
+            jogging=m.jogging, home_phase=hp, pos_uncertain=bool(status_bits & pg.DataStatus.POS_UNCERTAIN))
 
     def status(self) -> BackendStatus:
         now = self.clock.monotonic_ns()
@@ -745,18 +869,13 @@ class Backend:
             stream=StreamStatus(d.stream_on, lt.rate_sps, fw_rate,
                                 bool(status_bits & pg.DataStatus.AFE_RATE_MISMATCH), data_age),
             indicators=self._indicators(now),
-            motion=MotionStatus(moving=moving, homed=bool(flags & pg.DataFlags.HOMED),
-                                enabled=bool(flags & pg.DataFlags.ENABLED),
-                                paused=bool(status_bits & pg.DataStatus.PAUSED),
-                                position_mm=None if st is None and lt.t_host_ns == 0 else
-                                (lt.x_mm if lt.t_host_ns else (st.pos_um / 1000.0 if st else None)),
-                                motion_state=st.motion if st else None),
+            motion=self._motion_status(now, flags, status_bits, st),
             safety=SafetyStatus(thresholds=d.thresholds),
             calibration=CalibrationStatus(board_spm=d.params.get("motion.steps_per_mm")),
             operation=OperationStatus(),
             recording=self.recorder.status(),
             gates=self._gates(now),
-            hotkey=HotkeyStatus("UNAVAILABLE", "global hotkey: M3", False),
+            hotkey=self.hotkey_status(),
             cfg_dirty=None if st is None else bool(st.sys_flags & pg.SysFlags.CFG_DIRTY),
             config_read_only=d.compat.config_read_only,
             reboot_pending=None if st is None else bool(st.sys_flags & pg.SysFlags.REBOOT_PENDING),

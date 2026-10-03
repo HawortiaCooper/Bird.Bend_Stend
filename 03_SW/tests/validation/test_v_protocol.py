@@ -327,23 +327,42 @@ def test_tc_if_010_01_vectors_match_implemented_versions():
 
 # --------------------------------------------------------------------------------------------- units (SYS-003)
 
-@pytest.mark.req("SYS-003")
-@pytest.mark.parametrize("kind", ["um_to_steps", "steps_to_um", "rate_cap"])
-def test_tc_sys_003_01_units_vectors(kind):
-    """TC-SYS-003-01: production µm↔steps and rate cap reproduce every units vector exactly (ties incl.);
-    the same vectors are also reproduced by F's oracle (first-principles check of the vector file)."""
-    # Verifies: SYS-003
+def _units(kind, saturated):
+    return [v for v in UV[kind] if bool(v.get("saturated")) == saturated]
+
+
+def _check_units(kind, vectors):
     from bend_stand.calc import motion
 
-    for v in UV[kind]:
+    for v in vectors:
         spm = struct.unpack(">f", bytes.fromhex(v["spm_f32_hex"][2:]))[0]
         if kind == "um_to_steps":
             assert motion.um_to_steps(v["um"], spm) == v["steps"] == f_ref.um_to_steps(v["um"], spm), v
         elif kind == "steps_to_um":
             assert motion.steps_to_um(v["steps"], spm) == v["um"] == f_ref.steps_to_um(v["steps"], spm), v
         else:
-            assert motion.rate_cap_um_s(v["max_step_rate_hz"], spm) == v["rate_cap_um_s"]
-            assert int(v["max_step_rate_hz"] * 1000.0 // spm) == v["rate_cap_um_s"]          # ICD §0.1 floor
+            assert motion.rate_cap_um_s(v["max_step_rate_hz"], spm) == v["rate_cap_um_s"] ==                 f_ref.rate_cap_um_s(v["max_step_rate_hz"], spm), v                       # ICD §0.1 floor
+
+
+@pytest.mark.req("SYS-003")
+@pytest.mark.parametrize("kind", ["um_to_steps", "steps_to_um", "rate_cap"])
+def test_tc_sys_003_01_units_vectors(kind):
+    """TC-SYS-003-01: production µm↔steps and rate cap reproduce every (non-saturated) units vector exactly (ties
+    incl.); the same vectors are also reproduced by F's oracle (first-principles check of the vector file)."""
+    # Verifies: SYS-003
+    assert _units(kind, False)
+    _check_units(kind, _units(kind, False))
+
+
+@pytest.mark.req("SYS-003", "IF-009")
+@pytest.mark.parametrize("kind", ["um_to_steps", "steps_to_um"])
+def test_tc_sys_003_01_units_vectors_saturation(kind):
+    """ICD v0.5 §0.1 (OBS-M1-05): results saturate to the int32 range — every `saturated: true` vector (F's oracle
+    reproduces them first)."""
+    # Verifies: SYS-003, IF-009
+    vs = _units(kind, True)
+    assert vs
+    _check_units(kind, vs)
 
 
 @pytest.mark.req("SYS-003")

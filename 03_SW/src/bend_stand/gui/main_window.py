@@ -23,10 +23,12 @@ suppressed context menu, STOP handler installation, close rules); rewritten for 
 Implements: SW-STOP-001 (STOP first in the toolbar, synchronous), SW-STOP-002 (hotkey state, app-shortcut
 fallback, KL-01 text), SW-STOP-003/004 (Clear stop, Pause/Resume), SW-ACQ-001 (Stream on every tab), SW-TARE-001
 (TARE on every tab), SW-ACQ-002/003 (Record, Take sample on every tab), SAF-SW-005 (indicator bar), SW-RT-001
-(plot dock with STOP), SW-RT-005 (readouts), SW-PLT-003 (link widget), IF-008 (notices)
+(plot dock with STOP), SW-RT-005 (readouts), SW-PLT-003 (link widget), IF-008 (notices), SW-RT-006 (plot windows with panes, one snapshot
+per time window, layout persistence), SW-RT-001 (several plot windows, layout restored)
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -80,6 +82,10 @@ PLACEHOLDER_MS = {"Safety limits": "M3", "Test marks": "M3", "Manual": "M2", "Ca
 SAMPLE_WINDOWS_S = (0.1, 0.5, 1.0, 2.0, 5.0, 10.0)
 TOAST_MS = 6000
 DEFAULT_PLOT_KEYS = ("raw",)
+MAX_PLOT_WINDOWS = 4                 # GQ-04
+KEY_PLOT_LAYOUT = "plots/layout"     # SW-RT-006 / SW-RT-001: panes + curves per window (JSON)
+KEY_DOCK_STATE = "main/state"        # dock arrangement (QMainWindow.saveState)
+PLOT_LAYOUT_VERSION = 1
 LINK_LED = {"CONNECTED": "green", "CONNECTING": "yellow", "DEGRADED": "yellow", "LOST": "red"}
 
 
@@ -141,6 +147,7 @@ class MainWindow(QMainWindow):
         self.refresh.add_stage("readouts", self._on_readouts, every=3)
         self.refresh.add_stage("link", self.connection_tab.update_link_line, every=30)
         self._reload_channels()
+        self.restore_layout()
         try:
             st = backend.status()
             self._on_status(st)
@@ -285,8 +292,10 @@ class MainWindow(QMainWindow):
 
     def _build_docks(self) -> None:
         self.setDockNestingEnabled(True)
-        self.plot_dock = PlotDock("Plot 1", self)
-        self.plot_dock.infoMessage.connect(lambda t: self.toast(t, "warn"))
+        self.plot_docks: list[PlotDock] = []
+        self.snapshot_calls = 0
+        self._specs: list[Any] = []
+        self.plot_dock = self._make_plot_dock("Plot 1")
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.plot_dock)
         self.readout_dock = ReadoutDock(self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.readout_dock)
@@ -316,7 +325,11 @@ class MainWindow(QMainWindow):
         act.triggered.connect(self.close)
         m_file.addAction(act)
         m_view = mb.addMenu("&View")
-        for dock in (self.plot_dock, self.readout_dock, self.event_log):
+        self.view_menu = m_view
+        m_view.addAction("New plot window", self.new_plot_window)
+        m_view.addAction("Save layout now", self.save_layout)
+        m_view.addSeparator()
+        for dock in (*self.plot_docks, self.readout_dock, self.event_log):
             m_view.addAction(dock.toggleViewAction())
         m_tools = mb.addMenu("&Tools")
         m_tools.addAction("Link statistics…", self.open_link_stats)
@@ -418,8 +431,95 @@ class MainWindow(QMainWindow):
         result = self.backend.halt("app-shortcut")
         self._show_stop_result(result)
 
+    # ================================================================== plot windows (SW-RT-001 / SW-RT-006)
+    def _make_plot_dock(self, title: str) -> PlotDock:
+        dock = PlotDock(title, self)
+        dock.infoMessage.connect(lambda t: self.toast(t, "warn"))
+        dock.peers = lambda d=dock: [o for o in self.plot_docks if o is not d]
+        dock.new_dock_factory = self.new_plot_window
+        self.plot_docks.append(dock)
+        if hasattr(self, "view_menu"):
+            self.view_menu.addAction(dock.toggleViewAction())
+        return dock
+
+    def new_plot_window(self, title: str | None = None) -> PlotDock | None:
+        """View > New plot window (max. 4, GQ-04); tabified with Plot 1, channels from the registry."""
+        if len(self.plot_docks) >= MAX_PLOT_WINDOWS:
+            self.toast(f"At most {MAX_PLOT_WINDOWS} plot windows", "warn")
+            return None
+        used = {d.windowTitle() for d in self.plot_docks}
+        title = title or next(f"Plot {n}" for n in range(1, 99) if f"Plot {n}" not in used)
+        dock = self._make_plot_dock(title)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        self.tabifyDockWidget(self.plot_dock, dock)
+        dock.set_channels(self._specs)
+        dock.show()
+        dock.raise_()
+        return dock
+
     def _on_plots(self, _status: Any) -> None:
-        self.plot_dock.refresh(self.backend.data)
+        """One ``data.snapshot`` per distinct time-window length for the union of the channels of every shown,
+        non-frozen plot window (section 4.6, D-38); X-Y panes pull ``data.xy``."""
+        groups: dict[float, list[PlotDock]] = {}
+        for d in self.plot_docks:
+            if d.wants_snapshot():
+                groups.setdefault(d.window_s, []).append(d)
+        data = self.backend.data
+        for window_s, docks in groups.items():
+            keys = list(dict.fromkeys(k for d in docks for k in d.snapshot_keys()))
+            px = max(d.px_width() for d in docks)
+            try:
+                snap = data.snapshot(keys, window_s, px)
+            except Exception as exc:  # noqa: BLE001 - not connected / not implemented yet
+                for d in docks:
+                    d.show_error(f"no data: {exc}")
+                continue
+            self.snapshot_calls += 1
+            for d in docks:
+                d.set_snapshot(snap)
+        for d in self.plot_docks:
+            if d.xy_panes():
+                d.refresh_xy(data)
+
+    # ---------------------------------------------------------------- layout persistence
+    def layout_state(self) -> dict[str, Any]:
+        return {"version": PLOT_LAYOUT_VERSION, "docks": [d.layout_state() for d in self.plot_docks]}
+
+    def save_layout(self) -> None:
+        """Plot windows (panes, curves, columns, titles) + dock arrangement -> QSettings (SW-RT-001 / SW-RT-006)."""
+        if self.settings is None:
+            return
+        try:
+            self.settings.setValue(KEY_PLOT_LAYOUT, json.dumps(self.layout_state()))
+            self.settings.setValue(KEY_DOCK_STATE, self.saveState())
+            self.settings.sync()
+        except Exception:  # noqa: BLE001
+            log.warning("saving the layout failed", exc_info=True)
+
+    def restore_layout(self) -> None:
+        """Rebuild the plot windows from QSettings; a missing / corrupt entry gives the default layout."""
+        if self.settings is None:
+            return
+        raw = self.settings.value(KEY_PLOT_LAYOUT)
+        if not raw:
+            return
+        try:
+            state = json.loads(str(raw))
+            docks = [d for d in state.get("docks", []) if isinstance(d, dict)]
+        except (ValueError, AttributeError):
+            log.warning("plot layout in the settings is corrupt: default layout used")
+            return
+        for i, ds in enumerate(docks[:MAX_PLOT_WINDOWS]):
+            dock = self.plot_docks[i] if i < len(self.plot_docks) else self.new_plot_window(
+                str(ds.get("title") or f"Plot {i + 1}"))
+            if dock is not None:
+                dock.restore_layout_state(ds)
+        st = self.settings.value(KEY_DOCK_STATE)
+        if st is not None:
+            try:
+                self.restoreState(st)
+            except Exception:  # noqa: BLE001
+                log.warning("dock arrangement in the settings is unusable", exc_info=True)
 
     def _on_readouts(self, _status: Any) -> None:
         if self.readout_dock.isVisible():
@@ -433,8 +533,10 @@ class MainWindow(QMainWindow):
             specs = []
         first = not self._channel_keys if hasattr(self, "_channel_keys") else True
         self._channel_keys = {s.key for s in specs}
-        # first start: raw counts ticked (layout persistence restores the operator's choice from M3 on)
-        self.plot_dock.set_channels(specs, DEFAULT_PLOT_KEYS if first else ())
+        self._specs = specs
+        for d in self.plot_docks:
+            # first start: raw counts ticked in Plot 1 (a saved layout replaces this, restore_layout)
+            d.set_channels(specs, DEFAULT_PLOT_KEYS if first and d is self.plot_dock else ())
 
     # ================================================================== STOP / pause / resume
     def _on_stop(self, source: str) -> None:
@@ -643,6 +745,9 @@ class MainWindow(QMainWindow):
                     self.settings.setValue("main/geometry", self.saveGeometry())
                 except Exception:  # noqa: BLE001
                     pass
+                self.save_layout()
+            for d in self.plot_docks:
+                d.dispose()
             self.closed.emit()
         super().closeEvent(event)
 
@@ -656,7 +761,7 @@ class MainWindow(QMainWindow):
                     f"{'on' if st.stream.on else 'off'} rate {st.stream.rate_sps}; frames ok {s.frames_ok} data "
                     f"{s.data_frames} lost fw {s.frames_lost_fw} link {s.frames_lost_link} crc {s.crc_errors}; "
                     f"ticks {ps['ticks']} interval p50 {ps['interval_p50_ms']:.1f} ms p95 "
-                    f"{ps['interval_p95_ms']:.1f} ms; plot updates {self.plot_dock.updates}")
+                    f"{ps['interval_p95_ms']:.1f} ms; plot updates {self.plot_dock.updates}; snapshots {self.snapshot_calls}")
         except Exception as exc:  # noqa: BLE001
             return f"summary unavailable: {exc}"
 

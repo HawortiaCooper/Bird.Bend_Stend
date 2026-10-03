@@ -22,12 +22,260 @@ void app_loop(void);   /* core */
 fake_frame_t fake_cap[FAKE_CAP_MAX];
 uint32_t     fake_cap_n;
 
-/* ---------------- time ---------------- */
-static uint32_t s_us;
-void fake_set_time_us(uint32_t t) { s_us = t; }
+/* ---------------- time ----------------
+ * One 64-bit clock in step-timer ticks (FAKE_F_TICK = 90 MHz); hal_time_us() = ticks / 90. */
+#define TPU (FAKE_F_TICK / 1000000u)                 /* ticks per µs */
+static uint64_t s_tk;
+#define s_us ((uint32_t)(s_tk / TPU))
+void fake_set_time_us(uint32_t t) { s_tk = (uint64_t)t * TPU; }
 uint32_t fake_now_us(void) { return s_us; }
 uint32_t hal_time_us(void) { return s_us; }
 uint32_t hal_time_ms(void) { return s_us / 1000u; }
+
+/* ---------------- step timer model (= the twin's hal_step semantics, tools/README) ---------------- */
+static struct {
+    bool     running, high, last, stop_after, uncertain;
+    int      dir;
+    int32_t  count;
+    uint32_t pw, dir_setup, cur, pre, stop_gen;
+    uint64_t t_rise, t_end;
+    bool     pul_invert, ena_invert;
+} S;
+bool     fake_ena_enabled = true;
+uint32_t fake_ena_changes;
+int      fake_dir_arg;
+uint32_t fake_set_now_calls, fake_stop_now_calls, fake_abort_calls, fake_step_inits;
+uint64_t fake_rise_tk[FAKE_RISE_LOG];
+uint32_t fake_rise_n;
+bool     fake_step_skip_isr;                         /* inject: next update without step_isr */
+static bool s_world_on;
+static int32_t s_world_start, s_world_end;
+static void world_update(void);
+void fake_world_shift(int32_t steps) { s_world_start += steps; s_world_end += steps; world_update(); }
+
+static void schedule(uint64_t start, uint32_t period, uint64_t min_rise)
+{
+    uint64_t rise = start + (uint64_t)((period > S.pw) ? period - S.pw : 0u);
+    if (rise < min_rise) {
+        rise = min_rise;
+    }
+    S.cur = period;
+    S.t_rise = rise;
+    S.t_end = rise + S.pw;
+    S.high = false;
+}
+
+static void halt(void)
+{
+    S.running = false;
+    S.high = false;
+    S.stop_gen++;
+}
+
+uint32_t hal_step_init(const hal_step_cfg_t *cfg)
+{
+    S.pw = cfg->pw_ticks;
+    S.dir_setup = cfg->dir_setup_ticks;
+    S.pul_invert = cfg->pul_invert;
+    S.ena_invert = cfg->ena_invert;
+    fake_step_inits++;
+    return FAKE_F_TICK;
+}
+
+void hal_step_set_dir(int dir)
+{
+    fake_dir_arg = dir;
+    if (!S.running) {
+        S.dir = (dir > 0) ? 1 : -1;
+    }
+}
+
+void hal_step_start(uint32_t first)
+{
+    if (S.dir == 0) {
+        S.dir = 1;
+    }
+    S.running = true;
+    S.last = false;
+    S.stop_after = false;
+    S.pre = 0u;
+    schedule(s_tk, first, s_tk + S.dir_setup);
+}
+
+void hal_step_set_period(uint32_t ticks) { S.pre = ticks; }
+
+void hal_step_set_period_now(uint32_t ticks)
+{
+    uint64_t start;
+    fake_set_now_calls++;
+    if (!S.running || S.high) {
+        return;                                      /* stretch only before the pulse */
+    }
+    start = S.t_rise - (uint64_t)((S.cur > S.pw) ? S.cur - S.pw : 0u);
+    schedule(start, ticks, s_tk);
+}
+
+void hal_step_arm_last(void) { S.last = true; }
+
+bool hal_step_stop_now(void)
+{
+    fake_stop_now_calls++;
+    if (!S.running) {
+        return false;
+    }
+    if (S.high) {
+        S.stop_after = true;                         /* CLEAN: the pulse completes */
+        return true;
+    }
+    halt();
+    return false;
+}
+
+bool hal_step_abort(void)
+{
+    bool cut;
+    fake_abort_calls++;
+    if (!S.running) {
+        return false;
+    }
+    cut = S.high;
+    if (cut) {
+        S.uncertain = true;
+    }
+    halt();
+    return cut;
+}
+
+int32_t hal_step_count(void) { return S.count; }
+void hal_step_set_count(int32_t steps)
+{
+    if (!S.running) {
+        s_world_start += steps - S.count;            /* the world does not move (twin: shift_um) */
+        s_world_end += steps - S.count;
+        S.count = steps;
+    }
+}
+bool hal_step_running(void) { return S.running; }
+uint32_t hal_step_stop_gen(void) { return S.stop_gen; }
+
+void hal_ena_set(bool enabled)
+{
+    if (enabled != fake_ena_enabled) {
+        fake_ena_changes++;
+    }
+    fake_ena_enabled = enabled;
+}
+
+int32_t fake_step_count(void) { return S.count; }
+bool fake_step_uncertain(void) { return S.uncertain; }
+uint32_t fake_step_pw(void) { return S.pw; }
+
+/* ---------------- inputs ---------------- */
+static uint16_t s_in_raw = (uint16_t)((1u << 4) | (1u << 6));   /* PAUSE NO released, PEND in position */
+uint16_t hal_inputs_raw(void) { return s_in_raw; }
+uint8_t  fake_pause_level_cfg;
+void hal_inputs_config(const hal_in_cfg_t *c) { fake_pause_level_cfg = c->pause_active_level; }
+void hal_inputs_rearm(uint8_t id) { (void)id; }
+
+void fake_input_set(uint8_t id, bool level)
+{
+    bool cur = ((s_in_raw >> id) & 1u) != 0u;
+    if (cur == level) {
+        return;
+    }
+    s_in_raw = (uint16_t)(level ? (s_in_raw | (1u << id)) : (s_in_raw & ~(1u << id)));
+    switch (id) {                                    /* HAL fixed reactions (FW_design §5.2) */
+    case 0u:
+        if (level) {
+            (void)hal_step_abort();
+            hal_ena_set(false);
+        }
+        break;
+    case 1u:
+    case 2u:
+        if (level) {
+            (void)hal_step_stop_now();
+        }
+        break;
+    case 4u:
+        break;
+    default:
+        return;                                      /* ALM / PEND / DRV_PWR: polled only */
+    }
+    on_input_edge(id, level, s_us);
+}
+
+void fake_world_limits(bool on, int32_t start_le, int32_t end_ge)
+{
+    s_world_on = on;
+    s_world_start = start_le;
+    s_world_end = end_ge;
+    world_update();
+}
+
+static void world_update(void)
+{
+    if (s_world_on) {
+        fake_input_set(1u, S.count <= s_world_start);
+        fake_input_set(2u, S.count >= s_world_end);
+    }
+}
+
+static void step_event(void)
+{
+    step_next_t r;
+    uint32_t next;
+    if (!S.high) {
+        S.high = true;
+        if (fake_rise_n < FAKE_RISE_LOG) {
+            fake_rise_tk[fake_rise_n] = s_tk;
+        }
+        fake_rise_n++;
+        return;
+    }
+    S.high = false;                                  /* end of the pulse = update event */
+    S.count += S.dir;
+    world_update();
+    if (!S.running) {
+        return;
+    }
+    if (S.stop_after || S.last) {
+        halt();
+        return;
+    }
+    next = S.pre ? S.pre : S.cur;
+    S.pre = 0u;
+    schedule(s_tk, next, s_tk);
+    if (fake_step_skip_isr) {
+        fake_step_skip_isr = false;                  /* missed update: ISR late by one period */
+        return;
+    }
+    r = step_isr();
+    if (r.period != 0u) {
+        S.pre = r.period;
+    }
+    if (r.stop) {
+        halt();
+        return;
+    }
+    if (r.last) {
+        S.last = true;
+    }
+}
+
+void fake_advance_tk(uint64_t dt)
+{
+    uint64_t until = s_tk + dt;
+    while (S.running) {
+        uint64_t t = S.high ? S.t_end : S.t_rise;
+        if (t > until) {
+            break;
+        }
+        s_tk = t;
+        step_event();
+    }
+    s_tk = until;
+}
 
 /* ---------------- UART ---------------- */
 #define FAKE_RX_SIZE 8192u
@@ -249,22 +497,38 @@ void hal_hx711_config(uint8_t gain_pulses, bool rate80)
     fake_hx_config_calls++;
 }
 void hal_hx711_powerdown(bool on) { (void)on; }
-void hal_hx711_kick(void) {}
+uint32_t fake_hx_kicks;
+void hal_hx711_kick(void) { fake_hx_kicks++; }
 void hal_hx711_hold(bool on) { fake_hx_hold = on; }
 void hal_rate_pin(bool high) { fake_rate_pin = high; }
 void hal_trip_relay(bool trip) { fake_trip = trip; }
 void hal_led(bool on) { fake_led = on; }
 
-void fake_sample(uint32_t t_us, int32_t raw)
+void fake_sample_st(uint32_t t_us, int32_t raw, uint8_t status)
 {
     afe_sample_t s;
     s.t_us = t_us;
     s.raw = raw;
-    s.pos_steps = 0;
-    s.status = 0u;
+    s.pos_steps = S.count;                           /* position latched at data-ready (FW-AFE-005) */
+    s.status = status;
     if (!fake_hx_hold) {
         on_afe_sample(&s);
     }
+}
+
+void fake_sample(uint32_t t_us, int32_t raw) { fake_sample_st(t_us, raw, 0u); }
+
+bool fake_fault_valid;
+uint32_t fake_fault_pc, fake_fault_cfsr;
+bool hal_fault_record(uint32_t *pc, uint32_t *cfsr)
+{
+    if (!fake_fault_valid) {
+        return false;
+    }
+    fake_fault_valid = false;
+    *pc = fake_fault_pc;
+    *cfsr = fake_fault_cfsr;
+    return true;
 }
 
 void hal_wdg_kick(void) { fake_wdg_kicks++; }
@@ -301,15 +565,39 @@ void fake_run_ms(uint32_t n)
 {
     uint32_t i;
     for (i = 0u; i < n; i++) {
-        s_us += 1000u;
+        fake_advance_tk(1000u * (uint64_t)TPU);
         core_tick_1ms();
         app_loop();
     }
 }
 
+void fake_run_ms_samples(uint32_t n, uint32_t period_us, int32_t raw)
+{
+    uint32_t i;
+    for (i = 0u; i < n; i++) {
+        fake_run_ms(1u);
+        if (period_us != 0u && (s_us / 1000u) % (period_us / 1000u) == 0u) {
+            fake_sample(s_us, raw);
+        }
+    }
+}
+
 void fake_hal_reset(void)
 {
-    s_us = 1000000u;
+    fake_set_time_us(1000000u);
+    memset(&S, 0, sizeof S);
+    s_in_raw = (uint16_t)((1u << 4) | (1u << 6));
+    s_world_on = false;
+    fake_ena_enabled = true;
+    fake_ena_changes = 0u;
+    fake_set_now_calls = 0u;
+    fake_stop_now_calls = 0u;
+    fake_abort_calls = 0u;
+    fake_step_inits = 0u;
+    fake_rise_n = 0u;
+    fake_step_skip_isr = false;
+    fake_hx_kicks = 0u;
+    fake_fault_valid = false;
     s_rx_w = 0u;
     s_rx_r = 0u;
     s_rx_ovr = 0u;

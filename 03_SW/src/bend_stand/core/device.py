@@ -10,11 +10,23 @@ reconnect attempts (never re-enabling, re-homing or re-moving, §4.6).
 Priority actions (``stop``/``halt``/``pause``) never raise and return a ``StopResult``; the clears and RESUME
 are VERIFY class (one frame, never re-sent; a timeout is resolved by GET_STATUS, D-31/D-34).
 
+**Stop confirmation by device time (D-37 d, OBS-M1-R1, ICD v0.5 §9.4):** an indication (STOP: MOVING = 0, HALT:
+flags.HALT, PAUSE: status.PAUSED) confirms only if the FW produced it **after it received the command**. The
+device receive time is estimated from the PC–device time pairing (lower envelope of host receive stamp − DATA /
+STATUS ``t_us``, i.e. device time underestimated by the minimum FW→PC latency) plus the largest recent command
+round trip (≥ PC→FW latency + the underestimate); a STATUS answering a request written after the command is an
+exact anchor (the FW processes its RX in order). The indication's ``t_us`` must be ≥ that time (serial-number
+order, 32-bit wrap safe).
+
+**Feature-dependent status bits (D-37 b):** ``valid_status_mask()`` drops the DATA ``status`` bits whose GET_INFO
+feature bit is 0 (``protocol_gen.DATA_STATUS_FEATURE``); they are invalid (UNKNOWN), never used by a gate.
+
 Implements: SW-PLT-003, SW-CFG-001…004 (device side), IF-005, IF-008, IF-011, SAF-SW-003 (heartbeat, link
 loss), SW-STOP-001/002/003 (wire part), SW-ACQ-001 (stream toggle)
 """
 from __future__ import annotations
 
+import collections
 import logging
 import struct
 import threading
@@ -56,6 +68,16 @@ RECONNECT_PERIOD_NS = 1000 * MS
 STATUS_POLL_STREAM_NS = 1000 * MS
 STATUS_POLL_IDLE_NS = 250 * MS
 SESSION_KEYS = ("safety.load_raw_min", "safety.load_raw_max", "safety.zero_raw")
+M32 = 0xFFFFFFFF
+PAIR_WINDOW = 512                     # DATA / STATUS time pairs kept for the offset envelope
+RTT_WINDOW = 32
+RTT_DEFAULT_NS = 20 * MS              # before the first measured round trip
+RTT_CAP_NS = 250 * MS
+
+
+def serial_ge(a: int, b: int) -> bool:
+    """``a ≥ b`` for 32-bit µs device times (wrap safe, ICD §7.3)."""
+    return ((a - b) & M32) < 0x80000000
 
 
 @dataclass(frozen=True)
@@ -85,6 +107,9 @@ class Device:
         self.board: BoardStatus | None = None
         self.board_ns = 0
         self.thresholds = ThresholdState()
+        from bend_stand.core.safety import ThresholdManager  # noqa: PLC0415  (avoid an import cycle)
+
+        self.threshold_mgr = ThresholdManager(self)
         self.stream_on = False
         self.transport: Transport | None = None
         self.reader: Reader | None = None
@@ -114,6 +139,13 @@ class Device:
         self.board_changed = False
         self._sync_active = False
         self._valid_wanted = 0
+        # device-time ordering of stop indications (D-37 d)
+        self.last_flags_dev: int | None = None       # t_us of the frame / STATUS that set last_flags
+        self._ind_status_sent_ns: int | None = None  # write time of the request whose STATUS set last_flags
+        self._anchor: tuple[int, int] | None = None  # (request write ns, STATUS t_us) of the newest STATUS
+        self._pairs: collections.deque[int] = collections.deque(maxlen=PAIR_WINDOW)
+        self._pair_base: int | None = None
+        self._rtts: collections.deque[int] = collections.deque(maxlen=RTT_WINDOW)
 
     # ============================================================================== link assembly
     @property
@@ -139,6 +171,8 @@ class Device:
         writer = FrameWriter(tr, self.clock)
         channel = CommandChannel(writer, self.clock, seed=self.settings.seq_seed)
         channel.on_tx_error = self._on_transport_error
+        channel.on_rtt = self._on_rtt
+        self.reset_time_pairing()
         reader = Reader(tr, self.clock, on_response=channel.on_response, on_async=self._on_async,
                         on_error=self._on_transport_error, beat=lambda t: self.liveness.beat("reader", t),
                         thread_init=_raise_priority)
@@ -175,12 +209,67 @@ class Device:
         self._next_reconnect_ns = self.clock.monotonic_ns() + RECONNECT_PERIOD_NS
         self._set_state(LinkState.LOST, f"transport: {exc}")
 
+    # ---- device time pairing (D-37 d) --------------------------------------------------------------------
+    def reset_time_pairing(self) -> None:
+        """New connection / BOOT: the device clock restarted."""
+        self._pairs.clear()
+        self._pair_base = None
+        self._anchor = None
+        self.last_flags_dev = None
+        self._ind_status_sent_ns = None
+
+    def _pair(self, host_ns: int, dev_us: int) -> None:
+        d = (host_ns // 1000 - dev_us) & M32
+        if self._pair_base is None:
+            self._pair_base = d
+        self._pairs.append(((d - self._pair_base + 0x80000000) & M32) - 0x80000000)
+
+    def _on_rtt(self, cmd: int, rtt_ns: int) -> None:
+        self._rtts.append(min(int(rtt_ns), RTT_CAP_NS))
+
+    def rtt_bound_ns(self) -> int:
+        return max(self._rtts) if self._rtts else RTT_DEFAULT_NS
+
+    def device_time_at(self, host_ns: int) -> int | None:
+        """Lower estimate of the device ``t_us`` at host time ``host_ns`` (None before the first pair)."""
+        if self._pair_base is None or not self._pairs:
+            return None
+        return (host_ns // 1000 - self._pair_base - min(self._pairs)) & M32
+
+    def fw_receive_bound(self, t_write_ns: int) -> int | None:
+        """Device time no earlier than the FW receipt of a frame written at ``t_write_ns`` (§ module doc)."""
+        t = self.device_time_at(t_write_ns)
+        return None if t is None else (t + self.rtt_bound_ns() // 1000) & M32
+
+    def valid_status_mask(self) -> int:
+        """DATA / STATUS ``status`` bits that are valid with the connected FW's feature mask (D-37 b)."""
+        feats = self.info.features if self.info is not None else frozenset()
+        mask = 0xFFFF
+        for i, n in enumerate(pg.DATA_STATUS_BITS):
+            f = pg.DATA_STATUS_FEATURE.get(n)
+            if f is not None and f not in feats:
+                mask &= ~(1 << i)
+        return mask
+
+    def valid_io_mask(self) -> int:
+        feats = self.info.features if self.info is not None else frozenset()
+        mask = 0xFFFF
+        for i, n in enumerate(pg.IO_BITS):
+            f = pg.IO_FEATURE.get(n)
+            if f is not None and f not in feats:
+                mask &= ~(1 << i)
+        return mask
+
     def _on_async(self, fr: Frame) -> None:
         if fr.type == pg.AsyncType.DATA and len(fr.payload) >= pg.DATA_LEN:
+            t_us = struct.unpack_from("<I", fr.payload, 0)[0]
             self.last_flags = fr.payload[5]
             self.last_status = struct.unpack_from("<H", fr.payload, 16)[0]
             self.last_data_ns = fr.t_ns
             self.last_flags_ns = fr.t_ns
+            self.last_flags_dev = t_us
+            self._ind_status_sent_ns = None
+            self._pair(fr.t_ns, t_us)
             self._data_loss_stop_sent = False
         cb = self.on_async
         if cb is not None:
@@ -282,14 +371,19 @@ class Device:
     def get_status_job(self) -> Job:
         resp = yield self.request(Cmd.GET_STATUS)
         st = P.decode_status(resp.body)
-        self._apply_status(st, resp.t_host_ns)
+        self._apply_status(st, resp.t_host_ns, resp.t_sent_ns)
         return st
 
-    def _apply_status(self, st: BoardStatus, t_ns: int) -> None:
+    def _apply_status(self, st: BoardStatus, t_ns: int, sent_ns: int = 0) -> None:
         self.board, self.board_ns = st, t_ns
+        self._pair(t_ns, st.t_us)
+        if sent_ns:
+            self._anchor = (sent_ns, st.t_us)
         if self.last_data_ns is None or t_ns >= self.last_data_ns:
             self.last_flags, self.last_status = st.flags, st.status
             self.last_flags_ns = t_ns
+            self.last_flags_dev = st.t_us
+            self._ind_status_sent_ns = sent_ns or None
         self.stream_on = bool(st.sys_flags & pg.SysFlags.STREAM_ON)
         self.events.publish("device.status", st)
 
@@ -333,26 +427,9 @@ class Device:
         return stored
 
     def session_values_job(self) -> Job:
-        """M1 ThresholdManager subset: no calibration → write and verify the dictionary defaults of the three
-        session values (state DEFAULT_ONLY, SAF-SW-002; calibrated thresholds are M3)."""
-        target = {k: pgen.BY_KEY[k].default for k in SESSION_KEYS}
-        cur = {k: self.params.get(k) for k in SESSION_KEYS}
-        try:
-            for k, v in write_plan(cur, target):
-                yield from self.set_param_job(k, v)
-            for k in SESSION_KEYS:
-                got = yield from self.get_param_job(k)
-                if got != target[k]:
-                    raise LinkError(f"{k}: read-back {got} != {target[k]}")
-        except (LinkError, CommandTimeout) as exc:
-            self.thresholds = ThresholdState("FAILED", text=str(exc))
-        else:
-            self.thresholds = ThresholdState("DEFAULT_ONLY", raw_min=target["safety.load_raw_min"],
-                                             raw_max=target["safety.load_raw_max"],
-                                             zero_raw=target["safety.zero_raw"],
-                                             text="no calibration: board load limit at its nominal default")
-        self.events.publish("safety.thresholds", self.thresholds)
-        return self.thresholds
+        """Write and verify the FW load-threshold session values of the current ``ThresholdManager`` target
+        (SAF-SW-002, ``core.safety``): DEFAULT_ONLY, manual raw (M2) or calibrated (M3)."""
+        return (yield from self.threshold_mgr.apply_job())
 
     # ============================================================================== write and verify (§5.3)
     def write_and_verify_job(self, edits: Mapping[str, Any]) -> Job:
@@ -511,8 +588,8 @@ class Device:
                        indication: Callable[[int, int], bool]) -> StopResult:
         """Write STOP / HALT / PAUSE on the priority path whenever a link is open — in every link state incl.
         DEGRADED, LOST and CONNECTING (SWD-M1-01, IF-011; the FW→PC direction may be the broken one). Arms the
-        CONFIRM repetition: confirmed only by the ACK or by the FW indication in a DATA / STATUS **received after
-        the write** (SWD-M1-02, ICD §9.3)."""
+        CONFIRM repetition: confirmed only by the ACK or by the FW indication **produced after the FW received
+        the command** — device-time order (D-37 d, OBS-M1-R1; module doc), never by PC receive order alone."""
         ch, conf, tr = self.channel, self.confirmer, self.transport
         if ch is None or conf is None or tr is None or not tr.is_open:
             res = StopResult(cmd.name, source, False, None, "not connected")
@@ -524,9 +601,20 @@ class Device:
             res = StopResult(cmd.name, source, False, None, err or "not written")
         else:
             t_sent = t
+            thr0 = self.fw_receive_bound(t_sent)
 
             def confirmed() -> bool:
-                return self.last_flags_ns > t_sent and indication(self.last_flags, self.last_status)
+                if not indication(self.last_flags, self.last_status) or self.last_flags_ns <= t_sent:
+                    return False
+                ss = self._ind_status_sent_ns
+                if ss is not None and ss > t_sent:      # a STATUS answering a request written after the command
+                    return True
+                thr = thr0
+                a = self._anchor
+                if a is not None and a[0] > t_sent and (thr is None or serial_ge(thr, a[1])):
+                    thr = a[1]                          # exact anchor: the FW had the command before that STATUS
+                dev = self.last_flags_dev
+                return thr is not None and dev is not None and serial_ge(dev, thr)
             conf.arm(int(cmd), payload, fut, confirmed, source)
             res = StopResult(cmd.name, source, True, t)
         self.events.publish("stop.issued", res)
@@ -549,7 +637,7 @@ class Device:
     def _stop_unconfirmed(self, cmd: int, name: str, attempts: int, source: str) -> None:
         self.events.publish("stop.unconfirmed", StopConfirmation(name, source, attempts,
                                                                  self.clock.monotonic_ns(), False))
-        self.events.log(f"{name} not confirmed within 1 s — use the physical STOP / E-stop", logging.ERROR)
+        self.events.log(f"{name} not confirmed within 1 s — use the red E-stop button", logging.ERROR)
 
     # ============================================================================== clears / resume (VERIFY)
     _CLEAR_EVENTS = {Cmd.HALT_CLEAR: (pg.Event.HALT_SET, pg.Event.PAUSED), Cmd.ESTOP_CLEAR: (pg.Event.ESTOP_SET,),
@@ -590,7 +678,7 @@ class Device:
                 finish(ClearResult(name, True, False, "NOT_CONFIRMED", text=f"{name} not confirmed — click again"))
                 return
             st = P.decode_status(f.result().body)
-            self._apply_status(st, f.result().t_host_ns)
+            self._apply_status(st, f.result().t_host_ns, f.result().t_sent_ns)
             new_latch = any(self.event_counts.get(e, 0) > n for e, n in ev0.items())
             if cmd == Cmd.HALT_CLEAR:
                 done = not st.flags & pg.DataFlags.HALT and not st.status & pg.DataStatus.PAUSED
@@ -651,6 +739,7 @@ class Device:
             self.pause_src_ev = None
         elif ev.code == pg.Event.BOOT:
             self.halt_src_ev = self.pause_src_ev = None
+            self.reset_time_pairing()
         ch = self.channel
         if ev.code in (pg.Event.STOPPED, pg.Event.ESTOP_SET, pg.Event.HALT_SET, pg.Event.PAUSED,
                        pg.Event.FAULT_SET, pg.Event.LIMIT_SET, pg.Event.LINK_WDG, pg.Event.HOME_FAILED,
@@ -695,7 +784,8 @@ class Device:
         # link state
         rd = self.reader
         rx_age = None if rd is None or rd.last_rx_ns is None else max(0, now - rd.last_rx_ns)
-        new = link_state_for(ch.consecutive_timeouts, rx_age, self.stream_on)
+        # during a SAVE / LOAD / DEFAULTS the FW is silent for the flash operation (D-37 a): no DEGRADED for that
+        new = link_state_for(ch.consecutive_timeouts, rx_age, self.stream_on and not ch.quiesced())
         if new == LinkState.LOST:
             self._next_reconnect_ns = now + RECONNECT_PERIOD_NS
         if new != self.state:
@@ -723,7 +813,7 @@ class Device:
             if f.exception() is None and f.result() is not None:
                 r = f.result()
                 try:
-                    self._apply_status(P.decode_status(r.body), r.t_host_ns)
+                    self._apply_status(P.decode_status(r.body), r.t_host_ns, r.t_sent_ns)
                 except ValueError:
                     pass
         fut.add_done_callback(done)

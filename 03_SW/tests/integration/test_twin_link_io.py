@@ -40,8 +40,8 @@ def test_connect_get_info_version_and_hash(cli, twin_rt):
     assert info.proto_minor >= pg.PROTO_MINOR
     assert info.param_dict_hash == pgen.PARAM_DICT_HASH
     assert info.param_count == pgen.PARAM_COUNT
-    assert {"AFE_SYNTHETIC", "NVM", "TWIN"} <= info.features            # M1 feature mask + twin bit
-    assert not ({"MOTION", "HOMING", "MOVE_UNTIL_LOAD"} & info.features)
+    assert {"NVM", "TWIN"} <= info.features and ({"AFE", "AFE_SYNTHETIC"} & info.features)   # M1/M2 build + twin
+    assert "HOMING" not in info.features or "MOTION" in info.features
     st = cli.status()
     assert st.motion_state == pg.MotionState.NOT_ENABLED
     assert st.reset_cause == pg.ResetCause.POWER_ON

@@ -143,7 +143,9 @@ def test_icd_generated_tables_present() -> None:
 # ---------------------------------------------------------------------------- dictionary (D-29)
 def test_dictionary_d29_d33_d27() -> None:
     keys = {p.key: p for p in PD.params}
-    assert PD.dict_version == 3
+    assert PD.dict_version == 4
+    assert "io.stop_active_level" not in keys and all(p.id != 0x0603 for p in PD.params)   # D-36
+    assert len(PD.params) == 47
     to = keys["afe.timeout_ms"]
     assert (to.default, to.min, to.max) == (250, 25, 1000)                     # D-33a
     assert keys["motion.steps_per_mm"].default == 800.0                        # D-27 closed
@@ -178,8 +180,7 @@ def test_paused_after_vectors() -> None:
 @pytest.mark.parametrize("name,expected", [
     ("move_paused", True), ("jog_paused", True), ("mul_paused", True), ("home_paused", True),
     ("jog_refresh_paused", True), ("jog_refresh_paused_jogging", True),
-    ("halt_clear_paused", False), ("jog0_paused", True), ("move_paused_refused", True),
-    ("halt_clear_paused_refused", True), ("stop_paused", True), ("halt_paused", True),
+    ("halt_clear_paused", False), ("jog0_paused", True), ("move_paused_refused", True), ("stop_paused", True), ("halt_paused", True),
     ("estop_clear_paused", True), ("fault_clear_paused", True), ("enable_paused", True),
     ("pause_paused", True), ("pause_moving", True)])
 def test_paused_clear_rule_anchor(name: str, expected: bool) -> None:
@@ -267,7 +268,7 @@ def test_resume_registry() -> None:
     ("resume_paused", "OK", None, False),
     ("resume_not_paused", "OK", None, False),
     ("resume_halt", "E_STATE", ["HALT"], True),
-    ("resume_halt_button_race", "E_STATE", ["HALT"], True),
+    ("resume_halt_key_race", "E_STATE", ["HALT"], True),
     ("resume_estop_latched", "E_STATE", ["ESTOP"], True),
     ("resume_estop_input_open", "E_STATE", ["ESTOP"], True),
     ("resume_fault", "E_STATE", ["FAULT"], True),
@@ -310,7 +311,7 @@ def test_mul_bound_at_position() -> None:
 
 
 def test_state_schema() -> None:
-    """F-B-25: state keys versioned; v2 keys stable."""
+    """F-B-25: state keys versioned and stable (v0.5: stop_btn_* kept but never set, D-36)."""
     assert CHECK["state_schema"] == cc.STATE_SCHEMA == 2
     assert list(CHECK["state_defaults"])[-1] == "paused" and len(CHECK["state_defaults"]) == 22
     for v in CHECK["vectors"]:
@@ -340,3 +341,41 @@ def test_new_frames_v04() -> None:
     b = by["event_boot_hardfault"]["decoded"]
     assert (b["code"], b["value"], b["value2"]) == ("BOOT", 0x08001A2C, 0x8200)
     assert by["move_until_load_not_in_build_nack"]["decoded"] == {"status": "E_INTERNAL", "detail": 1}
+
+
+# ---------------------------------------------------------------------------- ICD v0.5 (CR-01 / D-36 / D-37)
+def test_stop_button_retired_d36() -> None:
+    """D-36: STOP_BTN bits and the STOP_BUTTON event / stop cause are retired: reserved, never reused,
+    identifiers kept (marked RETIRED) for compatibility."""
+    assert PROTO.retired("data_status") == {"STOP_BTN": 9} and PROTO.retired("io") == {"STOP_BTN": 3}
+    assert PROTO.retired("event") == {"STOP_BUTTON": 22} and PROTO.retired("stop_cause") == {"STOP_BUTTON": 4}
+    assert PG.DATA_STATUS_BITS[9] == "" and PG.IO_BITS[3] == "" and "STOP_BTN" in PG.DATA_STATUS_RETIRED
+    assert PG.DataStatus.STOP_BTN == 0x0200                                   # member kept (compatibility)
+    h = gen_protocol.FW_PROTO_H_PATH.read_text(encoding="utf-8")
+    assert re.search(r"#define DS_RETIRED_MASK\s+0x0200u", h) and re.search(r"#define IO_RETIRED_MASK\s+0x0008u", h)
+    assert re.search(r"#define DS_DEFINED_MASK\s+0xFDFFu", h)
+    assert PG.Source.BUTTON == 2                                              # PAUSE keeps BUTTON
+
+
+def test_feature_dependent_bits_d37b() -> None:
+    """D-37 b / IF-C-M1-02: bits valid only with a feature bit."""
+    assert dict(PG.DATA_STATUS_FEATURE) == {"PAUSE_BTN": "BUTTONS", "ALM": "DRV_SIGNALS", "PEND": "DRV_SIGNALS",
+                                            "DRV_PWR": "DRV_SIGNALS"}
+    assert dict(PG.IO_FEATURE) == {"PAUSE_BTN": "BUTTONS", "ALM": "DRV_SIGNALS", "PEND": "DRV_SIGNALS",
+                                   "DRV_PWR": "DRV_SIGNALS"}
+
+
+def test_halt_clear_never_refused_and_estop_clear_open_input() -> None:
+    by = {v["name"]: v["expect"] for v in CHECK["vectors"]}
+    assert by["halt_clear_ok"]["status"] == "OK"
+    assert (by["estop_clear_input_open_unlatched"]["status"], by["estop_clear_input_open_unlatched"]["detail"]) == (
+        "E_CAUSE_ACTIVE", 0xFFFF)
+    for v in CHECK["vectors"]:
+        if v["request"]["type_name"] == "HALT_CLEAR":
+            assert v["expect"]["status"] == "OK", v["name"]
+
+
+def test_units_saturation_obs_m1_05() -> None:
+    sat = [c for c in UNITS["um_to_steps"] + UNITS["steps_to_um"] if c.get("saturated")]
+    assert len(sat) == 6
+    assert {c.get("steps", 0) for c in UNITS["um_to_steps"] if c.get("saturated")} == {2**31 - 1, -2**31}

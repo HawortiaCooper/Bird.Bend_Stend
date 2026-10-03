@@ -1,6 +1,7 @@
 /* NVM flash access, sectors 1 and 2 (FW_design §5.11): erase / word program with the busy loops in
  * RAM (.RamFunc), the vector table copied to RAM (VTOR) and BASEPRI 0x20 during each operation
- * (levels >= 2 masked; M2 adds RAM-resident level-0/1 safety handlers that stay live), data cache
+ * (levels >= 2 masked; the RAM-resident level-0/1 safety handlers of exti.c stay live and skip the
+ * core callback while g_flash_op is set), data cache
  * reset afterwards (stale reads after an erase). Single-bank F446: code fetches from flash stall
  * while the operation runs; DMA from SRAM continues.
  * Origin: role of Thrust_Stand_HAW/02_FW/src/drv/flash_f1.cpp @37c8747 (rewritten for F4 sectors).
@@ -18,6 +19,7 @@
 #define VTOR_WORDS 128u                              /* F446: 16 + 97 vectors -> 113, 512 B aligned */
 
 static uint32_t s_ram_vtor[VTOR_WORDS] __attribute__((aligned(512)));
+volatile bool g_flash_op;
 
 RAMFUNC static bool ram_erase(uint32_t snb)
 {
@@ -54,6 +56,7 @@ static op_ctx_t op_begin(void)
     c.vtor = SCB->VTOR;
     c.basepri = __get_BASEPRI();
     __set_BASEPRI_MAX(BASEPRI_MOTION);
+    g_flash_op = true;                                /* input callbacks skipped (RAM handlers live) */
     SCB->VTOR = (uint32_t)s_ram_vtor;
     __DSB();
     __ISB();
@@ -73,6 +76,7 @@ static void op_end(op_ctx_t c)
     SCB->VTOR = c.vtor;
     __DSB();
     __ISB();
+    g_flash_op = false;
     __set_BASEPRI(c.basepri);
 }
 

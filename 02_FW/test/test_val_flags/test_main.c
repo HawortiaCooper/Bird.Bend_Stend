@@ -32,11 +32,11 @@ static const map_t MAP[] = {
     {"DS", "LOAD_LIMIT", FO(load_limit)}, {"DS", "AFE_STALE", FO(afe_stale)},
     {"DS", "AFE_SATURATED", FO(afe_saturated)}, {"DS", "AFE_SETTLING", FO(afe_settling)},
     {"DS", "AFE_RATE_MISMATCH", FO(afe_rate_mismatch)}, {"DS", "LINK_WDG", FO(link_wdg)},
-    {"DS", "STOP_BTN", FO(stop_btn)}, {"DS", "PAUSE_BTN", FO(pause_btn)}, {"DS", "ALM", FO(alm)},
+    {"DS", "PAUSE_BTN", FO(pause_btn)}, {"DS", "ALM", FO(alm)},              /* bit 9 retired (D-36) */
     {"DS", "PEND", FO(pend)}, {"DS", "POS_UNCERTAIN", FO(pos_uncertain)},
     {"DS", "NO_AFE_DATA", FO(no_afe_data)}, {"DS", "DRV_PWR", FO(drv_pwr)},
     {"IO", "ESTOP_OPEN", IOO(estop_open)}, {"IO", "LIMIT_START", IOO(limit_start)},
-    {"IO", "LIMIT_END", IOO(limit_end)}, {"IO", "STOP_BTN", IOO(stop_btn)}, {"IO", "PAUSE_BTN", IOO(pause_btn)},
+    {"IO", "LIMIT_END", IOO(limit_end)}, {"IO", "PAUSE_BTN", IOO(pause_btn)},
     {"IO", "ALM", IOO(alm)}, {"IO", "PEND", IOO(pend)}, {"IO", "DRV_PWR", IOO(drv_pwr)},
     {"IO", "ENA_DISABLED", IOO(ena_disabled)}, {"IO", "RATE_80", IOO(rate_80)},
     {"SY", "CLK_FALLBACK", 0u}, {"SY", "CFG_DIRTY", 1u}, {"SY", "STREAM_ON", 2u}, {"SY", "REBOOT_PENDING", 3u},
@@ -103,8 +103,8 @@ static void test_all_inputs_all_bits(void)
     memset(&f, 1, sizeof f);
     memset(&io, 1, sizeof io);
     TEST_ASSERT_EQUAL_HEX8(0xFFu, flags_data(&f));
-    TEST_ASSERT_EQUAL_HEX16(0xFFFFu, flags_status(&f));        /* 16/16 DATA status bits used */
-    TEST_ASSERT_EQUAL_HEX16(0x03FFu, flags_io(&io));
+    TEST_ASSERT_EQUAL_HEX16(0xFDFFu, flags_status(&f));        /* bit 9 STOP_BTN retired (ICD v0.5, D-36) */
+    TEST_ASSERT_EQUAL_HEX16(0x03F7u, flags_io(&io));           /* io bit 3 STOP_BTN retired */
     TEST_ASSERT_EQUAL_HEX8(0x1Fu, flags_sys(true, true, true, true, true));
 }
 

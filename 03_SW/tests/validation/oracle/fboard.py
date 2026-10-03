@@ -2,6 +2,8 @@
 the dictionary loaded from ``params.yaml`` (never on B's simulator or codec). Used where the simulator cannot
 present a condition (IF-008: other PROTO major / PAYLOAD version / dictionary hash) — SW_test_plan TC-IF-008-01.
 
+v0.3 (ICD v0.5): selectable GET_INFO feature mask and STATUS ``io`` bits (D-37 b feature-bit validity).
+
 Behaviour (ICD v0.4.1, deliberately minimal): answers every request it understands with OK (+ body), keeps a
 RAM parameter table (SET_PARAM stores, GET_PARAM / GET_ALL_PARAMS read it), streams DATA at 80 Hz while the
 stream is on (``payload_version`` configurable), records every received request for assertions. No motion.
@@ -22,7 +24,9 @@ class FBoard:
     def __init__(self, pdict: Any, *, proto_major: int = 1, proto_minor: int = 0, payload_version: int = 1,
                  dict_hash: int | None = None, data_payload_version: int | None = None,
                  flags: tuple[str, ...] = (), status_bits: tuple[str, ...] = ("DRV_PWR",), seq_start: int = 0,
-                 skip_every: int = 0, dup_every: int = 0, max_frames: int | None = None) -> None:
+                 skip_every: int = 0, dup_every: int = 0, max_frames: int | None = None,
+                 features: tuple[str, ...] = ("AFE", "MOTION", "HOMING", "MOVE_UNTIL_LOAD", "NVM"),
+                 io: tuple[str, ...] = ()) -> None:
         self.pdict = pdict
         self.params = {p.key: p.default for p in pdict.params}
         self.by_id = {p.id: p for p in pdict.params}
@@ -30,10 +34,11 @@ class FBoard:
                      "fw_version": [9, 9, 9],
                      "param_dict_hash": f"0x{(pdict.hash if dict_hash is None else dict_hash):08X}",
                      "uid": "46424F4152442D303030303031"[:24], "build": "F-BOARD", "param_count": len(pdict.params),
-                     "features": ["AFE", "MOTION", "HOMING", "MOVE_UNTIL_LOAD", "NVM"]}
+                     "features": list(features)}
         self.data_pv = payload_version if data_payload_version is None else data_payload_version
         self.flags = list(flags)
         self.status_bits = list(status_bits)
+        self.io = list(io)
         self.received: list[tuple[str, dict]] = []
         self.stream_on = False
         self.frame_seq = seq_start
@@ -79,7 +84,7 @@ class FBoard:
 
     def _status(self) -> dict:
         d = {k: 0 for k in rc.STATUS_FIELDS}
-        d.update(flags=list(self.flags), status=list(self.status_bits), faults=[], io=[], sys_flags=(
+        d.update(flags=list(self.flags), status=list(self.status_bits), faults=[], io=list(self.io), sys_flags=(
             ["STREAM_ON"] if self.stream_on else []), motion_state="IDLE", home_phase="NONE", halt_src="NONE",
             reset_cause="POWER_ON", pause_src="NONE", t_us=self._t_us(), uptime_ms=int((time.monotonic() - self.t0)
                                                                                         * 1000))

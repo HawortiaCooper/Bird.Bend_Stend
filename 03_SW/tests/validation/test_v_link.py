@@ -30,14 +30,14 @@ def _resp_for(be, name, since=0):
 # ============================================================================================ RETRY class
 
 @pytest.mark.req("IF-005")
-def test_tc_if_005_01_retry_new_seq_then_success(vbe):
+def test_tc_if_005_01_retry_new_seq_then_success(vbe, pdict):
     """One dropped GET_ALL_PARAMS response → the request is re-sent after the 100 ms timeout with a NEW SEQ and
     the read succeeds (ICD §9.3 RETRY)."""
     # Verifies: IF-005
     H.act(vbe, "inject", fault="drop_next", cmd="GET_ALL_PARAMS", what="response", n=1)
     m0 = H.wire_mark(vbe)
     vals = H.result(vbe, H.read_all(vbe))
-    assert len(vals) == 48
+    assert len(vals) == len(pdict.params)
     p0 = [w for w in H.tx(vbe, "GET_ALL_PARAMS", since=m0) if w.fields["page"] == 0]
     assert len(p0) == 2 and p0[0].seq != p0[1].seq
     assert 100 * MS <= p0[1].t_ns - p0[0].t_ns <= 110 * MS
@@ -61,7 +61,7 @@ def test_tc_if_005_01_three_drops_timeout_after_two_retries(vbe):
 
 
 @pytest.mark.req("IF-005")
-def test_tc_if_005_01_late_response_ignored_and_counted(vbe):
+def test_tc_if_005_01_late_response_ignored_and_counted(vbe, pdict):
     """A response delayed beyond the timeout belongs to an abandoned SEQ: it is ignored and counted
     (late_responses); the retry resolves the request exactly once."""
     # Verifies: IF-005
@@ -70,7 +70,7 @@ def test_tc_if_005_01_late_response_ignored_and_counted(vbe):
     m0 = H.wire_mark(vbe)
     vals = H.result(vbe, H.read_all(vbe))
     H.advance(vbe, 200)
-    assert len(vals) == 48
+    assert len(vals) == len(pdict.params)
     assert H.stats(vbe).late_responses == l0 + 1
     p0 = [w for w in H.tx(vbe, "GET_ALL_PARAMS", since=m0) if w.fields["page"] == 0]
     assert len(p0) == 2
@@ -92,7 +92,7 @@ def test_tc_if_005_01_ping_retry(vbe):
 
 
 @pytest.mark.req("IF-005")
-def test_tc_if_005_03_duplicated_response_single_resolution(vbe):
+def test_tc_if_005_03_duplicated_response_single_resolution(vbe, pdict):
     """FI-03: a duplicated response is ignored; exactly one resolution per SEQ; the following request is not
     confused by the copy."""
     # Verifies: IF-005
@@ -100,7 +100,7 @@ def test_tc_if_005_03_duplicated_response_single_resolution(vbe):
     m0 = H.wire_mark(vbe)
     vals = H.result(vbe, H.read_all(vbe))
     H.advance(vbe, 100)
-    assert len(vals) == 48
+    assert len(vals) == len(pdict.params)
     r0 = [w for w in _resp_for(vbe, "GET_ALL_PARAMS", m0) if w.fields["page"] == 0]
     assert len(r0) == 2 and r0[0].seq == r0[1].seq                  # the copy really was on the wire
     assert len(H.tx(vbe, "GET_ALL_PARAMS", since=m0)) == 3          # pages 0, 1, 2 — nothing re-sent
@@ -203,22 +203,25 @@ def test_tc_if_005_02_resume_race_new_pause_not_cleared(vbe):
     assert any("NOT_CONFIRMED" in t for t in _log_texts(vbe))
 
 
-@pytest.mark.req("IF-005", "IF-011", "SW-STOP-003")
+@pytest.mark.req("IF-005", "IF-011", "SW-STOP-003", "SW-STOP-002")
 def test_tc_if_005_02_halt_clear_lost_new_halt_not_wiped(vbe):
-    """D-34: HALT_CLEAR response lost and a new STOP-button HALT latched in between → exactly one HALT_CLEAR
-    frame (priority path), result NOT_CONFIRMED, HALT still latched."""
-    # Verifies: IF-005, IF-011, SW-STOP-003
+    """D-34 (v0.3, CR-01: no STOP button — the new HALT now comes from the Pause/Break key = ``halt()``): the
+    HALT_CLEAR response is lost and a new HALT is pressed right after the clear executed → exactly one HALT_CLEAR
+    frame (priority path, never re-sent), the new HALT follows it on the wire, the HALT stays latched."""
+    # Verifies: IF-005, IF-011, SW-STOP-003, SW-STOP-002
     assert H.halt(vbe).sent
     assert H.run_until(vbe, lambda: H.indicator(vbe, "halt").state == "ON", 500)
     H.act(vbe, "inject", fault="drop_next", cmd="HALT_CLEAR", what="response", n=1)
-    H.act(vbe, "on_frame", cmd="HALT_CLEAR", nth=1, delay_us=2000,
-          then={"action": "button", "name": "stop", "pressed": True})
     m0 = H.wire_mark(vbe)
-    res = H.result(vbe, H.clear_stop(vbe))
-    assert res.sent and not res.confirmed and str(res.outcome) == "NOT_CONFIRMED"
-    assert len(H.tx(vbe, "HALT_CLEAR", since=m0)) == 1
+    fut = H.clear_stop(vbe)
+    H.advance(vbe, 3)                          # the clear has executed at the board; its response is lost
+    assert H.halt(vbe).sent                    # new HALT (Pause/Break key) before the VERIFY resolution
+    res = H.result(vbe, fut)
+    H.advance(vbe, 300)
+    clears, halts = H.tx(vbe, "HALT_CLEAR", since=m0), H.tx(vbe, "HALT", since=m0)
+    assert len(clears) == 1 and halts and clears[0].t_ns < halts[0].t_ns
+    assert not (res.confirmed and str(res.outcome) == "OK" and H.indicator(vbe, "halt").state != "ON")
     assert H.indicator(vbe, "halt").state == "ON"
-    H.act(vbe, "button", name="stop", pressed=False)
 
 
 @pytest.mark.req("IF-005", "IF-011")
@@ -425,7 +428,7 @@ def test_tc_if_011_02_fw_to_pc_bandwidth_below_10_percent(vbe):
 # ============================================================================================ corruption / counters
 
 @pytest.mark.req("IF-004", "SW-PLT-003", "IF-005")
-def test_tc_if_004_02_corrupt_response_dropped_counted_and_retried(vbe):
+def test_tc_if_004_02_corrupt_response_dropped_counted_and_retried(vbe, pdict):
     """FI-04: a corrupted GET_ALL_PARAMS response is dropped and counted (crc_errors + 1, exact); no state change;
     the request is retried (RETRY) and succeeds."""
     # Verifies: IF-004, SW-PLT-003, IF-005
@@ -433,7 +436,7 @@ def test_tc_if_004_02_corrupt_response_dropped_counted_and_retried(vbe):
     H.act(vbe, "inject", fault="corrupt_next", cmd="GET_ALL_PARAMS", what="response", n=1)
     m0 = H.wire_mark(vbe)
     vals = H.result(vbe, H.read_all(vbe))
-    assert len(vals) == 48 and H.stats(vbe).crc_errors == c0 + 1
+    assert len(vals) == len(pdict.params) and H.stats(vbe).crc_errors == c0 + 1
     p0 = [w for w in H.tx(vbe, "GET_ALL_PARAMS", since=m0) if w.fields["page"] == 0]
     assert len(p0) == 2 and p0[0].seq != p0[1].seq
 

@@ -99,34 +99,40 @@ def test_channels_changed_rereads_registry_without_polling(window, plot, connect
     assert plot.tree.is_available("F_N") and "F_N" in plot.tree.checked_keys()
 
 
-@pytest.mark.req("SW-RT-002", "SW-RT-003")
-def test_toggle_channels_curves_lanes_and_third_unit(window, plot, connected_fake) -> None:
-    """Verifies: SW-RT-002 — ticking adds a curve / lane, unticking removes it; bits go to the lanes strip; a
-    third unit is refused with a hint."""
+@pytest.mark.req("SW-RT-002", "SW-RT-006")
+def test_toggle_channels_curves_and_bit_lanes(window, plot, connected_fake) -> None:
+    """Verifies: SW-RT-002, SW-RT-006 — ticking adds a curve, unticking removes only the curve; status bits are
+    digital lanes (generated names as ticks, fixed range) in their own quantity pane."""
     tree = plot.tree
-    tree.set_checked("raw", True)
     tree.set_checked("bit.valid", True)
     tree.set_checked("bit.moving", True)
-    assert plot.analog_keys == ["raw"] and plot.bit_keys == ["bit.valid", "bit.moving"]
-    assert plot.lanes.visible and set(plot.lanes.curves) == {"bit.valid", "bit.moving"}
-    assert plot.time_view.units == {"L": "counts"}
-    tree.set_checked("setpoint_um", True)
-    assert plot.time_view.units == {"L": "counts", "R": "µm"}
-    tree.set_checked("rate_sps", True)
-    assert "rate_sps" not in tree.checked_keys() and "open another plot window" in window.toast_label.text()
+    raw_pane, bit_pane = plot.pane_of("raw"), plot.pane_of("bit.valid")
+    assert bit_pane is plot.pane_of("bit.moving") and bit_pane is not raw_pane
+    assert raw_pane.units() == ("counts", None) and bit_pane.units() == ("bit", None)
+    assert bit_pane.bit_keys() == ["bit.valid", "bit.moving"]
+    ticks = bit_pane.plot_item.getAxis("left")._tickLevels[0]
+    assert [t[1] for t in ticks] == ["VALID", "MOVING"]
+    assert bit_pane.y_range() == pytest.approx((-0.2, 2.4))
+    tick(window)
+    x, y = bit_pane.curve("bit.moving").getData()
+    fin = y[np.isfinite(y)]
+    assert fin.min() >= 1.2 and fin.max() <= 2.2                       # lane 2 = offset 1.2
     tree.set_checked("raw", False)
-    tree.set_checked("bit.valid", False)
-    tree.set_checked("bit.moving", False)
-    assert "raw" not in plot.time_view.curves and not plot.lanes.visible
+    assert plot.pane_of("raw") is None and raw_pane in plot.panes()    # emptied pane kept
 
 
-@pytest.mark.req("SW-RT-002")
+@pytest.mark.req("SW-RT-002", "SW-RT-006")
 def test_group_tick_is_one_update(plot) -> None:
-    """Verifies: SW-RT-002 — ticking the status-bit group ticks every bit at once (one checkedChanged)."""
+    """Verifies: SW-RT-002, SW-RT-006 (rule 5) — ticking the status-bit group ticks every available bit at once
+    (one checkedChanged) into one pane."""
     seen = []
     plot.tree.checkedChanged.connect(seen.append)
+    n_layout = []
+    plot.panesChanged.connect(n_layout.append)
     plot.tree.set_group_checked("Status bits", True)
-    assert len(seen) == 1 and len(plot.bit_keys) == len([k for k in plot.tree.all_keys() if k.startswith("bit.")])
+    bits = [k for k in plot.tree.all_keys() if k.startswith("bit.")]
+    assert len(seen) == 1 and len(n_layout) == 1
+    assert {plot.pane_of(k) for k in bits} == {plot.pane_of("bit.valid")}
 
 
 # --------------------------------------------------------------------------------------------- dock / refresh
@@ -156,7 +162,7 @@ def test_refresh_pulls_snapshot_and_freeze_stops(window, plot, connected_fake) -
     plot.tree.set_checked("raw", True)
     tick(window)
     assert connected_fake.data.snapshot_calls == n0 + 1 and plot.updates == u0 + 1
-    x, y = plot.time_view.curves["raw"].items[VSTATE_OK].getData()
+    x, y = plot.pane_of("raw").curve("raw").getData()
     assert len(x) == 2 * plot.px_width() and x.min() >= -plot.window_s - 1e-9 and x.max() <= 0.0
     plot.set_frozen(True)
     tick(window, 3)
@@ -179,40 +185,43 @@ def test_window_length_and_y_modes(window, plot, connected_fake) -> None:
     plot.set_window_s(10_000)
     assert plot.window_s == 600
     plot.set_window_s(60)
-    (x0, x1), _ = plot.time_view.plot.vb.viewRange()
+    pane = plot.pane_of("raw")
+    x0, x1 = pane.x_range()
     assert x0 == pytest.approx(-60) and x1 == pytest.approx(0)
-    plot.tree.set_checked("raw", True)
     tick(window)
-    lo, hi = plot.time_view.ranges["L"]
+    lo, hi = pane.y_range()
     assert lo < -100 < 100 < hi                                      # fake raw ±101 + 5 %
-    plot.y_manual.setChecked(True)
-    plot.y_min.setValue(-1000.0)
-    plot.y_max.setValue(2000.0)
+    plot.autoscale_check.setChecked(False)                           # manual Y: the range stays as set
+    pane.plot_item.vb.setYRange(-1000.0, 2000.0, padding=0)
+    tick(window, 2)
+    assert pane.y_range() == pytest.approx((-1000.0, 2000.0))
+    plot.autoscale_check.setChecked(True)
     tick(window)
-    assert plot.time_view.ranges["L"] == (-1000.0, 2000.0)
+    assert pane.y_range()[1] < 2000.0
 
 
 @pytest.mark.req("SW-CAL-008", "SW-RT-003")
 def test_vstate_curves_created_only_when_present(window, plot, connected_fake) -> None:
     """Verifies: SW-CAL-008 — dashed (EXTRAPOLATED) and grey (INVALID) curves appear only when such columns exist."""
-    plot.tree.set_checked("raw", True)
     tick(window)
-    assert set(plot.time_view.curves["raw"].items) == {VSTATE_OK}
+    pane = plot.pane_of("raw")
+    assert set(pane.style_curves("raw")) == {VSTATE_OK}
     vs = np.zeros(plot.px_width(), np.uint8)
     vs[:10] = VSTATE_EXTRAPOLATED
     vs[10:20] = VSTATE_INVALID
     vs[20:30] = VSTATE_NO_DATA
     connected_fake.data.vstate["raw"] = vs
     tick(window)
-    items = plot.time_view.curves["raw"].items
+    items = pane.style_curves("raw")
     assert set(items) == {VSTATE_OK, VSTATE_EXTRAPOLATED, VSTATE_INVALID}
     assert items[VSTATE_EXTRAPOLATED].opts["pen"].style() == Qt.PenStyle.DashLine
+    _x, y = items[VSTATE_OK].getData()
+    assert np.isnan(y[40:60]).all()                                  # NO_DATA columns 20..29 = gap
 
 
 @pytest.mark.req("SW-RT-003")
 def test_snapshot_error_does_not_break_refresh(window, plot, connected_fake) -> None:
     """Verifies: SW-RT-003 — a snapshot error (e.g. not connected) is shown in the dock, the refresh goes on."""
-    plot.tree.set_checked("raw", True)
     connected_fake.data.fail = RuntimeError("not connected")
     tick(window, 2)
     assert "no data: not connected" in plot.status_label.text()
@@ -236,17 +245,24 @@ def test_readout_states(window, connected_fake, state) -> None:
 
 # --------------------------------------------------------------------------------------------- perf smoke
 
-@pytest.mark.req("NFR-001")
+@pytest.mark.req("NFR-001", "SW-RT-006")
 def test_perf_smoke_offscreen(window, plot, connected_fake, capsys) -> None:
-    """Verifies: NFR-001 (smoke, informative offscreen) — all DATA channels + all status bits in one window, 30 s,
-    200 ticks: stage times recorded; the plot stage stays far below the 30 ms tick budget on this machine."""
+    """Verifies: NFR-001, SW-RT-006 (smoke, informative offscreen) — 4 time panes (raw, status bits, travel, rate)
+    in a 2-column grid + an X-Y pane, 30 s, 200 ticks: one snapshot per tick for all panes; the plot stage stays
+    below the 30 ms tick budget (§4.6) on this machine."""
     plot.tree.set_group_checked("Status bits", True)
-    for k in ("raw", "setpoint_um"):
+    for k in ("raw", "setpoint_um", "rate_sps"):
         plot.tree.set_checked(k, True)
+    plot.add_xy_pane()
+    plot.set_columns(2)
+    assert len(plot.time_panes()) == 4
+    n0 = window.snapshot_calls
     tick(window, 200)
     ps = window.perf_stats()
     with capsys.disabled():
-        print(f"\n[perf smoke offscreen] plots p95 {ps['plots_p95_ms']:.2f} ms max {ps['plots_max_ms']:.2f} ms; "
-              f"status p95 {ps['status_p95_ms']:.2f} ms; readouts p95 {ps['readouts_p95_ms']:.2f} ms")
+        print(f"\n[perf smoke offscreen, 4 time panes + X-Y] plots p95 {ps['plots_p95_ms']:.2f} ms max "
+              f"{ps['plots_max_ms']:.2f} ms; status p95 {ps['status_p95_ms']:.2f} ms; readouts p95 "
+              f"{ps['readouts_p95_ms']:.2f} ms")
+    assert window.snapshot_calls - n0 == 200
     assert ps["plots_p95_ms"] < 30.0 and ps["status_p95_ms"] < 30.0
     connected_fake.events.emit("log", EventRecord("log", 0, "x"))

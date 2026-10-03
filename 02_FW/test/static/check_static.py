@@ -201,7 +201,7 @@ def s10() -> None:
     for m in re.finditer(r"\b([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)u?\b", h):
         vals[m.group(1)] = int(m.group(2), 0)
     for m in re.finditer(r"#define\s+([A-Z][A-Z0-9_]+)\s+\(?(0x[0-9A-Fa-f]+|\d+)[uUlL]*\)?\s", h):
-        vals.setdefault(m.group(1), int(m.group(2), 0))
+        vals[m.group(1)] = int(m.group(2), 0)     # a #define wins over "NAME = n" text in comments (v0.5)
     errs, n = [], 0
 
     def cmp(name, want):
@@ -221,7 +221,8 @@ def s10() -> None:
     for pref, tab in (("DF_", rc.DATA_FLAGS), ("DS_", rc.DATA_STATUS), ("FAULT_", rc.FAULTS), ("BLOCK_", rc.BLOCK),
                       ("IO_", rc.IO), ("SYSF_", rc.SYS_FLAGS), ("FEAT_", rc.FEATURES)):
         for i, nm in enumerate(tab):
-            cmp(pref + nm, 1 << i)
+            if nm:                                   # "" = reserved / retired (ICD v0.5 STOP_BTN, D-36)
+                cmp(pref + nm, 1 << i)
     for pref, tab in (("MS_", rc.MOTION_STATE), ("RST_", rc.RESET_CAUSE), ("SRC_", rc.SOURCE), ("HP_", rc.HOME_PHASE)):
         for i, nm in enumerate(tab):
             cmp(pref + nm, i)

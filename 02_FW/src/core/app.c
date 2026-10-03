@@ -2,7 +2,8 @@
  * app_init() runs after the target HAL brought up clocks, time base, UART and outputs (hal/f446
  * board_init); app_loop() is one main-loop pass; core_tick_1ms() is the level-4 tick callback.
  * Implements: SAF-FW-018 (boot: NOT_ENABLED, not homed, VALID 0, stream off, PAUSED 0, BOOT
- *             event with the reset cause), SAF-FW-019 (watchdog kicked only while the tick runs),
+ *             event with the reset cause and the HardFault record), SAF-FW-019 (watchdog kicked
+ *             only while the tick runs), SAF-FW-007 (boot inputs),
  *             FW-PLT-002 (CLK_FALLBACK event), NFR-006 (loop_max_us, non-blocking pass)
  */
 #include <string.h>
@@ -36,16 +37,25 @@ void app_init(void)
     nvm_boot(&nvm_ev, &nvm_arg);                     /* ICD §11.3 rules 2..5 -> g_fw.p */
     g_fw.boot_p = g_fw.p;                            /* reboot_required values as applied */
 
-    /* EVENT order (FW_design §3.2 step 8): BOOT, CLK_FALLBACK, NVM result. BOOT value/value2 =
-     * HardFault record: the seam has no accessor yet (M2 item) -> 0 / 0. */
-    fw_event((uint16_t)EV_BOOT, g_fw.reset_cause, 0, 0);
+    /* EVENT order (FW_design §3.2 step 8): BOOT (value / value2 = HardFault record of the previous
+     * run, seam v1.2, OI-FW-32), CLK_FALLBACK, NVM result; then the boot-time input latches */
+    {
+        uint32_t pc = 0u, cfsr = 0u;
+        if (!hal_fault_record(&pc, &cfsr)) {
+            pc = 0u;
+            cfsr = 0u;
+        }
+        fw_event((uint16_t)EV_BOOT, g_fw.reset_cause, (int32_t)pc, (int32_t)cfsr);
+    }
     if (g_fw.clk_fallback) {
         fw_event((uint16_t)EV_CLK_FALLBACK, 0u, 0, 0);
     }
     fw_event(nvm_ev, nvm_arg, 0, 0);
 
     link_init();
-    afe_init();                                      /* synthetic source / HX711 at afe.rate_sps */
+    motion_init();                                   /* step HAL: PUL idle, DIR, ENA "no current" */
+    safety_init();                                   /* boot inputs, ENA boot rule (ICD §6.4) */
+    afe_init();                                      /* HX711 at afe.rate_sps, load limit, settle */
     s_last_kick_tick = g_fw.tick_count;
 }
 
@@ -81,8 +91,10 @@ void core_tick_1ms(void)
     uint32_t now_us = hal_time_us();
     uint32_t now_ms = hal_time_ms();
     g_fw.tick_count++;
-    link_tick(now_ms);                               /* stop sniffer, sniffed-stop hold */
-    afe_tick(now_us);                                /* AFE stale (EVENT AFE_STALE) */
+    safety_tick(now_ms, now_us);                     /* inputs, driver monitor, link wdg, idle */
+    link_tick(now_ms);                               /* stop sniffer (motion part), hold */
+    afe_tick(now_us);                                /* load-limit trip fold, AFE stale / fault */
+    motion_tick(now_ms);                             /* completion, homing, settle, dead-man */
     CRIT_BEGIN(HAL_CRIT_DATA);
     valid_settle(&g_fw.valid, now_us);
     CRIT_END();

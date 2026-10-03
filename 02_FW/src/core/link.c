@@ -67,6 +67,7 @@ static void dispatch(const fp_frame_t *f)
         return;
     }
     g_fw.last_cmd_rx_ms = hal_time_ms();             /* NACKed frames included (ICD §3.1) */
+    g_fw.cmd_rx_count++;                             /* LINK_RESTORED (SAF-FW-015) */
     if (CMD_IS_SNIFFED(f->type)) {
         CRIT_BEGIN(HAL_CRIT_TICK);
         (void)hold_on_dispatch(&s_hold, f->type, f->seq);
@@ -129,15 +130,28 @@ void link_tick(uint32_t now_ms)
         }
         nh = sniff_scan(&s_sniff, buf, (uint16_t)n, hits, (uint8_t)(sizeof hits / sizeof hits[0]));
         for (k = 0u; k < nh; k++) {
-            /* motion part only (FW_design §5.9.3): M1 has no motion to stop; the hold parks motion
-             * starts of earlier frames from M2 on. Latches, VALID, EVENTs and the response come
-             * from the in-order dispatch of the same frame. */
+            /* motion part only (FW_design §5.9.3): STOP 0 / HALT -> CLEAN halt, STOP 1 / PAUSE ->
+             * controlled stop, at once (<= 1 ms after the last byte); the hold parks motion starts
+             * of earlier frames. Latches, VALID, EVENTs (except STOPPED) and the response come from
+             * the in-order dispatch of the same frame (idempotent motion part there). */
+            uint8_t cause = sniff_cause(&hits[k]);
+            bool ctl = (hits[k].type == (uint8_t)CMD_PAUSE) ||
+                       (hits[k].type == (uint8_t)CMD_STOP && hits[k].mode == (uint8_t)STOPMODE_CONTROLLED);
             g_fw.last_cmd_rx_ms = now_ms;
+            g_fw.cmd_rx_count++;
             hold_set(&s_hold, &hits[k], now_ms);
+            motion_stop(cause, ctl, (uint8_t)MD_STOPPED);
         }
         if (n < sizeof buf) {
             break;
         }
     }
-    (void)hold_timeout(&s_hold, now_ms, SNIFF_HOLD_MAX_MS);
+    if (hold_timeout(&s_hold, now_ms, SNIFF_HOLD_MAX_MS)) {
+        motion_hold_resolved(s_hold.cause);          /* safe side: parked start discarded */
+    }
+}
+
+uint8_t link_hold_cause(void)
+{
+    return s_hold.cause;
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reference codec (test oracle) for the Bird Bend Stand PC <-> FW protocol.
 
-Implements: ICD_protocol.md v0.4.1 (PROTO_VERSION 1.0, PAYLOAD_VERSION 1);
+Implements: ICD_protocol.md v0.5 (PROTO_VERSION 1.0, PAYLOAD_VERSION 1);
             IF-002, IF-003, IF-004, IF-006, IF-009, FW-STR-003
 Origin: framing, CRC and parser follow Thrust_Stand_HAW/00_System/tools/ref_codec.py @9473c68
         (copied and trimmed, D-02); message set and payloads are bend-stand specific.
@@ -19,7 +19,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any
 
-ICD_VERSION = "0.4.1"
+ICD_VERSION = "0.5"
 
 # ======================================================================================
 # constants (ICD §2, §3)
@@ -82,13 +82,13 @@ BUSY_DETAIL = {1: "MOTION", 2: "ENABLING"}
 # bit tables (index = bit number); "" = reserved
 DATA_FLAGS = ["VALID", "MOVING", "HOMED", "ENABLED", "ESTOP", "HALT", "FAULT", "OVERRUN"]
 DATA_STATUS = ["PAUSED", "LIMIT_START", "LIMIT_END", "LOAD_LIMIT", "AFE_STALE", "AFE_SATURATED",
-               "AFE_SETTLING", "AFE_RATE_MISMATCH", "LINK_WDG", "STOP_BTN", "PAUSE_BTN", "ALM",
+               "AFE_SETTLING", "AFE_RATE_MISMATCH", "LINK_WDG", "", "PAUSE_BTN", "ALM",   # 9 retired (D-36)
                "PEND", "POS_UNCERTAIN", "NO_AFE_DATA", "DRV_PWR"]
 FAULTS = ["LOAD_LIMIT", "AFE_FAULT", "STEP_FAULT", "LIMIT_WIRING", "HOME_NOT_FOUND",
           "HOME_WIRING", "K1_WELDED", "HOME_DRIFT"]
 BLOCK = ["ESTOP", "HALT", "FAULT", "NOT_ENABLED", "NOT_HOMED", "LIMIT", "AFE_STALE",
          "AFE_SATURATED", "DRV_UNPOWERED", "DRIVER_ALARM", "PAUSED"]
-IO = ["ESTOP_OPEN", "LIMIT_START", "LIMIT_END", "STOP_BTN", "PAUSE_BTN", "ALM", "PEND",
+IO = ["ESTOP_OPEN", "LIMIT_START", "LIMIT_END", "", "PAUSE_BTN", "ALM", "PEND",   # 3 retired (D-36)
       "DRV_PWR", "ENA_DISABLED", "RATE_80"]
 SYS_FLAGS = ["CLK_FALLBACK", "CFG_DIRTY", "STREAM_ON", "REBOOT_PENDING", "NVM_DEFAULTED"]
 FEATURES = ["AFE", "AFE_SYNTHETIC", "MOTION", "HOMING", "MOVE_UNTIL_LOAD", "NVM", "TWIN",
@@ -107,7 +107,7 @@ EVENT: dict[str, int] = {
     "HALT_SET": 6, "HALT_CLEARED": 7, "PAUSED": 8, "PAUSE_CLEARED": 9, "RESUME_REQUEST": 10,
     "FAULT_SET": 11, "FAULT_CLEARED": 12, "LIMIT_SET": 13, "LIMIT_CLEARED": 14,
     "LINK_WDG": 15, "LINK_RESTORED": 16, "VALID_CLEARED": 17, "HOMED": 18, "HOME_FAILED": 19,
-    "DRIVER_ENABLED": 20, "DRIVER_DISABLED": 21, "STOP_BUTTON": 22, "PAUSE_BUTTON": 23,
+    "DRIVER_ENABLED": 20, "DRIVER_DISABLED": 21, "PAUSE_BUTTON": 23,   # 22 retired (D-36)
     "ALM_CHANGED": 24, "AFE_REINIT": 25, "AFE_RATE_MISMATCH": 26, "AFE_STALE": 27,
     "PARAMS_SAVED": 28, "PARAMS_LOADED": 29, "PARAMS_DEFAULTED": 30, "NVM_ERROR": 31,
     "CLK_FALLBACK": 32, "DRIVER_POWER": 33, "NOT_SETTLED": 34,
@@ -115,7 +115,7 @@ EVENT: dict[str, int] = {
 EVENT_NAME = {v: k for k, v in EVENT.items()}
 
 STOP_CAUSE: dict[str, int] = {
-    "NONE": 0, "PC_STOP": 1, "PC_STOP_CONTROLLED": 2, "PC_HALT": 3, "STOP_BUTTON": 4,
+    "NONE": 0, "PC_STOP": 1, "PC_STOP_CONTROLLED": 2, "PC_HALT": 3,   # 4 retired (D-36)
     "PAUSE_BUTTON": 5, "PC_PAUSE": 6, "ESTOP": 7, "LIMIT_START": 8, "LIMIT_END": 9,
     "LIMIT_WIRING": 10, "LOAD_LIMIT": 11, "AFE_FAULT": 12, "LINK_WDG": 13, "JOG_DEADMAN": 14,
     "STEP_FAULT": 15, "HOME_FAIL": 16, "DRV_POWER_LOST": 17,

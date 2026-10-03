@@ -4,7 +4,7 @@
  * the context from its state (core/link.c).
  * Origin: pattern of Thrust_Stand_HAW/02_FW/src/pure/cmd_check.* @37c8747 (rewritten).
  * Implements: FW-CMD-001, FW-CFG-003, SAF-FW-006, SAF-FW-012 (check), SAF-FW-020, SAF-FW-021,
- *             SAF-FW-022, SAF-FW-023 (BLOCK PAUSED, RESUME), SAF-FW-024/026 (check part),
+ *             SAF-FW-023 (BLOCK PAUSED, RESUME), SAF-FW-024/026 (check part),
  *             FW-CMD-003 (FAULT_CLEAR cause rule), FW-MOT-009 (speed cap), D-30, D-31
  */
 #ifndef PURE_CMD_CHECK_H
@@ -29,9 +29,7 @@ typedef struct {
     bool     estop_latched;
     bool     estop_input_open;
     uint32_t estop_closed_ms;       /* sense input closed continuously */
-    bool     halt_latched;
-    bool     stop_btn_active;
-    uint32_t stop_btn_released_ms;
+    bool     halt_latched;          /* (stop_btn_* retired: state_schema 3, D-36) */
     uint16_t faults;                /* latched FAULT_* mask */
     uint16_t fault_causes;          /* FAULT_* bits whose cause is still present */
     bool     limit_start;           /* input active or latched */

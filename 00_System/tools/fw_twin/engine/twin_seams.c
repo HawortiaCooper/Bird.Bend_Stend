@@ -187,6 +187,11 @@ void twin_step_event(void)
     uint32_t next = T.period_pre ? T.period_pre : T.period_cur;
     T.period_pre = 0;
     schedule_period(T.now, next, T.now);
+    if (T.storm_until > T.now) {                          /* isr_storm: the level-2 step ISR is starved; the
+                                                             timer keeps pulsing with the preloaded period */
+        tw_out("L %llu step_isr_starved", (unsigned long long)T.now);
+        return;
+    }
     if (T.step_fault_next) {                              /* inject step_fault: the ISR is late by one period */
         T.step_fault_next = false;
         tw_out("L %llu step_fault_injected", (unsigned long long)T.now);
@@ -224,7 +229,7 @@ void twin_input_edge(uint8_t id, uint8_t level)
     case IN_PAUSE: break;
     default: return;                                      /* ALM, PEND, DRV_PWR: polled, no EXTI */
     }
-    if (T.in_stall) {
+    if (T.in_stall || (T.storm_until > T.now && id != IN_ESTOP)) {   /* level-1 lines wait for the storm */
         if (T.n_deferred < 64u) { T.deferred[T.n_deferred].id = id; T.deferred[T.n_deferred].level = level; T.deferred[T.n_deferred].t_us = t; T.n_deferred++; }
         return;
     }
@@ -316,19 +321,38 @@ const void *hal_flash_map(uint32_t addr)
 }
 
 /* ================================ hal_sys ================================ */
-/* seam semantics (twin, conservative; OI-C-M1-03): `ms` = the WORST-CASE timeout, reached at the slowest LSI
- * 17 kHz; at LSI f the IWDG fires after ms * 17000 / f (default 32 kHz: 90 -> 47.8 ms = the target run window
- * PR /8, RLR 190). Armed by the first kick or set_timeout; default 90 ms (FW_design §5.13). */
+/* seam semantics (A's answer to OI-C-M1-03, tools/README seam v1.2): `ms` selects a window, it is not scaled:
+ *   ms <= 90 -> RUN window: PR /8, RLR 190 -> (190+1)*8 / LSI  = 32.5 ms (47 kHz) ... 89.9 ms (17 kHz)
+ *   ms >  90 -> NVM long window: PR /32, RLR 4095 -> 4096*32 / LSI = 2.79 s (47 kHz) ... 7.71 s (17 kHz)
+ * i.e. 90 = the worst-case (slowest LSI) run-window timeout. The twin fires after the window at its LSI
+ * (default 32 kHz: 47.75 ms / 4.10 s). Armed by the first kick or set_timeout; default = run window. */
+static vt_t wdg_window_ns(void)
+{
+    double ticks = T.wdg_long ? 4096.0 * 32.0 : 191.0 * 8.0;
+    return (vt_t)(ticks / T.lsi_hz * 1e9);
+}
 void hal_wdg_kick(void)
 {
-    if (!T.wdg_armed) { T.wdg_armed = true; if (!T.wdg_timeout_ns) T.wdg_timeout_ns = 90000000ull; }
-    T.wdg_deadline = T.now + (vt_t)((double)T.wdg_timeout_ns * 17000.0 / T.lsi_hz);
+    if (!T.wdg_armed) { T.wdg_armed = true; }
+    T.wdg_timeout_ns = wdg_window_ns();
+    T.wdg_deadline = T.now + T.wdg_timeout_ns;
 }
 void hal_wdg_set_timeout(uint32_t ms)
 {
     tw_out("L %llu hal_wdg_set_timeout %lu", (unsigned long long)T.now, (unsigned long)ms);
-    T.wdg_timeout_ns = (vt_t)ms * 1000000ull;
+    T.wdg_long = ms > 90u;
     hal_wdg_kick();
+}
+/* seam v1.2 (OI-FW-32, M2): HardFault record of the previous run, delivered once after boot. The twin has no
+ * HardFault; a record can be planted with the world key "faultrec <pc> <cfsr>" (vocabulary `reset`
+ * cause "hardfault"). */
+bool hal_fault_record(uint32_t *pc, uint32_t *cfsr)
+{
+    if (!T.fault_rec_valid) return false;
+    T.fault_rec_valid = false;
+    if (pc) *pc = T.fault_rec_pc;
+    if (cfsr) *cfsr = T.fault_rec_cfsr;
+    return true;
 }
 uint8_t hal_reset_cause(void) { return T.reset_cause; }
 void hal_reset(void) { tw_out("L %llu hal_reset", (unsigned long long)T.now); tw_reset("software"); }

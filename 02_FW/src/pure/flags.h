@@ -17,12 +17,12 @@ typedef struct {
     bool valid, moving, homed, enabled, estop, halt, fault, overrun;
     /* DATA status */
     bool paused, limit_start, limit_end, load_limit, afe_stale, afe_saturated, afe_settling,
-         afe_rate_mismatch, link_wdg, stop_btn, pause_btn, alm, pend, pos_uncertain, no_afe_data,
+         afe_rate_mismatch, link_wdg, pause_btn, alm, pend, pos_uncertain, no_afe_data,
          drv_pwr;
 } flags_in_t;
 
 typedef struct {
-    bool estop_open, limit_start, limit_end, stop_btn, pause_btn, alm, pend, drv_pwr, ena_disabled,
+    bool estop_open, limit_start, limit_end, pause_btn, alm, pend, drv_pwr, ena_disabled,
          rate_80;
 } io_in_t;
 

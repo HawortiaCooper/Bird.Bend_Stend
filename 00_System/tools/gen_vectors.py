@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Single generator of the shared protocol vectors (ICD_protocol.md v0.4.1 §12).
+"""Single generator of the shared protocol vectors (ICD_protocol.md v0.5 §12).
 
 Implements: IF-003, IF-004, IF-006, IF-010, FW-CMD-001, FW-CFG-003, SAF-FW-020
 Writes  00_System/tools/vectors/protocol_vectors.json   (CRC, frames, parser streams)
         00_System/tools/vectors/check_vectors.json      (state + command -> verdict)
         00_System/tools/vectors/units_vectors.json      (um <-> steps, step-rate speed cap; ICD §0.1)
+        00_System/tools/vectors/motion_vectors.json     (step periods: ramps, stops, jog changes; ref_motion.py)
 
 Usage:
     python gen_vectors.py            # (re)generate both files
@@ -29,12 +30,14 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 import gen_params  # noqa: E402
 import ref_cmdcheck as cc  # noqa: E402
+import ref_motion as rm  # noqa: E402
 import ref_codec as rc  # noqa: E402
 
 VEC_DIR = TOOLS_DIR / "vectors"
 PROTO_PATH = VEC_DIR / "protocol_vectors.json"
 CHECK_PATH = VEC_DIR / "check_vectors.json"
 UNITS_PATH = VEC_DIR / "units_vectors.json"
+MOTION_PATH = VEC_DIR / "motion_vectors.json"
 R = rc.RESP_BIT
 
 
@@ -111,14 +114,14 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
     req_resp("GET_STATUS", 0x03, {}, {**ok, "board_status": board}, "GET_STATUS request",
              "GET_STATUS response (86-byte STATUS)")
     board2 = dict(board, flags=["ESTOP", "HALT", "FAULT"], motion_state="NOT_ENABLED",
-                  status=["PAUSED", "LIMIT_START", "LOAD_LIMIT", "STOP_BTN"], pause_src="BUTTON",
-                  faults=["LOAD_LIMIT", "K1_WELDED"], io=["ESTOP_OPEN", "STOP_BTN", "ENA_DISABLED",
+                  status=["PAUSED", "LIMIT_START", "LOAD_LIMIT"], pause_src="BUTTON",
+                  faults=["LOAD_LIMIT", "K1_WELDED"], io=["ESTOP_OPEN", "ENA_DISABLED",
                                                           "ALM", "DRV_PWR"],
-                  home_phase="NONE", halt_src="BUTTON", reset_cause="IWDG",
+                  home_phase="NONE", halt_src="PC", reset_cause="IWDG",
                   sys_flags=["CLK_FALLBACK", "NVM_DEFAULTED"], afe_raw_last=7151200,
                   idle_disable_left_s=0xFFFF, pos_um=-1500, target_um=-1500, pos_steps=-1200)
     add("get_status_resp_latched", C["GET_STATUS"] | R, 0x04, {**ok, "board_status": board2},
-        "STATUS with E-stop, HALT (button), PAUSED (button), faults LOAD_LIMIT + K1_WELDED, IWDG reset")
+        "STATUS with E-stop, HALT (PC), PAUSED (button), faults LOAD_LIMIT + K1_WELDED, IWDG reset")
     board3 = dict(board, flags=["ENABLED"], status=["PAUSED", "PEND", "DRV_PWR"], pause_src="PC")
     add("get_status_resp_paused_pc", C["GET_STATUS"] | R, 0x06, {**ok, "board_status": board3},
         "STATUS PAUSED by the PC PAUSE command (pause_src PC, D-29a / GF-01), not homed")
@@ -303,14 +306,14 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
     ev_args = {
         "BOOT": (rc.RESET_CAUSE.index("POWER_ON"), 0), "STOPPED": (rc.STOP_CAUSE["LIMIT_END"], 289_950, 231_960),
         "MOVE_DONE": (rc.MOVE_DONE_REASON.index("TARGET"), 110_000, 88_000),
-        "ESTOP_SET": (0, 104_375, 83_500), "ESTOP_CLEARED": (0, 0), "HALT_SET": (rc.HALT_SRC.index("BUTTON"), 0),
+        "ESTOP_SET": (0, 104_375, 83_500), "ESTOP_CLEARED": (0, 0), "HALT_SET": (rc.HALT_SRC.index("PC"), 0),
         "HALT_CLEARED": (0, 0), "PAUSED": (rc.HALT_SRC.index("PC"), 0), "PAUSE_CLEARED": (2, 0),
         "RESUME_REQUEST": (0, 0), "FAULT_SET": (rc.FAULTS.index("LOAD_LIMIT"), 7_022_272, 80_000),
         "FAULT_CLEARED": (rc.names_to_bits(["LOAD_LIMIT"], rc.FAULTS), 0), "LIMIT_SET": (1, 290_400, 232_320),
         "LIMIT_CLEARED": (1, 0), "LINK_WDG": (0, 0), "LINK_RESTORED": (0, 0),
         "VALID_CLEARED": (rc.STOP_CAUSE["PC_STOP"], 0), "HOMED": (0, 12),
         "HOME_FAILED": (1, -360_000, -288_000), "DRIVER_ENABLED": (0, 0), "DRIVER_DISABLED": (2, 0),
-        "STOP_BUTTON": (1, 0), "PAUSE_BUTTON": (1, 0), "ALM_CHANGED": (1, 0), "AFE_REINIT": (3, 0),
+        "PAUSE_BUTTON": (1, 0), "ALM_CHANGED": (1, 0), "AFE_REINIT": (3, 0),
         "AFE_RATE_MISMATCH": (1, 100), "AFE_STALE": (1, 0), "PARAMS_SAVED": (0, 38),
         "PARAMS_LOADED": (0, 0), "PARAMS_DEFAULTED": (1, 0), "NVM_ERROR": (2, 0),
         "CLK_FALLBACK": (0, 0), "DRIVER_POWER": (0, 0), "NOT_SETTLED": (0, 200),
@@ -593,8 +596,6 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         "HALT_CLEAR", srs=P)
     add("move_after_resume", "MOVE_ABS after HALT_CLEAR (PAUSED cleared) -> OK (Resume step 2)", {},
         "MOVE_ABS", mv, srs=P)
-    add("halt_clear_paused_refused", "HALT_CLEAR refused (STOP button held) -> PAUSED kept",
-        dict(pz, halt_latched=True, stop_btn_active=True), "HALT_CLEAR", srs=P)
     for c in ("STOP", "HALT", "ESTOP_CLEAR", "FAULT_CLEAR", "ENABLE", "DISABLE", "PING", "SAVE_PARAMS"):
         add(f"{c.lower()}_paused", f"{c} while PAUSED -> PAUSED kept", pz, c,
             {"mode": 1} if c == "STOP" else None, srs=P)
@@ -606,9 +607,8 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
     add("resume_not_paused", "RESUME with nothing paused -> OK, no-op, no event", {}, "RESUME", srs=RS)
     add("resume_halt", "RESUME while PAUSED and HALT latched (PC) -> E_STATE HALT, both stay", dict(pz,
         halt_latched=True), "RESUME", srs=RS)
-    add("resume_halt_button_race", "STOP button latched HALT ms before the RESUME frame, button already "
-        "released >= io.release_ms -> E_STATE HALT, HALT and PAUSED stay (F-B-30 closed)",
-        dict(pz, halt_latched=True, stop_btn_released_ms=500), "RESUME", srs=RS)
+    add("resume_halt_key_race", "Pause/Break key (HALT) latched ms before the RESUME frame -> E_STATE HALT, "
+        "HALT and PAUSED stay (F-B-30 closed)", dict(pz, halt_latched=True), "RESUME", srs=RS)
     add("resume_estop_latched", "RESUME while PAUSED and ESTOP latched (input closed) -> E_STATE ESTOP",
         dict(pz, motion_state="NOT_ENABLED", homed=False, estop_latched=True), "RESUME", srs=RS)
     add("resume_estop_input_open", "RESUME while the E-stop sense input is open -> E_STATE ESTOP",
@@ -713,11 +713,11 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         "ESTOP_CLEAR", srs=("SAF-FW-006",))
     add("estop_clear_none", "ESTOP_CLEAR while nothing latched -> OK (idempotent)", {}, "ESTOP_CLEAR")
     hb = {"halt_latched": True}
-    add("halt_clear_pressed", "HALT_CLEAR while STOP button pressed -> E_CAUSE_ACTIVE 0xFFFF",
-        dict(hb, stop_btn_active=True), "HALT_CLEAR", srs=("SAF-FW-022",))
-    add("halt_clear_10ms", "HALT_CLEAR 10 ms after button release -> E_CAUSE_ACTIVE 10",
-        dict(hb, stop_btn_released_ms=10), "HALT_CLEAR", srs=("SAF-FW-022",))
-    add("halt_clear_ok", "HALT_CLEAR after release >= io.release_ms", hb, "HALT_CLEAR", srs=("SAF-FW-022",))
+    add("halt_clear_ok", "HALT_CLEAR with HALT latched -> OK (never refused since v0.5, D-36)", hb,
+        "HALT_CLEAR", srs=("FW-MOT-007", "D-36"))
+    add("estop_clear_input_open_unlatched", "ESTOP_CLEAR with the sense input open but the latch not (yet) set "
+        "(not reachable in the FW) -> E_CAUSE_ACTIVE 0xFFFF (open input = ESTOP, §4.3)",
+        {"estop_input_open": True}, "ESTOP_CLEAR", srs=("SAF-FW-006",))
     add("fault_clear_load", "FAULT_CLEAR of LOAD_LIMIT with load still beyond -> OK (unload allowed)",
         {"faults": ["LOAD_LIMIT"], "fault_causes": ["LOAD_LIMIT"], "raw": 7100000}, "FAULT_CLEAR",
         srs=("SAF-FW-011",))
@@ -849,6 +849,8 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
 
     names = [v["name"] for v in vecs]
     assert len(names) == len(set(names)), "duplicate check-vector names"
+    # ICD v0.5: the retired STOP-button keys are never set (D-36); keys unchanged -> state_schema stays 2
+    assert not any({"stop_btn_active", "stop_btn_released_ms"} & set(v["state"]) for v in vecs)
     # every vector state is a valid configuration (all hard rules hold for its parameter overrides)
     for v in vecs:
         st0 = cc.FwState.from_dict(v["state"])
@@ -888,16 +890,21 @@ def round_half_away(x: float) -> int:
     return int(Decimal(x).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
+def sat_i32(x: int) -> int:
+    """ICD §0.1 (OBS-M1-05): results saturate to the int32 range."""
+    return max(-2**31, min(2**31 - 1, x))
+
+
 def um_to_steps(um: int, spm32: float) -> int:
-    return round_half_away(float(um) * spm32 / 1000.0)
+    return sat_i32(round_half_away(float(um) * spm32 / 1000.0))
 
 
 def steps_to_um(steps: int, spm32: float) -> int:
-    return round_half_away(float(steps) * 1000.0 / spm32)
+    return sat_i32(round_half_away(float(steps) * 1000.0 / spm32))
 
 
 def rate_cap_um_s(rate_hz: int, spm32: float) -> int:
-    return math.floor(float(rate_hz) * 1000.0 / spm32)
+    return max(0, min(2**32 - 1, math.floor(float(rate_hz) * 1000.0 / spm32)))
 
 
 def make_units(pd: gen_params.Dictionary) -> dict[str, Any]:
@@ -919,6 +926,19 @@ def make_units(pd: gen_params.Dictionary) -> dict[str, Any]:
         for r in rates:
             cases_cap.append({"spm_f32_hex": bits, "spm": spm32, "max_step_rate_hz": r,
                               "rate_cap_um_s": rate_cap_um_s(r, spm32)})
+    # int32 saturation (ICD §0.1, OBS-M1-05): not reachable with the parameter ranges, defined anyway
+    sat_u2s = [(100000.0, 2147483647), (100000.0, -2147483648), (4000.0, 600000000)]
+    sat_s2u = [(100.0, 2147483647), (100.0, -2147483648), (160.0, 400000000)]
+    for spm, um in sat_u2s:
+        spm32 = _f32(spm)
+        bits = f"0x{struct.unpack('<I', struct.pack('<f', spm32))[0]:08X}"
+        cases_u2s.append({"spm_f32_hex": bits, "spm": spm32, "um": um, "steps": um_to_steps(um, spm32),
+                          "saturated": True})
+    for spm, st in sat_s2u:
+        spm32 = _f32(spm)
+        bits = f"0x{struct.unpack('<I', struct.pack('<f', spm32))[0]:08X}"
+        cases_s2u.append({"spm_f32_hex": bits, "spm": spm32, "steps": st, "um": steps_to_um(st, spm32),
+                          "saturated": True})
     ties = [c for c in cases_u2s if (abs(c["um"] * c["spm"] / 1000.0) % 1) == 0.5]
     ties += [c for c in cases_s2u if (abs(c["steps"] * 1000.0 / c["spm"]) % 1) == 0.5]
     assert len(ties) >= 4, "tie cases must be present"
@@ -930,6 +950,8 @@ def make_units(pd: gen_params.Dictionary) -> dict[str, Any]:
                      "um_to_steps(um) = round(um * spm / 1000.0); steps_to_um(steps) = "
                      "round(steps * 1000.0 / spm); rate_cap_um_s = floor(max_step_rate_hz * 1000.0 / spm) "
                      "(v_limit = min(v_max_*, rate_cap), ICD §5.4)",
+                     "results saturate: um/steps to [-2^31, 2^31-1], rate cap to [0, 2^32-1] "
+                     "(cases with saturated = true; OBS-M1-05)",
                      "an implementation in other arithmetic (float, fixed point) MUST reproduce every "
                      "value exactly; tie cases (x.5) are included"],
         "icd_version": rc.ICD_VERSION, "param_dict_hash": f"0x{pd.hash:08X}",
@@ -937,6 +959,116 @@ def make_units(pd: gen_params.Dictionary) -> dict[str, Any]:
         "motion_vectors": "planned for M2 as vectors/motion_vectors.json (R4 §12 TV-M: ramp periods, "
                           "planner; FW float32 tolerance ±1 tick per period, sum ±N/1000 ticks)",
     }
+
+
+# ======================================================================================
+# motion vectors (R4 §1.5 / §12 TV-M, ICD §6.5; OI-FW-20 M2)
+# ======================================================================================
+def make_motion(pd: gen_params.Dictionary) -> dict[str, Any]:
+    f = rm.F_TICK
+    cases: list[dict[str, Any]] = []
+
+    def case(name: str, desc: str, spm: float, v: int, a: int, d: int, n: int, periods: list[int],
+             a_stop: int | None = None, events: list[dict[str, Any]] | None = None, srs=()) -> None:
+        spm32 = _f32(spm)
+        cases.append({
+            "name": name, "description": desc, "srs": list(srs),
+            "f_tick": int(f), "steps_per_mm": spm32, "v_um_s": v, "a_um_s2": a, "d_um_s2": d,
+            "a_stop_um_s2": a_stop, "n_steps": n, "events": events or [],
+            "derived": {"v_steps_s": rm.steps_per_s(v, spm32), "a_steps_s2": rm.steps_per_s(a, spm32),
+                        "d_steps_s2": rm.steps_per_s(d, spm32),
+                        "a_stop_steps_s2": None if a_stop is None else rm.steps_per_s(a_stop, spm32)},
+            "n_periods": len(periods), "sum_ticks": sum(periods),
+            "tolerance": {"period_ticks": 1, "sum_ticks": max(1, math.ceil(len(periods) / 1000))},
+            "periods": periods})
+
+    tvm = dict(spm=640.0, v=20000, a=100000, d=100000)          # R4 §12 TV-M
+
+    def sv(c: float) -> float:
+        return rm.steps_per_s(c, 640.0)
+
+    def s8(c: float) -> float:
+        return rm.steps_per_s(c, 800.0)
+
+    case("tvm_trapezoid", "R4 TV-M: 64 000 steps (100 mm) trapezoid, 5.2 s = 468 000 000 ticks", n=64000,
+         periods=rm.ramp_move(64000, f, sv(20000), sv(100000), sv(100000)), srs=("FW-MOT-003",), **tvm)
+    case("tvm_triangle", "R4 TV-M: 1 000 steps triangle (v not reached)", n=1000,
+         periods=rm.ramp_move(1000, f, sv(20000), sv(100000), sv(100000)), srs=("FW-MOT-003",), **tvm)
+    case("tvm_triangle_asym", "R4 TV-M: 1 000 steps, decel = 2 x accel (asymmetric triangle)", n=1000,
+         periods=rm.ramp_move(1000, f, sv(20000), sv(100000), sv(200000)), srs=("FW-MOT-003",),
+         spm=640.0, v=20000, a=100000, d=200000)
+    case("default_move_10mm", "10 mm at the defaults: 800 steps/mm, 30 mm/s, 100 mm/s^2", n=8000,
+         periods=rm.ramp_move(8000, f, s8(30000), s8(100000), s8(100000)), srs=("FW-MOT-003",),
+         spm=800.0, v=30000, a=100000, d=100000)
+    case("slow_move_1mm", "1 mm at 0.5 mm/s (cruise period 225 000 ticks = 2.5 ms > 2 ms)", n=800,
+         periods=rm.ramp_move(800, f, s8(500), s8(100000), s8(100000)), srs=("FW-MOT-003", "SYS-004"),
+         spm=800.0, v=500, a=100000, d=100000)
+    case("tvm_stop_in_cruise", "TV-M move, controlled stop requested after step 30 000 (cruise): "
+         "r0 = ceil(v^2/2a_stop) = 1 280 more steps", n=64000, a_stop=100000,
+         events=[{"after_step": 30000, "event": "controlled_stop"}],
+         periods=rm.move_with_stop(64000, f, sv(20000), sv(100000), sv(100000), 30000, sv(100000)),
+         srs=("SAF-FW-003",), **tvm)
+    case("default_stop_in_accel", "default 10 mm move, controlled stop at a_stop 1 m/s^2 requested after step "
+         "500 (still accelerating)", n=8000, a_stop=1000000,
+         events=[{"after_step": 500, "event": "controlled_stop"}],
+         periods=rm.move_with_stop(8000, f, s8(30000), s8(100000), s8(100000), 500, s8(1000000)),
+         srs=("SAF-FW-003",), spm=800.0, v=30000, a=100000, d=100000)
+    case("default_stop_near_end", "controlled stop after step 7 990 of 8 000: r = min(r_move = 10, r0)", n=8000,
+         a_stop=1000000, events=[{"after_step": 7990, "event": "controlled_stop"}],
+         periods=rm.move_with_stop(8000, f, s8(30000), s8(100000), s8(100000), 7990, s8(1000000)),
+         srs=("SAF-FW-003",), spm=800.0, v=30000, a=100000, d=100000)
+    segs = [(s8(2000), 2000), (s8(5000), 3000), (s8(1000), 2000), (0.0, 0)]
+    case("jog_speed_changes", "JOG at 800 steps/mm: 2 mm/s for 2 000 steps, on the fly to 5 mm/s (3 000 steps), "
+         "down to 1 mm/s (2 000 steps), then JOG 0 (a_stop 1 m/s^2)", n=0, a_stop=1000000,
+         events=[{"after_step": 0, "event": "jog", "v_um_s": 2000},
+                 {"after_step": 2000, "event": "jog", "v_um_s": 5000},
+                 {"after_step": 5000, "event": "jog", "v_um_s": 1000},
+                 {"after_step": 7000, "event": "jog", "v_um_s": 0}],
+         periods=rm.jog(f, s8(100000), s8(100000), s8(1000000), segs),
+         srs=("FW-MOT-005", "SAF-FW-003"), spm=800.0, v=2000, a=100000, d=100000)
+
+    paths = []
+    for p_ticks in (90_000, 90_001, 179_999, 180_000, 180_001, 225_000, 1_800_000):
+        for spm, a_stop in ((800.0, 1_000_000), (100.0, 10_000), (160.0, 1_000_000), (100.0, 1_000_000)):
+            path, d_steps = rm.ctrl_stop_path(p_ticks, f, rm.steps_per_s(a_stop, _f32(spm)))
+            paths.append({"p_ticks": p_ticks, "steps_per_mm": _f32(spm), "a_stop_um_s2": a_stop,
+                          "d_steps": d_steps, "path": path})
+    plans = []
+    for n, v, a, d in ((64000, 12800.0, 64000.0, 64000.0), (1000, 12800.0, 64000.0, 128000.0),
+                       (8000, 24000.0, 80000.0, 80000.0)):
+        plans.append({"n_steps": n, "v_steps_s": v, "a_steps_s2": a, "d_steps_s2": d,
+                      **rm.plan_trapezoid(n, v, a, d)})
+    return {
+        "_comment": ["GENERATED by 00_System/tools/gen_vectors.py from ref_motion.py - do not edit",
+                     f"ICD_protocol.md v{rc.ICD_VERSION}; definitions: ref_motion.py docstring (R4 §1.5, ICD §6.5)",
+                     "periods = TIM2 step periods in ticks (f_tick = 90 MHz) incl. the fractional carry; the FW "
+                     "(float32) matches each period within tolerance.period_ticks and the sum within "
+                     "tolerance.sum_ticks; the SW simulator (binary64) matches exactly",
+                     "speeds/accelerations in wire units; derived = steps/s, steps/s^2 with the binary32 "
+                     "steps_per_mm (ICD §0.1)",
+                     "events.after_step = number of steps already emitted when the event takes effect",
+                     "ctrl_stop_paths: ICD §6.5 / FW_design §5.6.4 path selection (CLEAN / ISR / STRETCH)"],
+        "icd_version": rc.ICD_VERSION, "param_dict_hash": f"0x{pd.hash:08X}",
+        "cases": cases, "ctrl_stop_paths": paths, "planner": plans,
+    }
+
+
+def render_motion(obj: dict[str, Any]) -> str:
+    """JSON with the long period arrays wrapped 16 per line (reviewable diffs)."""
+    def lst(xs: list[int], ind: str) -> str:
+        if not xs:
+            return "[]"
+        rows = [", ".join(str(x) for x in xs[i:i + 16]) for i in range(0, len(xs), 16)]
+        return "[\n" + ",\n".join(ind + " " + r for r in rows) + "\n" + ind + "]"
+    head = {k: v for k, v in obj.items() if k != "cases"}
+    out = json.dumps(head, indent=1, ensure_ascii=False)[:-2] + ',\n "cases": [\n'
+    parts = []
+    for c in obj["cases"]:
+        body = {k: v for k, v in c.items() if k != "periods"}
+        t = json.dumps(body, indent=1, ensure_ascii=False)
+        t = t[:-2] + ',\n "periods": ' + lst(c["periods"], " ") + "\n}"
+        parts.append("\n".join("  " + line for line in t.splitlines()))
+    return out + ",\n".join(parts) + "\n ]\n}\n"
 
 
 def render(obj: dict[str, Any]) -> str:
@@ -949,7 +1081,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     pd = gen_params.load()
     outputs = {PROTO_PATH: render(make_protocol(pd)), CHECK_PATH: render(make_check(pd)),
-               UNITS_PATH: render(make_units(pd))}
+               UNITS_PATH: render(make_units(pd)), MOTION_PATH: render_motion(make_motion(pd))}
     stale = []
     for path, content in outputs.items():
         old = path.read_text(encoding="utf-8") if path.exists() else None
@@ -969,9 +1101,12 @@ def main(argv: list[str] | None = None) -> int:
     pv = json.loads(outputs[PROTO_PATH])
     cv = json.loads(outputs[CHECK_PATH])
     uv = json.loads(outputs[UNITS_PATH])
+    mv = json.loads(outputs[MOTION_PATH])
     print(f"protocol: {len(pv['crc16'])} crc, {len(pv['frames'])} frames, {len(pv['streams'])} streams; "
           f"check: {len(cv['vectors'])} vectors; units: {len(uv['um_to_steps'])} + "
-          f"{len(uv['steps_to_um'])} + {len(uv['rate_cap'])}; PARAM_DICT_HASH = 0x{pd.hash:08X}")
+          f"{len(uv['steps_to_um'])} + {len(uv['rate_cap'])}; motion: {len(mv['cases'])} cases "
+          f"({sum(c['n_periods'] for c in mv['cases'])} periods), {len(mv['ctrl_stop_paths'])} stop paths; "
+          f"PARAM_DICT_HASH = 0x{pd.hash:08X}")
     return 0
 
 

@@ -79,33 +79,51 @@ class SimControl:
                  bounce_ms: list[int] | None = None) -> None:
         b = self.board
         with b._lock:  # noqa: SLF001
-            b.world.estop_open = bool(open)
-            if open and drv_power_follows:          # K1 drops the driver supply k1_delay_ms later
+            self._set_with_bounce(lambda v: setattr(b.world, "estop_open", v), bool(open), bounce_ms)
+            if open and drv_power_follows:          # K1 drops the driver supply k1_delay_ms later (R5 Option A)
                 _delayed(b, k1_delay_ms, lambda: setattr(b.world, "drv_power", False))
 
-    def _a_drv_power(self, on: bool, bounce_ms: list[int] | None = None) -> None:
-        self.board.world.drv_power = bool(on)
+    def _a_drv_power(self, on: bool, bounce_ms: list[float] | None = None) -> None:
+        self._set_with_bounce(lambda v: setattr(self.board.world, "drv_power", v), bool(on), bounce_ms)
 
-    def _a_button(self, name: str, pressed: bool, bounce_ms: list[int] | None = None) -> None:
-        if name not in ("stop", "pause"):
+    def _set_with_bounce(self, setter: Callable[[bool], None], level: bool, bounce_ms: list[float] | None) -> None:
+        """Set an input now; ``bounce_ms`` = durations (ms) of the contact bounce: the level toggles back and forth
+        with these interval lengths and settles at ``level`` (vocabulary v2 ``bounce_ms``)."""
+        setter(level)
+        seq = list(bounce_ms or ())
+        t = 0.0
+        for i, dt in enumerate(seq):
+            t += float(dt)
+            cur = (not level) if i % 2 == 0 else level
+            if i == len(seq) - 1:
+                cur = level
+            _delayed(self.board, t, lambda v=cur: setter(v))
+
+    def _a_button(self, name: str, pressed: bool, bounce_ms: list[float] | None = None) -> None:
+        if name == "stop":
+            raise ValueError("button 'stop' retired (ICD v0.5, D-36: the red button is the E-stop)")
+        if name != "pause":
             raise ValueError(f"button {name!r}")
-        setattr(self.board.world, "stop_btn" if name == "stop" else "pause_btn", bool(pressed))
+        self._set_with_bounce(lambda v: setattr(self.board.world, "pause_btn", v), bool(pressed), bounce_ms)
 
     def _a_limit(self, name: str, active: bool | None = None, position_um: int | None = None,
-                 bounce_ms: list[int] | None = None) -> None:
+                 bounce_ms: list[float] | None = None) -> None:
         w = self.board.world
-        if name == "start":
-            w.limit_start_forced = active
-            if position_um is not None:
-                w.start_switch_um = int(position_um)
-        elif name == "end":
-            w.limit_end_forced = active
-            if position_um is not None:
-                w.end_switch_um = int(position_um)
-        else:
+        if name not in ("start", "end"):
             raise ValueError(f"limit {name!r}")
+        attr = "limit_start_forced" if name == "start" else "limit_end_forced"
+        if position_um is not None:
+            setattr(w, "start_switch_um" if name == "start" else "end_switch_um", int(position_um))
+        if active is None or not bounce_ms:
+            setattr(w, attr, active)
+        else:
+            self._set_with_bounce(lambda v: setattr(w, attr, v), bool(active), bounce_ms)
 
     def _a_wire(self, input: str, broken: bool) -> None:  # noqa: A002
+        if input == "stop":
+            raise ValueError("wire 'stop' retired (ICD v0.5, D-36)")
+        if input not in ("estop", "start", "end", "pause", "alm", "pend", "drv_power"):
+            raise ValueError(f"wire input {input!r}")
         w = self.board.world
         if broken:
             w.broken.add(input)
@@ -172,12 +190,7 @@ class SimControl:
         elif fault == "rx_corrupt":
             b.link_silence_until_us = now + dur         # model: corrupted bytes = lost frames
         elif fault == "step_fault":
-            with b._lock:  # noqa: SLF001
-                if b.motion is not None:
-                    b._immediate_stop(int(pg.StopCause.STEP_FAULT))  # noqa: SLF001
-                b.homed = False
-                b._fault("STEP_FAULT", b.pos_um, b.pos_steps)  # noqa: SLF001
-                b._clear_valid(int(pg.StopCause.STEP_FAULT))  # noqa: SLF001
+            b.inject_step_fault()
         else:
             raise ValueError(f"fault {fault!r}")
 
@@ -218,7 +231,9 @@ class SimControl:
         self.advance(ms)
         return {"t_us": self.board.now_us() & 0xFFFFFFFF}
 
-    def _a_reset(self, cause: str = "pin") -> None:
+    def _a_reset(self, cause: str = "pin", pc: int | None = None, cfsr: int | None = None) -> None:
+        if cause == "hardfault":
+            raise ValueError("reset cause 'hardfault': twin only")
         self.board.boot(int(RESET_CAUSES[cause]))
 
     # ---------------------------------------------------------------------------------------- query
@@ -227,11 +242,12 @@ class SimControl:
         with b._lock:  # noqa: SLF001
             if what == "world":
                 w = b.world
-                return {"x_um_true": b._x_true(), "x_um": b.x_um, "estop_open": w.estop_input_open(),  # noqa: SLF001
-                        "drv_power": w.power_present(), "limit_start": w.limit_start(b._x_true()),  # noqa: SLF001
-                        "limit_end": w.limit_end(b._x_true()), "stop": w.stop_btn, "pause": w.pause_btn,  # noqa: SLF001
+                xt = b._x_true()  # noqa: SLF001
+                return {"x_um_true": xt, "x_um": b.x_um, "estop_open": w.estop_input_open(),
+                        "drv_power": w.power_present(), "limit_start": w.limit_start(xt),
+                        "limit_end": w.limit_end(xt), "pause": w.pause_btn,
                         "alm": w.alm, "pend": w.pend, "load_n": b._force_n(),  # noqa: SLF001
-                        "raw_last": b.last_raw}
+                        "raw_last": b.last_raw, "steps": b.steps}
             if what == "pulses":
                 return {"pul_count": b.pulses, "pos_steps": b.pos_steps}
             if what == "outputs":

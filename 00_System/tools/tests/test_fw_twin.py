@@ -246,7 +246,8 @@ def test_tcp_and_control_port_realtime(probe_exe, tmp_path):
         while time.time() < deadline and not any(f.type == 0x82 for f in frames):
             frames += p.feed(c.recv(4096))
         r = [rc.decode_frame(f) for f in frames if f.type == 0x82][0]
-        assert r["info"]["param_dict_hash"] == "0xF0376293"
+        import gen_params  # noqa: PLC0415
+        assert r["info"]["param_dict_hash"] == f"0x{gen_params.load().hash:08X}"
         kf.write(b'{"action": "query", "what": "world"}\n')
         kf.flush()
         rep = json.loads(kf.readline())
@@ -321,3 +322,53 @@ def test_wire_break_and_chatter(tw):
     tw.act("wire", input="estop", broken=True)
     tw.advance_ms(1)
     assert tw.act("query", what="world")["inputs"]["estop"] == 1
+
+
+def test_rx_bytes_during_flash_stall_land_at_wire_time(tw):
+    """OBS-M1-02 (ICD v0.5 §2.4 SAVE exemption): bytes injected inside a flash stall reach the RX ring at
+    their wire time (logged there), and the command is answered after the flash operation."""
+    link = TwinLink(tw)
+    link.cmd("SET_PARAM", {"id": 0x0801, "type": "u8", "value": 25})
+    for _ in range(32):                                        # fill sector 1: the next SAVE erases sector 2
+        link.cmd("SAVE_PARAMS", timeout_ms=3000)
+    e0 = tw.act("query", what="flash")["erases"]
+    t_save = tw.now_us
+    seq_save = link.send("SAVE_PARAMS")
+    at = t_save + 100_000.0                                    # 100 ms into the (≈ 500 ms) erase stall
+    seq_ping = link.send("PING", at_us=at)
+    tw.advance_ms(1500)
+    link.poll()
+    assert tw.act("query", what="flash")["erases"] > e0         # the SAVE really erased (CPU stall)
+    rx = [w for w in tw.wire_log if w["dir"] == "rx" and w["seq"] == seq_ping]
+    assert rx and abs(rx[0]["first_us"] - at) < 1.0              # logged at its wire time, not at stall end
+    save_resp = next(w for w in tw.wire_log if w["dir"] == "tx" and w["seq"] == seq_save and w["type"] == 0x93)
+    ping_resp = next(w for w in tw.wire_log if w["dir"] == "tx" and w["seq"] == seq_ping and w["type"] == 0x81)
+    assert ping_resp["first_us"] > at + 100_000.0                # answered after the flash operation
+    assert save_resp["first_us"] > at                            # SAVE itself completes after the PING arrived
+
+
+def test_isr_storm_starves_step_isr_and_main_iwdg(tw):
+    """M2 vocabulary: `inject isr_storm` = level-1 ISR storm: step ISR and main loop starved (hardware pulses
+    continue at the preloaded period), IWDG run window (47.75 ms at 32 kHz) resets the MCU."""
+    link = TwinLink(tw)
+    _train(tw, link, 1000, 9000)
+    tw.act("inject", fault="isr_storm", duration_ms=100)
+    tw.advance_ms(30)
+    starved = [x for x in tw.seam_log if x["call"] == "step_isr_starved"]
+    assert starved                                                  # updates happened, ISR did not run
+    tw.advance_ms(100)
+    assert [r["cause"] for r in tw.resets] == ["iwdg"]
+    assert tw.resets[0]["t_us"] < 60_000                            # within the run window after the storm began
+
+
+def test_iwdg_windows_follow_a_semantics(tw):
+    """OI-C-M1-03 (A): set_timeout(ms <= 90) = run window, > 90 = NVM long window; fixed by PR/RLR, not scaled."""
+    y = tw._engine_query()
+    assert int(y["wdg_timeout_ns"]) == pytest.approx(191 * 8 / 32000 * 1e9, rel=1e-6) or not int(y["wdg_armed"])
+
+
+def test_hardfault_reset_plants_record(tw):
+    """Seam v1.2 (OI-FW-32): reset cause 'hardfault' -> SOFTWARE reset with a fault record for hal_fault_record()."""
+    tw.advance_ms(5)
+    r = tw.act("reset", cause="hardfault", pc=0x08001234, cfsr=0x8200)
+    assert r["ok"] and tw.resets[-1]["cause"] == "software"

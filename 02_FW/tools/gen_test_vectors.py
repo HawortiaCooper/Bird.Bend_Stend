@@ -4,12 +4,14 @@ Reads IN PLACE (never copied):
     00_System/tools/vectors/protocol_vectors.json   crc16, frames, streams
     00_System/tools/vectors/check_vectors.json      command-acceptance oracle (ref_cmdcheck)
     00_System/tools/vectors/units_vectors.json      µm <-> steps, speed cap (ICD §0.1)
+    00_System/tools/vectors/motion_vectors.json     ramp periods, stop paths, planner (M2, ref_motion.py)
 and writes $BUILD_DIR/vectors/vec_{crc,frames,streams,check,units,names}.h (not in the repo).
 
 Consistency gate (build error = stale or mixed combination):
   * every vectors/*.json `icd_version` == PROTO_ICD_VERSION (src/gen/proto_gen.h) and
     `param_dict_hash` == PARAM_DICT_HASH (src/gen/params_gen.h);
-  * check_vectors.json `state_schema` == 2 and no unknown state key (tools/README);
+  * check_vectors.json `state_schema` in (2, 3), no unknown state key and no retired key set
+    (tools/README; D-36: stop_btn_* never set);
   * `gen_params.py --check` and `gen_vectors.py --check` exit 0.
 
 Decoded content is translated into C initialisers with the hand-written ref_codec tables and
@@ -47,7 +49,9 @@ sys.path.insert(0, TOOLS)
 import gen_params  # noqa: E402
 import ref_codec as rc  # noqa: E402
 
-STATE_SCHEMA = 2
+STATE_SCHEMA = 2          # ICD v0.5 keeps schema 2: the stop_btn_* keys stay (F-B-25) but are never set (D-36)
+ACCEPTED_SCHEMAS = (2, 3)
+RETIRED_KEYS = ("stop_btn_active", "stop_btn_released_ms")
 STATE_KEYS = ["params", "motion_state", "enabling_left_ms", "homed", "pos_um", "estop_latched",
               "estop_input_open", "estop_closed_ms", "halt_latched", "stop_btn_active",
               "stop_btn_released_ms", "faults", "fault_causes", "limit_start", "limit_end",
@@ -375,11 +379,14 @@ def gen_streams(v):
 
 
 def gen_check(v, dic):
-    if v.get("state_schema") != STATE_SCHEMA:
-        fail(f"check_vectors.json state_schema {v.get('state_schema')} != {STATE_SCHEMA} "
+    if v.get("state_schema") not in ACCEPTED_SCHEMAS:
+        fail(f"check_vectors.json state_schema {v.get('state_schema')} not in {ACCEPTED_SCHEMAS} "
              "(update the FW replay: cmd_ctx_t / this script)")
     by_key = {p.key: p for p in dic.params}
     defaults = v["state_defaults"]
+    for x in v["vectors"]:
+        if set(RETIRED_KEYS) & set(x["state"]):
+            fail(f"check vector {x['name']}: retired state key set (state_schema {STATE_SCHEMA})")
     for k in list(defaults) + [k for x in v["vectors"] for k in x["state"]]:
         if k not in STATE_KEYS:
             fail(f"check_vectors.json: unknown state key {k!r} (state_schema {STATE_SCHEMA})")
@@ -387,7 +394,7 @@ def gen_check(v, dic):
            "typedef struct { const char *name;",
            "    uint8_t motion_state; uint16_t enabling_left_ms; bool homed; int32_t pos_um;",
            "    bool estop_latched, estop_input_open; uint32_t estop_closed_ms;",
-           "    bool halt_latched, stop_btn_active; uint32_t stop_btn_released_ms;",
+           "    bool halt_latched;",
            "    uint16_t faults, fault_causes; bool limit_start, limit_end, afe_stale, afe_saturated;",
            "    int32_t raw; bool drv_power, alm_active, nvm_record_valid, paused;",
            "    uint8_t n_par; const vec_pov_t *par;",
@@ -420,7 +427,7 @@ def gen_check(v, dic):
             f"    {{ {cstr(x['name'])}, {rc.MOTION_STATE.index(st['motion_state'])}u, "
             f"{st['enabling_left_ms']}u, {cbool(st['homed'])}, {i32(st['pos_um'])}, "
             f"{cbool(st['estop_latched'])}, {cbool(st['estop_input_open'])}, {st['estop_closed_ms']}u, "
-            f"{cbool(st['halt_latched'])}, {cbool(st['stop_btn_active'])}, {st['stop_btn_released_ms']}u, "
+            f"{cbool(st['halt_latched'])}, "
             f"0x{bits(st['faults'], rc.FAULTS):04X}u, 0x{bits(st['fault_causes'], rc.FAULTS):04X}u, "
             f"{cbool(st['limit_start'])}, {cbool(st['limit_end'])}, {cbool(st['afe_stale'])}, "
             f"{cbool(st['afe_saturated'])}, {i32(st['raw'])}, {cbool(st['drv_power'])}, "
@@ -454,6 +461,48 @@ def gen_units(v):
         out.append(f"    {{ 0x{f32hex(x['spm_f32_hex']):08X}u, {x['max_step_rate_hz']}u, {x['rate_cap_um_s']}u }},")
     out.append("};")
     out.append(f"#define VEC_CAP_N {len(v['rate_cap'])}u")
+    return out
+
+
+def gen_motion(v):
+    """motion_vectors.json (ref_motion.py oracle, M2): ramp cases, stop paths, planner."""
+    kinds = {"controlled_stop": 0, "jog": 1}
+    paths = {"ISR": 0, "CLEAN": 1, "STRETCH": 2}
+    out = ["typedef struct { uint32_t after; int32_t v_um_s; uint8_t kind; } vec_mev_t;",
+           "typedef struct { const char *name; float spm; uint32_t f_tick, v, a, d, a_stop, n_steps;",
+           "    uint8_t n_ev; const vec_mev_t *ev; uint32_t n_periods; const uint32_t *periods;",
+           "    uint64_t sum; uint32_t tol_p, tol_sum; } vec_motion_t;",
+           "typedef struct { uint32_t p_ticks; float spm; uint32_t a_stop; double d_steps; uint8_t path; } vec_spath_t;",
+           "typedef struct { uint32_t n; double v, a, d; bool tri; uint32_t n_acc, n_cruise, n_dec;",
+           "    double v_peak, t; } vec_plan_t;"]
+    for k, c in enumerate(v["cases"]):
+        out.append(f"static const uint32_t VMP_{k}[] = {{" + ",".join(f"{p}u" for p in c["periods"]) + "};")
+        evs = c["events"]
+        if evs:
+            out.append(f"static const vec_mev_t VME_{k}[] = {{" + ",".join(
+                f"{{{e['after_step']}u, {int(e.get('v_um_s', 0))}, {kinds[e['event']]}u}}" for e in evs) + "};")
+    out.append("static const vec_motion_t VEC_MOTION[] = {")
+    for k, c in enumerate(v["cases"]):
+        evs = c["events"]
+        out.append(f"    {{ {cstr(c['name'])}, {float(c['steps_per_mm'])!r}f, {c['f_tick']}u, {c['v_um_s']}u, "
+                   f"{c['a_um_s2']}u, {c['d_um_s2']}u, {c['a_stop_um_s2'] or 0}u, {c['n_steps']}u, "
+                   f"{len(evs)}u, {('VME_' + str(k)) if evs else '0'}, {c['n_periods']}u, VMP_{k}, "
+                   f"{c['sum_ticks']}ull, {c['tolerance']['period_ticks']}u, {c['tolerance']['sum_ticks']}u }},")
+    out.append("};")
+    out.append(f"#define VEC_MOTION_N {len(v['cases'])}u")
+    out.append("static const vec_spath_t VEC_SPATH[] = {")
+    for x in v["ctrl_stop_paths"]:
+        out.append(f"    {{ {x['p_ticks']}u, {float(x['steps_per_mm'])!r}f, {x['a_stop_um_s2']}u, "
+                   f"{float(x['d_steps'])!r}, {paths[x['path']]}u }},")
+    out.append("};")
+    out.append(f"#define VEC_SPATH_N {len(v['ctrl_stop_paths'])}u")
+    out.append("static const vec_plan_t VEC_PLAN[] = {")
+    for x in v["planner"]:
+        out.append(f"    {{ {x['n_steps']}u, {float(x['v_steps_s'])!r}, {float(x['a_steps_s2'])!r}, "
+                   f"{float(x['d_steps_s2'])!r}, {cbool(x['kind'] == 'tri')}, {x['n_acc']}u, {x['n_cruise']}u, "
+                   f"{x['n_dec']}u, {float(x['v_peak'])!r}, {float(x['t'])!r} }},")
+    out.append("};")
+    out.append(f"#define VEC_PLAN_N {len(v['planner'])}u")
     return out
 
 
@@ -498,7 +547,7 @@ def gen_names():
 def main():
     jsons = {}
     raw = b""
-    for name in ("protocol_vectors", "check_vectors", "units_vectors"):
+    for name in ("protocol_vectors", "check_vectors", "units_vectors", "motion_vectors"):
         path = os.path.join(VEC, name + ".json")
         b = open(path, "rb").read()
         raw += b
@@ -513,10 +562,12 @@ def main():
     write("vec_check.h", gen_check(jsons["check_vectors"], dic), sha)
     write("vec_units.h", gen_units(jsons["units_vectors"]), sha)
     write("vec_names.h", gen_names(), sha)
+    write("vec_motion.h", gen_motion(jsons["motion_vectors"]), sha)
     print(f"gen_test_vectors: ICD {icd}, hash 0x{h:08X}: {len(pv['crc16'])} crc, {len(pv['frames'])} "
           f"frames, {len(pv['streams'])} streams, {len(jsons['check_vectors']['vectors'])} check, "
           f"{len(jsons['units_vectors']['um_to_steps'])}+{len(jsons['units_vectors']['steps_to_um'])}+"
-          f"{len(jsons['units_vectors']['rate_cap'])} units -> {OUT_DIR}")
+          f"{len(jsons['units_vectors']['rate_cap'])} units, {len(jsons['motion_vectors']['cases'])} motion "
+          f"cases -> {OUT_DIR}")
 
 
 main()

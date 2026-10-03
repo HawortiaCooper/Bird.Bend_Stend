@@ -6,9 +6,9 @@ Code (`Implements:`) and test (`Verifies:`) tags are added from P2 on.
 
 ## Summary
 
-- Requirements: **172**
+- Requirements: **173**
 - Without any design reference: **0** 
-- Without a test case: **0** 
+- Without a test case: **1** SW-RT-006
 - Distinct test-case IDs: FW 129, SW 167
 
 ## Matrix
@@ -24,7 +24,7 @@ Code (`Implements:`) and test (`Verifies:`) tags are added from P2 on.
 | SYS-007 | M1 | Must | 0 | 0 | 0 | 0 | 2 | 1 | designed + planned |
 | SYS-008 | M1 | Must | 0 | 4 | 8 | 8 | 0 | 3 | designed + planned |
 | SYS-009 | M2 | Must | 1 | 1 | 0 | 0 | 7 | 1 | designed + planned |
-| SYS-010 | M1 | Must | 0 | 3 | 3 | 8 | 0 | 1 | designed + planned |
+| SYS-010 | M1 | Must | 0 | 3 | 4 | 8 | 0 | 1 | designed + planned |
 | SYS-011 | M2 | Must | 0 | 4 | 0 | 0 | 7 | 1 | designed + planned |
 | SAF-FW-001 | M2 | Must | 10 | 10 | 1 | 0 | 0 | 1 | designed + planned |
 | SAF-FW-002 | M2 | Must | 8 | 14 | 0 | 0 | 3 | 3 | designed + planned |
@@ -47,7 +47,7 @@ Code (`Implements:`) and test (`Verifies:`) tags are added from P2 on.
 | SAF-FW-019 | M2 | Must | 3 | 7 | 0 | 0 | 2 | 2 | designed + planned |
 | SAF-FW-020 | M2 | Must | 8 | 6 | 0 | 0 | 0 | 3 | designed + planned |
 | SAF-FW-021 | M2 | Must | 7 | 5 | 1 | 3 | 0 | 1 | designed + planned |
-| SAF-FW-022 | M2 | Must | 5 | 7 | 0 | 0 | 2 | 1 | designed + planned |
+| SAF-FW-022 | — | — | 6 | 7 | 0 | 0 | 2 | 1 | designed + planned |
 | SAF-FW-023 | M2 | Must | 11 | 6 | 0 | 1 | 1 | 3 | designed + planned |
 | SAF-FW-024 | M2 | Must | 9 | 16 | 0 | 1 | 5 | 2 | designed + planned |
 | SAF-FW-025 | M2 | Must | 2 | 11 | 0 | 2 | 3 | 1 | designed + planned |
@@ -80,7 +80,7 @@ Code (`Implements:`) and test (`Verifies:`) tags are added from P2 on.
 | FW-HOM-004 | M2 | Must | 0 | 7 | 0 | 2 | 1 | 1 | designed + planned |
 | FW-SW-001 | M2 | Must | 0 | 8 | 0 | 0 | 3 | 1 | designed + planned |
 | FW-SW-002 | M2 | Must | 0 | 5 | 0 | 0 | 1 | 1 | designed + planned |
-| FW-SW-003 | M2 | Must | 0 | 6 | 0 | 2 | 1 | 1 | designed + planned |
+| FW-SW-003 | M2 | Must | 1 | 6 | 0 | 2 | 1 | 1 | designed + planned |
 | FW-SW-004 | M2 | Must | 1 | 5 | 0 | 2 | 2 | 1 | designed + planned |
 | FW-SW-005 | M2 | Must | 0 | 12 | 0 | 2 | 3 | 1 | designed + planned |
 | FW-CFG-001 | M1 | Must | 8 | 7 | 0 | 0 | 0 | 1 | designed + planned |
@@ -114,10 +114,10 @@ Code (`Implements:`) and test (`Verifies:`) tags are added from P2 on.
 | IF-005 | M1 | Must | 5 | 3 | 6 | 0 | 0 | 4 | designed + planned |
 | IF-006 | M1 | Must | 3 | 5 | 8 | 0 | 0 | 1 | designed + planned |
 | IF-007 | M1 | Must | 3 | 3 | 6 | 0 | 0 | 1 | designed + planned |
-| IF-008 | M1 | Must | 4 | 2 | 7 | 11 | 0 | 2 | designed + planned |
+| IF-008 | M1 | Must | 4 | 2 | 8 | 11 | 0 | 2 | designed + planned |
 | IF-009 | M1 | Must | 3 | 2 | 2 | 0 | 0 | 1 | designed + planned |
 | IF-010 | M1 | Must | 3 | 2 | 3 | 0 | 0 | 1 | designed + planned |
-| IF-011 | M1 | Must | 4 | 4 | 9 | 5 | 0 | 2 | designed + planned |
+| IF-011 | M1 | Must | 5 | 4 | 10 | 5 | 0 | 2 | designed + planned |
 | IF-012 | M1 | Must | 6 | 1 | 3 | 1 | 0 | 1 | designed + planned |
 | SW-PLT-001 | M1 | Must | 0 | 0 | 8 | 5 | 0 | 1 | designed + planned |
 | SW-PLT-002 | M1 | Must | 0 | 0 | 7 | 5 | 0 | 2 | designed + planned |
@@ -132,18 +132,19 @@ Code (`Implements:`) and test (`Verifies:`) tags are added from P2 on.
 | SW-LIM-004 | M3 | Must | 0 | 0 | 11 | 18 | 0 | 3 | designed + planned |
 | SW-META-001 | M3 | Must | 0 | 0 | 3 | 3 | 0 | 1 | designed + planned |
 | SW-META-002 | M3 | Must | 0 | 0 | 4 | 3 | 0 | 1 | designed + planned |
-| SW-RT-001 | M3 | Must | 0 | 0 | 2 | 13 | 0 | 2 | designed + planned |
+| SW-RT-001 | M3 | Must | 0 | 0 | 2 | 15 | 0 | 2 | designed + planned |
 | SW-RT-002 | M3 | Must | 0 | 0 | 4 | 7 | 0 | 1 | designed + planned |
-| SW-RT-003 | M3 | Must | 0 | 0 | 3 | 7 | 0 | 1 | designed + planned |
-| SW-RT-004 | M3 | Must | 0 | 0 | 4 | 4 | 0 | 2 | designed + planned |
+| SW-RT-003 | M3 | Must | 0 | 0 | 3 | 9 | 0 | 1 | designed + planned |
+| SW-RT-004 | M3 | Must | 0 | 0 | 4 | 5 | 0 | 2 | designed + planned |
 | SW-RT-005 | M3 | Should | 0 | 0 | 2 | 6 | 0 | 1 | designed + planned |
+| SW-RT-006 | M3 | Must | 0 | 0 | 0 | 15 | 0 | 0 | NO TC |
 | SW-MAN-001 | M3 | Must | 0 | 0 | 4 | 7 | 0 | 1 | designed + planned |
 | SW-MAN-002 | M3 | Must | 0 | 0 | 6 | 6 | 0 | 1 | designed + planned |
 | SW-MAN-003 | M3 | Must | 0 | 0 | 7 | 8 | 0 | 2 | designed + planned |
 | SW-MAN-004 | M3 | Must | 0 | 0 | 3 | 4 | 0 | 2 | designed + planned |
 | SW-MAN-005 | M3 | Must | 0 | 0 | 2 | 7 | 0 | 1 | designed + planned |
 | SW-MAN-006 | M3 | Must | 0 | 0 | 3 | 9 | 0 | 1 | designed + planned |
-| SW-STOP-001 | M3 | Must | 1 | 0 | 6 | 18 | 0 | 3 | designed + planned |
+| SW-STOP-001 | M3 | Must | 1 | 0 | 6 | 19 | 0 | 3 | designed + planned |
 | SW-STOP-002 | M3 | Must | 2 | 0 | 4 | 8 | 0 | 3 | designed + planned |
 | SW-STOP-003 | M3 | Must | 1 | 0 | 7 | 10 | 0 | 2 | designed + planned |
 | SW-STOP-004 | M4 | Must | 2 | 0 | 8 | 16 | 0 | 13 | designed + planned |
@@ -179,11 +180,11 @@ Code (`Implements:`) and test (`Verifies:`) tags are added from P2 on.
 | SW-REP-002 | M4 | Must | 1 | 0 | 4 | 4 | 0 | 2 | designed + planned |
 | SW-REP-003 | M4 | Should | 0 | 0 | 3 | 4 | 0 | 1 | designed + planned |
 | SW-REP-004 | M4 | Should | 0 | 0 | 3 | 6 | 0 | 1 | designed + planned |
-| NFR-001 | M3 | Must | 0 | 0 | 15 | 14 | 0 | 3 | designed + planned |
+| NFR-001 | M3 | Must | 0 | 0 | 15 | 16 | 0 | 3 | designed + planned |
 | NFR-002 | M3 | Must | 1 | 0 | 10 | 9 | 0 | 2 | designed + planned |
 | NFR-003 | M3 | Must | 1 | 0 | 8 | 7 | 1 | 2 | designed + planned |
 | NFR-004 | M3 | Must | 0 | 0 | 11 | 6 | 1 | 3 | designed + planned |
 | NFR-005 | M1 | Must | 2 | 6 | 2 | 2 | 0 | 1 | designed + planned |
 | NFR-006 | M2 | Must | 2 | 7 | 1 | 1 | 1 | 1 | designed + planned |
 | NFR-007 | M2 | Must | 0 | 6 | 1 | 1 | 1 | 1 | designed + planned |
-| NFR-008 | M1 | Must | 2 | 5 | 2 | 1 | 0 | 1 | designed + planned |
+| NFR-008 | M1 | Must | 3 | 5 | 2 | 1 | 0 | 1 | designed + planned |

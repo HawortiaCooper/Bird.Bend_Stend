@@ -114,12 +114,25 @@ def travel_cal_step2(spm1, n1, cmd_mm, meas_total_mm, meas1_mm):
     return n2, spm2, inc, inc / spm1 - 1
 
 
+I32_MIN, I32_MAX = -2**31, 2**31 - 1
+
+
+def sat_i32(x):
+    """ICD v0.5 §0.1 (OBS-M1-05): µm / steps results saturate to the int32 range."""
+    return max(I32_MIN, min(I32_MAX, x))
+
+
 def um_to_steps(u, spm):
-    return rha(u * spm / 1000)
+    return sat_i32(rha(u * spm / 1000))
 
 
 def steps_to_um(s, spm):
-    return rha(s * 1000 / spm)
+    return sat_i32(rha(s * 1000 / spm))
+
+
+def rate_cap_um_s(max_step_rate_hz, spm):
+    """ICD §0.1 / §5.4: floor(max_step_rate_hz · 1000 / spm), saturated to [0, 2^32 − 1]."""
+    return max(0, min(2**32 - 1, math.floor(max_step_rate_hz * 1000.0 / spm)))
 
 
 def ramp_periods(n_steps, f_tick, v, a, d):

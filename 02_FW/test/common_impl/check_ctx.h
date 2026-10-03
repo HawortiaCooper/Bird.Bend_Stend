@@ -29,8 +29,6 @@ static inline void cc_setup(const vec_check_t *v, params_t *p, cmd_ctx_t *c)
     c->estop_input_open = v->estop_input_open;
     c->estop_closed_ms = v->estop_closed_ms;
     c->halt_latched = v->halt_latched;
-    c->stop_btn_active = v->stop_btn_active;
-    c->stop_btn_released_ms = v->stop_btn_released_ms;
     c->faults = v->faults;
     c->fault_causes = v->fault_causes;
     c->limit_start = v->limit_start;

@@ -29,6 +29,9 @@ TOOLS = REPO_ROOT / "00_System" / "tools"
 VECTORS = TOOLS / "vectors"
 SRC = SW_ROOT / "src"
 UNIT = SW_ROOT / "tests" / "unit"
+# no test registers a real system-wide Pause/Break hotkey or installs an LL keyboard hook: the hotkey is off in the
+# test suites (``test_hooks.hotkey_press()`` still reaches HALT); hotkey tests pass ``BackendSettings(hotkey="fake")``
+os.environ.setdefault("BEND_STAND_HOTKEY", "off")
 for _p in (SRC, UNIT):                                  # UNIT: shared unit-test helpers (bbs_support, rigs)
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

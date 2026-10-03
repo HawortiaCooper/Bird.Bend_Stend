@@ -2,8 +2,8 @@
 
 | Doc | SW_design_GUI |
 |---|---|
-| Version | **0.3 — DRAFT for the P1 gate** (design only, no application code; final P1 alignment to `SW_design.md` v0.3 §15.5a) |
-| Date | 2026-10-03 |
+| Version | **0.4 — M1 as built (§15.1) + D-38 plot panes (SW-RT-006, §4.7)** |
+| Date | 2026-10-04 |
 | Owner | Implementer D — GUI (`03_SW/src/bend_stand/gui/**` incl. `gui/__init__.py`, `gui/app.py`; `03_SW/tests/gui/**`; this document) |
 | Binding inputs | `00_System/specs/SRS.md` **v0.4** (SW-*, SAF-SW-*, NFR-*; same IDs as v0.3, D-30…D-33 wording incl. SW-STOP-004 RESUME and the SW-SEQ-005 refusal list), `DECISIONS.md` D-01…D-33 (esp. D-11, D-14, D-23, D-26, D-28, D-29 a/h/i/n, **D-30, D-31, D-32, D-33**; **D-27 closed** per Orchestrator 2026-10-03: driver 4000 p/rev closed loop → nominal 800 steps/mm), `ICD_protocol.md` **v0.4** (RESUME 0x3C, D-31) and the generated name tables `03_SW/src/bend_stand/core/protocol_gen.py` (ICD v0.4, PROTO 1.0, PAYLOAD 1), `params.yaml` (`motion.steps_per_mm` default 800, D-27 closed), R3 §6 (Thrust_Stand GUI solutions, perf defect SWD-PM3-05), R1 §7 (Stefan `stepper_gui` patterns), R4 §5–§8, §10 |
 | Backend contract | **`03_SW/docs/SW_design.md` v0.3 §15** (Implementer B): facade `core.backend.Backend` (§15.1), `BackendStatus` (§15.2), topics (§15.3), GUI rules (§15.4), **API delta A-01…A-25 (§15.5) and B3-01…B3-21 (§15.5a)**, result types (§15.6), answers to GRQ-B-01…18 (§15.7) and GF-11…17 (B3-16…B3-21); plus B §5.4–§5.6, §5.5.1, §6.5, §6.7, §9.1, §9.3.1, §10. Where the two documents differ, B §15 wins and this file is updated. |
@@ -644,6 +644,40 @@ A table of FW EVENTs and backend events (time, source, code, text): stops with c
 
 ---
 
+### 4.7 Plot panes (SW-RT-006, D-38; inherited from Thrust_Stand SW-RT-004 / D-62 / D-63 @37c8747)
+
+Since D-38 a plot window is a **grid of plot panes** instead of one fixed time view + X-Y slot (§4.1 is superseded
+for the inner layout; the dock frame, STOP, float and NO-SPECIMEN tag stay).
+
+```
++-- Plot 1 ----------------------------------------------- [NO-SPECIMEN] [Float] [Close] [## STOP ##] -+
+| [☰ Channels] [Freeze] Window [30 s v] [x] Autoscale  [+ Pane] [+ X-Y pane]  Cols [1][2][3][4]  info  |
++--------------------------+---------------------------------------------------------------------------+
+| Channel        Unit Pane | ⠿ Pane 1 · Raw counts            ✕ | ⠿ Pane 2 · Status bits            ✕ |
+| v load                   |   raw ~~~~~~~~                       |   VALID  _|~~|__                     |
+|  [x] HX711 raw counts P1 |                                      |   MOVING ___|~|_                     |
+| v status.flags           +--------------------------------------+--------------------------------------+
+|  [x] VALID          P2   | ⠿ Pane 3 · Travel                ✕ | ⠿ Pane 4 · X-Y: raw over setpoint ✕ |
+|  …                       |   x [mm] (left) / setpoint [µm] (R)  |   x [setpoint v]  y [raw v]          |
++--------------------------+--------------------------------------+--------------------------------------+
+```
+
+| Topic | Design | Module |
+|---|---|---|
+| Pane | one `pg.PlotWidget` per pane (QWidget grid cell, needed for drag & drop) with title strip (grip, "Pane N · quantities" or the user name, ✕), optional legend strip, `PlotItem` + optional right `ViewBox`; ≤ 2 units per pane (left / right axis); status bits use the pseudo unit `bit` and are drawn as digital lanes (bit · 1.2, fixed range, generated names as ticks, §4.6 rule 10) | `plots/plot_pane.py` `PlotPane` |
+| Grid | `PaneGrid`: 1/2/3/4 equal columns per window (column buttons), row-major; switching keeps the order; drop indicator while dragging | `plots/pane_grid.py` (copy) |
+| Default placement (D-63 rules 1–5) | (1) a ticked channel joins the first pane (grid order) showing its **quantity group** with an axis for its unit; (2) else the first empty time pane is reused; else a new pane is appended; (3) unticking removes only the curve, emptied panes stay; (4) manual placement wins ("Plot in / move to pane N", "New pane", pane menu "Move curve", drag & drop); (5) a tree-group tick ticks only available children (greyed stay unticked, group partially checked) and costs one layout | `plots/plot_dock.py`, `widgets/channel_tree.py` |
+| Quantity groups | from `ChannelSpec.dimension` when B adds it (**GRQ-B-21**), else key (status bits via the generated names), unit (N/kgf → Force, mm/µm → Travel, counts → Raw counts, SPS → Sample rate, …), registry group | `plots/quantity.py` |
+| Reorder / move | drag a pane by its title strip onto another cell (insert there) or onto another plot window (moved with its curves: ticked there, unticked here; a channel already shown there is dropped with an info); pane menu "Move to window…" (incl. "New plot window"); a window always keeps one pane | `plot_dock.py`, `pane_grid.py` |
+| Rename / close | double click on the title or pane menu "Rename…" (empty = automatic title); ✕ / "Close pane" unticks its channels; the last pane cannot be closed | `plot_pane.py` |
+| X link | time panes of a window share X = [−window, 0] (relative axis, §4.6 rule 2); a user zoom / pan in one pane is applied to all; time-axis values only in the bottom pane of each column | `plot_dock.py` |
+| X-Y pane | pane type `XYPane` ("+ X-Y pane"): x from the travel channels (mm / µm), y force (when available) else raw counts; `data.xy(x, y, window_s)` per refresh, curve + live point, own auto X/Y; never a default target, not time-linked | `plot_pane.py` `XYPane` |
+| Autoscale | per pane and axis, explicit with hysteresis (`AutoRange`, §4.6 rule 3); "Autoscale" off = manual Y (mouse zoom / pan, SW-RT-003); a mouse zoom on Y pauses the autoscale of that pane | `plot_pane.py` |
+| Data | the main window's refresh makes **one `data.snapshot(keys, window_s, px)` per distinct time-window length** for the union of the channels of all shown, non-frozen windows (px = widest pane / 2 px per column); each window hands the snapshot to all its panes, then commits the views (one paint per pane and refresh) | `main_window.py` `_on_plots` |
+| Rendering (NFR-001) | Thrust_Stand plot-performance fix copied: `FastCurve` (cheap data hand-over and bounding rect), opaque `GridLines` from one item, cached `TimeAxis` tick values / static texts, Y axes as device pixmaps, `NoIndex` scenes, orphan pyqtgraph menus adopted (SWD-PM3-07), no `LegendItem` | `plot_pane.py` |
+| Windows | up to 4 plot windows (GQ-04): View ▸ New plot window (tabified with Plot 1), every window with its own STOP | `main_window.py` |
+| Persistence | QSettings `plots/layout` JSON `{"version": 1, "docks": [{"title", "columns", "window_s", "autoscale", "tree", "selected", "panes": [[keys…] \| {"type": "xy", "x", "y"}], "titles": [name \| null]}]}` + `main/state` (dock arrangement); saved on close and View ▸ Save layout now; restored at start; channels not (yet) in the registry wait and are placed when they appear; a corrupt entry gives the default layout | `main_window.py`, `plot_dock.py` |
+
 ## 5. Stop handling
 
 ### 5.1 Stop paths (end-to-end)
@@ -1059,10 +1093,11 @@ HotkeyTestDialog
     sequence_tab.py
     report_tab.py
   plots/
-    plot_dock.py         PlotDock(SafeDock): one GraphicsLayoutWidget, time view + X-Y view + lanes
-    time_view.py         TimeView (PlotSnapshot columns, relative time axis, explicit ranges, 2 Y units, vstate styles)
-    xy_view.py           XYView (data.xy -> XYSnapshot, live point)
-    lanes.py             StatusLanes (bit traces)
+    plot_dock.py         PlotDock(SafeDock): pane grid, placement rules, menus, X link, layout state (§4.7)
+    plot_pane.py         PlotPane (time pane: curves, 2 axes, bit lanes, vstate styles) + XYPane (copy TS plot_pane.py)
+    pane_grid.py         PaneGrid 1..4 columns, drag & drop, drop indicator           (copy TS pane_grid.py)
+    quantity.py          quantity groups for the default placement                    (adapt TS quantity.py)
+    time_view.py         pure helpers: interleave min/max columns, split_vstate
     autorange.py         Y-range hysteresis (pure function, unit-tested)
     axes.py              axis helpers (SI prefix off, fixed width, static ticks)
     sequence_chart.py    SequenceChart (planned path, capture points, active step, trace, live marker, NOT_REACHED marks)
@@ -1209,6 +1244,14 @@ Copy TS `gui/gc_policy.py`: `gc.disable()` at start; after `show()` one full col
 | **G-42** | hotkey test mode: gate `hotkey_test` REFUSE shown; `hotkey_test_start(10.0)` called; `hotkey.test` delay / timeout displayed; motion gates refused during the window (status from the fake) | fake | SW-STOP-002, NFR-003 | M3 |
 | **G-43** | entry point: `gui.app.run(fake_backend, args)` sets `AA_DontUseNativeDialogs` before `QApplication`, calls `backend.start()` before the window is shown, connects only when `args.endpoint` is set (B3-20), calls `shutdown()` on close and returns the exit code (offscreen, window closed by a timer) | fake | SW-PLT-001, SW-STOP-001, D-06 | M1 |
 | **G-44** | **UNKNOWN and new safety items:** every chip with an `UNKNOWN` member is grey "?" (never green), before the first frame and when stale; DRV_PWR off, K1_WELDED, HOME_DRIFT (value µm), CLK_FALLBACK, NO_AFE_DATA, ALM with power ("new motion blocked") render chip + banner + `clear_hint` per §2.3/§2.4 | fake + sim | SAF-SW-005 | M1 (UNKNOWN), M3 |
+| **G-45** | quantity groups of the registry (unit / key / generated bit names; `dimension` when present) | – | SW-RT-006 | M1+ |
+| **G-46** | placement rules D-63 (1)–(5): same quantity joins, empty pane reused, untick keeps pane, manual move wins, group tick only available children; third unit → another pane with info | fake | SW-RT-006 | M1+ |
+| **G-47** | columns 1/2/3/4 keep order (row-major positions), time labels bottom row only; + Pane, rename (inline, Enter / empty = automatic), close unticks, last pane kept; channel / pane menus | fake | SW-RT-006 | M1+ |
+| **G-48** | drag & drop reorder with drop indicator (synthetic drag events), title-strip gesture starts the drag, pane MIME | fake | SW-RT-006 | M1+ |
+| **G-49** | X link inside a window; X-Y pane (choices, `data.xy`, live point, not time-linked, never a default target) | fake | SW-RT-006, SW-RT-003 | M1+ |
+| **G-50** | move pane to another window (menu and drop) keeps curves; STOP in every new window; max 4 windows | fake | SW-RT-006, SW-RT-001, SW-STOP-001 | M1+ |
+| **G-51** | one `data.snapshot` per distinct time window for all panes of all shown, non-frozen windows (union of keys); frozen / hidden windows excluded; perf smoke with 4 time panes + X-Y (fake 200 ticks; sim 5 s real timer) | fake + sim | SW-RT-006, NFR-001 | M1+ |
+| **G-52** | layout (columns, order, curves per pane incl. empty panes, titles, X-Y panes, window, second window) restored by a new MainWindow; corrupt entry → default | fake | SW-RT-006, SW-RT-001 | M1+ |
 
 ### 10.3 Performance tests (opt-in, real display, `@pytest.mark.perf`; acceptance runs by Validator F)
 | ID | Scenario | Criterion | Req |
@@ -1310,10 +1353,11 @@ Not automatable or only partly automatable: perceived smoothness and readability
 | ID | Request | Why (GUI element) | MS | Status |
 |---|---|---|---|---|
 | GRQ-B-19 | **Acknowledge a travel-calibration difference** (B §9.3.1 names the operator actions [Keep board value] and [Ignore for this session], but §15 has no call for them): e.g. `calibrations.acknowledge_travel_difference(keep_board: bool) -> GateResult` — `keep_board=True` deletes the restore-pending record (someone else changed the board value on purpose), `False` suppresses the indicator / gate WARN for this session only (no write) | §2.8 notice strip, §3.5 | M3 | **closed** by B3-19 (`resolve_travel_difference_async("restore" / "keep_board" / "ignore_session")`) |
+| GRQ-B-21 | **Quantity of a channel:** add `ChannelSpec.dimension: str` (e.g. "force", "length", "counts", "rate", "bits", "count", "state") so the default pane placement (SW-RT-006) does not have to infer the quantity from the unit / key; the GUI already prefers it when present | §4.7 | M3 | open (non-blocking) |
 
 **Clarifications (v0.2; GF-11, GF-12, GF-14, GF-17) — all answered by B3-01/03/16/17, B3-18, B3-20, B3-21:** `Backend.resume()` sends RESUME 0x3C (D-31) and the `resume` gate REFUSEs also for ESTOP / FAULT latched, with `GateItem.code` = generated `BLOCK_BITS` name; `Indicators` item names = lower-case generated names (`stop_btn`, `pause_btn`); `main()` constructs but does not start the Backend and exposes the endpoint for `run()`; engine `start(..., confirmed=True)` is the kwarg for start-gate CONFIRM items.
 
-**Remaining API gaps: none** (M1 … M4).
+**Remaining API gaps:** GRQ-B-21 (non-blocking, quantity field).
 
 ---
 
@@ -1353,6 +1397,7 @@ Legend for "Share": **G** = GUI-owned; **S** = shared (the GUI triggers and disp
 | SW-RT-003 | Time view (5–600 s, freeze, auto/manual Y) + X-Y view | §4.1, §4.3 | time_view, xy_view, autorange | G | G-23, D |
 | SW-RT-004 | Derived channels listed from the registry (computation in `calc`) | §4.2 | channel_tree | B | G-21 (+ B vectors) |
 | SW-RT-005 | Readouts with `LatestSample.state` | §4.3 | readout | S | G-24, D |
+| SW-RT-006 | Pane grid 1–4 columns, + Pane / X-Y pane, plot in / move to pane, drag reorder, move to window, rename / close, quantity placement + empty-pane reuse (D-63), X link, layout persistence, one snapshot per time window | §4.7 | plot_dock, plot_pane, pane_grid, quantity, channel_tree, main_window | G | G-45…G-52, D |
 | SW-MAN-001 | `TargetSlider`: drag sends nothing, one `move_to` on release, disabled un-homed | §3.4 | target_slider | G | G-12 |
 | SW-MAN-002 | Go-to absolute/distance (`move_to` / `move_by`; arithmetic in the backend) | §3.4 | manual_tab | S | G-13, G-30 |
 | SW-MAN-003 | ±0.1/1/10 mm buttons → `move_by`; commanded and pending target shown (latest wins) | §3.4 | step_buttons | S | G-13, G-30 |
@@ -1400,7 +1445,7 @@ Legend for "Share": **G** = GUI-owned; **S** = shared (the GUI triggers and disp
 | NFR-003 | Hotkey thread (backend), independent of the GUI; test mode | §5.3 | – (backend), hotkey_test | B | P-03, G-42 |
 | NFR-004 | GUI memory/GC behaviour over 1 h; deadlock stress | §9.4 | gc_policy | S | P-05, G-35 |
 
-**Coverage:** all **60** SW-* requirements of SRS v0.4 (same IDs as v0.3) (incl. SW-LIM-004), all 6 SAF-SW requirements, NFR-001…004 and the GUI-facing SYS-003, SYS-008, SYS-010, IF-008 and IF-011 (= 75 IDs) have a GUI design element and at least one GUI test, demonstration or inspection. NFR-005…008 are FW-only.
+**Coverage:** all **61** SW-* requirements of SRS v0.5.1 (incl. SW-LIM-004 and SW-RT-006, D-38), all 6 SAF-SW requirements, NFR-001…004 and the GUI-facing SYS-003, SYS-008, SYS-010, IF-008 and IF-011 (= 75 IDs) have a GUI design element and at least one GUI test, demonstration or inspection. NFR-005…008 are FW-only.
 
 ### 12.2 FW / IF features surfaced in the GUI (display only)
 | Req | GUI element |
@@ -1526,4 +1571,5 @@ GUI imports (G-01): `core.api`, `core.protocol_gen`, `calc.units` and — deviat
 | 0.2 | 2026-10-03 | Implementer D | Aligned to SRS v0.3, ICD v0.3 + generated `protocol_gen.py`, `SW_design.md` v0.2 §15 (A-01…A-25 adopted, GRQ-B-01…18 closed) and D-29…D-33. **New:** §0 summary; P8 generated names (indicator map, channel tree, event log, "Clear stop first" codes); Pause → `StopResult`, Resume via RESUME 0x3C (D-31) with "Clear stop first", Clear stop clears HALT + PAUSED, `clear_stop` refused while a sequence is PAUSED, Pause/Resume flow §5.9; no-specimen mode (C-10, mode banner on every tab, tags in floating windows and dialogs, NOSPEC chip, Safety-limits group); travel-calibration restore (TCAL chip, notice strip, `RESTORING` view); indicators as `Indicator` objects with UNKNOWN and new chips DRV, K1, FAULT (incl. HOME_DRIFT), CLK, NO_AFE_DATA in AFE, MOV; ALM text "new motion blocked while powered" (D-28, D-33 c); config `check`, REBOOT_REQUIRED, Save & reboot (C-11), NVM defaulted; engine PHASES / `continue_label` / `continue_moves` / `abort_reason` / `start() → GateResult` (C-12), load-wizard finish-early and re-take, tare undo; `remaining_s`, report list/load, generator schema forms, hotkey test mode (KL-01 text), `channels.changed`, `PlotSnapshot`/`vstate`; entry point `gui.app.run(backend, args) -> int` (§8.1); travel calibration expected 800 steps/mm, 160 only as "DIP change not applied" in C-05 (D-27 closed, SW-CAL-003); sequence start reasons D-33 b; NOT_REACHED (D-32, D-33 d). Tests G-37…G-44 added, G-02…G-36 updated, milestone column. Traceability: 60/60 SW incl. SW-LIM-004, 6/6 SAF-SW, NFR-001…004, SYS-003/008/010, IF-008/011. GQ-01…20 decided (D-32 Q27). GF-01…08, 10 closed; GF-09 open (info); new GF-11…17; new request GRQ-B-19 (only remaining API gap, M3, non-blocking). **M1 work breakdown WP-D0…WP-D8 (§15).** Validator review SWD-P1-05 (a)–(g) addressed. |
 | 0.3 | 2026-10-03 | Implementer D | Final P1 alignment to `SW_design.md` v0.3 §15.5a (B3-01…B3-21, new §11.1a), SRS v0.4 (same IDs) and ICD v0.4: Resume = RESUME + re-issue (manual RESUME only), `resume.ignored` toasts; Clear stop of a paused sequence = new C-13 (`clear_stop_async(confirmed=True)`, end reason CLEARED); `REFUSED_PAUSED` shown as info; sequence-start items DRV_PWR_OFF / ALM / PAUSED / POS_UNCERTAIN / AFE_RATE_MISMATCH; end reasons NOT_REACHED / DRIVER_ALARM / CLEARED, step error BOUND_NOT_AHEAD; travel-bound column removed, LOAD step time hidden; link counters `dup_frames` / `seq_anomalies`; indicator alias table removed (lower-case generated keys); TCAL actions via `resolve_travel_difference_async` (GRQ-B-19 closed); entry contract with `args.endpoint`; `sequencer.start(seq, confirmed=True)`; lockstep test hooks. GF-11…17 closed (GF-15 by SRS v0.4, GF-16 by ICD v0.4). Remaining API gaps: none. |
 | 0.3.1 | 2026-10-03 | Implementer D | M1 implementation WP-D0…WP-D7: as-built table §15.1 (layout deviation banner/indicator toolbars, D-36 texts, B31-01 adopted, `NONE` source display rule, smoke seam, package-root import). |
+| 0.4 | 2026-10-04 | Implementer D | **D-38 / SW-RT-006 (M1 add-on):** new §4.7 plot panes (grid 1–4 columns, + Pane, + X-Y pane, plot in / move to pane, drag reorder, move to window, rename / close, D-63 placement rules, X link, persistence, one snapshot per time window, Thrust_Stand rendering fix); §8 module list (plot_pane, pane_grid, quantity; lanes / single time view removed); tests G-45…G-52; traceability SW-RT-006; GRQ-B-21 (`ChannelSpec.dimension`). §4.1 inner layout and §4.5 JSON superseded by §4.7. |
 | 0.3.2 | 2026-10-03 | Implementer D | M1 gate items: SWD-M1-06 (confirmation banner names STOP / HALT / PAUSE from a str or `.cmd` payload), SWD-M1-07 (`Implements:` tags in every GUI module), SWD-M1-10 ("LINK LOST – STOP sent" only after a sent STOP within 5 s, else "LINK LOST – reconnecting…"); D-36 wording test for GUI-owned texts; GF-19 (backend HALT clear hint) stays with B. |

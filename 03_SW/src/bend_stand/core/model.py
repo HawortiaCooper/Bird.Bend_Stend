@@ -212,29 +212,17 @@ class StopResult:
     reason: str = ""
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class StopConfirmation:
     """Payload of the topics ``stop.confirmed`` / ``stop.unconfirmed`` (SWD-M1-06): which priority command
     (``STOP`` / ``HALT`` / ``PAUSE``) was (not) confirmed, its source, the frames written, the decision time.
-
-    Compatibility: until M2 the payload also compares equal to its command name (``payload == "HALT"``), the
-    v0.3 payload form, so existing consumers keep working while they migrate to ``.cmd``."""
+    (The v0.3 str-equality shim was removed in M2, MC-4.)"""
 
     cmd: str
     source: str
     attempts: int
     t_ns: int
     confirmed: bool
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, str):
-            return other == self.cmd
-        if isinstance(other, StopConfirmation):
-            return (self.cmd, self.source, self.attempts, self.t_ns, self.confirmed) ==                 (other.cmd, other.source, other.attempts, other.t_ns, other.confirmed)
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(self.cmd)
 
 
 ClearOutcome = Literal["OK", "REFUSED", "NOT_CONFIRMED"]
@@ -324,6 +312,16 @@ class GateCode(StrEnum):
     IDLE_PAUSE = "IDLE_PAUSE"
     SEQUENCE_RUNNING = "SEQUENCE_RUNNING"
     SEQUENCE_PAUSED = "SEQUENCE_PAUSED"
+    # M2 motion
+    PC_LOAD_LIMITS_OFF = "PC_LOAD_LIMITS_OFF"
+    HOME_LOAD_CONFIRM = "HOME_LOAD_CONFIRM"
+    DISABLE_CONFIRM = "DISABLE_CONFIRM"
+    CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+    TARGET_OUT_OF_RANGE = "TARGET_OUT_OF_RANGE"
+    SPEED_CAP = "SPEED_CAP"
+    ACCEL_CAP = "ACCEL_CAP"
+    BOUND_NOT_AHEAD = "BOUND_NOT_AHEAD"
+    LIMIT_TOWARD = "LIMIT_TOWARD"
 
 
 @dataclass(frozen=True)
@@ -504,6 +502,9 @@ class MotionStatus:
     owner: str = "MANUAL"
     motion_state: str | None = None
     limits: MotionLimits | None = None
+    jogging: bool = False                    # a jog session of this backend is running (M2)
+    home_phase: str | None = None            # STATUS home_phase name (M2)
+    pos_uncertain: bool = False              # DATA status POS_UNCERTAIN (M2)
 
 
 @dataclass(frozen=True)
@@ -813,6 +814,8 @@ class SessionSettings:
     k_est_n_mm: float | None = None
     g_local: float = 9.80665
     limits: LimitConfig = field(default_factory=LimitConfig)
+    manual_speed_mm_s: float = 5.0           # default speed of move_to / move_by (≤ the cap that applies, M2)
+    manual_accel_mm_s2: float | None = None  # None = the FW default motion.a_max_um_s2 (accel 0 on the wire)
 
 
 # --------------------------------------------------------------------------------------------- data view
@@ -854,12 +857,17 @@ class LatestSample:
 
 @dataclass(frozen=True)
 class ChannelSpec:
+    """A plottable channel (SW-RT-002). ``dimension`` = physical quantity for the default pane placement of the
+    plot panes (GRQ-B-21, SW-RT-006): ``force``, ``length``, ``speed``, ``force_rate``, ``counts``, ``rate``,
+    ``count``, ``state``, ``bits``."""
+
     key: str
     label: str
     unit: str
     group: str
     available: bool = True
     reason: str | None = None
+    dimension: str = ""
 
 
 # --------------------------------------------------------------------------------------------- events

@@ -115,6 +115,12 @@ class V:
         self.advance(5)
 
 
+def idle_status_bits(v: "V") -> set[str]:
+    """DATA status bits of an idle, unloaded default twin world (v0.3 / M2): with FEAT_DRV_SIGNALS the
+    driver inputs are valid (D-37 b) and the default world has driver power present and PEND in position."""
+    return {"PEND", "DRV_PWR"} if "DRV_SIGNALS" in v.info()["features"] else set()
+
+
 def flag(st: dict, name: str) -> bool:
     for k in ("flags", "status", "sys_flags", "io"):
         if name in st.get(k, []):

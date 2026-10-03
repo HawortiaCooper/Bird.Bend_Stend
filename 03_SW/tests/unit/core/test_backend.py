@@ -72,7 +72,7 @@ def test_status_connected_indicators_gates_and_10hz_polling() -> None:
         assert st.stream.on and st.indicators.stream_on.state == "ON" and st.indicators.drv_pwr.state == "ON"
         assert st.indicators.estop.state == "OFF" and st.indicators.afe_synthetic.state == "OFF"
         assert st.gates[GateId.STREAM_STOP].ok and not st.gates[GateId.STREAM_START].ok
-        assert st.gates[GateId.MOVE].refused[-1].code == GateCode.NOT_IMPLEMENTED
+        assert {"NOT_ENABLED", "NOT_HOMED"} <= set(st.gates[GateId.MOVE].codes())          # M2 motion gate
         assert st.motion.position_mm == 0.0 and st.calibration.board_spm == 800.0
         # stream off → DATA items become UNKNOWN once stale, STATUS items stay known (4 Hz poll)
         h.result(be.stream_stop_async())
@@ -193,7 +193,7 @@ def test_clear_and_resume_gates_need_confirmation() -> None:
         assert not g.ok and g.refused[0].code == GateCode.NOTHING_TO_CLEAR
         assert not be.resume().ok and not be.tare().ok and not be.take_sample().ok
         assert not be.hotkey_test_start().ok
-        assert not be.motion.enable().ok and not be.motion.disable().ok and be.motion.limits() is None
+        assert not be.motion.disable().ok and be.motion.limits() is not None    # M2: driver not enabled yet
         assert not be.motion.check(api.MotionKind.MOVE).ok
         assert isinstance(be.motion.move_to(1.0).exception(), GateRefused)
         assert isinstance(be.motion.move_by(1.0).exception(), GateRefused)
@@ -201,11 +201,11 @@ def test_clear_and_resume_gates_need_confirmation() -> None:
         be.motion.jog_start(1, 1.0)
         be.motion.jog_update(1.0)
         be.motion.jog_stop()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(GateRefused):                     # not homed
             be.motion.set_test_zero()
         assert be.limits.thresholds().state == "DEFAULT_ONLY"
         assert h.result(be.limits.recheck_async()).state == "DEFAULT_ONLY"
-        assert be.limits.set(be.limits.get()) and not be.limits.set_no_specimen_mode(True).ok
+        assert not be.limits.set(be.limits.get()) and not be.limits.set_no_specimen_mode(True).ok
         assert not be.sequencer.start(None).ok and be.sequencer.status().state == "IDLE"
         assert be.tare_engine.state().kind == "tare" and not be.load_cal.start().ok
     finally:

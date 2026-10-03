@@ -51,8 +51,11 @@ typedef struct {
     uint8_t uid[12];
     bool hse_fail;
     double lsi_hz;
-    bool wdg_armed; vt_t wdg_timeout_ns, wdg_deadline;
+    bool wdg_armed, wdg_long; vt_t wdg_timeout_ns, wdg_deadline;
+    bool afe_missed_flag;                                           /* afe_sample_t.status bit 1 */
+    bool fault_rec_valid; uint32_t fault_rec_pc, fault_rec_cfsr;   /* seam v1.2 hal_fault_record */
     vt_t hang_main_until, hang_tick_until;
+    vt_t storm_until;      /* inject isr_storm: a level-1 ISR storm until this time (M2) */
     /* ---- uart ---- */
     uint8_t rx_ring[RX_RING]; uint32_t rx_wr, rx_rd, rx_overruns;
     txq_t txq[3];
@@ -109,5 +112,8 @@ void tw_flash_save(void);
 void tw_edge(const char *pin, int level);
 void tw_step_counted(void);                  /* after every count change: world (limits) update */
 double tw_x_um(void);
+
+/* seam v1.2 (OI-FW-32): declared here until hal_sys.h carries it */
+bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);
 
 #endif

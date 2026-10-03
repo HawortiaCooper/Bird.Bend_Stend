@@ -46,6 +46,8 @@ class Item:
     value: int              # code (enum / events) or bit index (bitset)
     desc: str = ""
     extra: dict[str, str] = field(default_factory=dict)
+    retired: str = ""       # ICD version that retired the name (reserved; never reused)
+    feature: str = ""       # bitset item: INFO feature bit the value depends on (§7.6, D-37 b)
 
 
 @dataclass(frozen=True)
@@ -103,19 +105,25 @@ class Protocol:
         raise KeyError(tid)
 
     def names(self, tid: str) -> list[str]:
-        """Names by bit index ("" = reserved) for a bitset, by code order for an enum."""
+        """Names by bit index ("" = reserved or retired) for a bitset, by code order for an enum
+        (retired codes excluded)."""
         t = self.table(tid)
         if t.kind == "bitset":
             out = [""] * t.width
             for it in t.items:
-                out[it.value] = it.name
+                if not it.retired:
+                    out[it.value] = it.name
             while out and not out[-1]:
                 out.pop()
             return out
-        return [it.name for it in sorted(t.items, key=lambda i: i.value)]
+        return [it.name for it in sorted(t.items, key=lambda i: i.value) if not it.retired]
 
     def codes(self, tid: str) -> dict[str, int]:
-        return {it.name: it.value for it in self.table(tid).items}
+        """Active names -> code / bit index (retired excluded)."""
+        return {it.name: it.value for it in self.table(tid).items if not it.retired}
+
+    def retired(self, tid: str) -> dict[str, int]:
+        return {it.name: it.value for it in self.table(tid).items if it.retired}
 
 
 # --------------------------------------------------------------------------------------
@@ -176,12 +184,13 @@ def load(path: Path = PROTO_YAML_PATH) -> Protocol:
             key = "bit" if kind == "bitset" else "value"
             extra = {k: str(it[k]) for k in ("arg", "values", *cols) if k in it}
             items.append(Item(str(_req(it, "name", tid)), int(_req(it, key, tid)),
-                              " ".join(str(it.get("desc", "")).split()), extra))
+                              " ".join(str(it.get("desc", "")).split()), extra,
+                              str(it.get("retired", "")), str(it.get("feature", ""))))
             if kind == "events" and not {"arg", "values"} <= extra.keys():
                 raise ProtoError(f"{tid}.{it['name']}: events need arg and values")
             if any(c not in extra for c in cols):
                 raise ProtoError(f"{tid}.{it['name']}: missing column")
-        _check_names(items, tid, width if kind == "bitset" else None)
+        _check_names(items, tid, width if kind == "bitset" else None)   # retired values count: never reused
         if kind == "enum" and any(not 0 <= i.value <= 0xFF for i in items):
             raise ProtoError(f"{tid}: enum codes must be 0..255")
         if kind == "events" and any(not 1 <= i.value <= 0xFFFF for i in items):
@@ -194,6 +203,11 @@ def load(path: Path = PROTO_YAML_PATH) -> Protocol:
                             tuple(items)))
     if len({t.id for t in tables}) != len(tables) or len({t.c_prefix for t in tables}) != len(tables):
         raise ProtoError("duplicate table id or c_prefix")
+    feats = {i.name for t in tables if t.id == "features" for i in t.items}
+    for t in tables:
+        for i in t.items:
+            if i.feature and (t.kind != "bitset" or i.feature not in feats):
+                raise ProtoError(f"{t.id}.{i.name}: feature {i.feature!r} unknown or not a bitset item")
 
     cd = _req(doc, "commands", "top")
     retry_names = {i.name for t in tables if t.id == "retry_class" for i in t.items}
@@ -274,19 +288,28 @@ def gen_c(p: Protocol) -> str:
             o.append("typedef enum {\n")
             for it in sorted(t.items, key=lambda i: i.value):
                 v = f"0x{it.value:02X}" if it.value >= 0x80 else str(it.value)
+                d = f"RETIRED in ICD v{it.retired}: never sent, code never reused. {it.desc}" if it.retired else it.desc
                 o.append(f"    {t.c_prefix}{it.name:<24} = {v},"
-                         + (f" /* {_c_comment(it.desc)} */" if it.desc else "") + "\n")
+                         + (f" /* {_c_comment(d)} */" if d else "") + "\n")
             o.append(f"}} proto_{t.id}_t;\n\n")
         else:
             digits = t.width // 4
             suffix = "UL" if t.width == 32 else "u"
-            mask = 0
+            mask = rmask = 0
             for it in sorted(t.items, key=lambda i: i.value):
-                mask |= 1 << it.value
+                if it.retired:
+                    rmask |= 1 << it.value
+                else:
+                    mask |= 1 << it.value
+                d = (f"RETIRED in ICD v{it.retired}: reserved, sent as 0, never reused. {it.desc}"
+                     if it.retired else it.desc + (f" [valid only with FEAT_{it.feature}]" if it.feature else ""))
                 o.append(f"#define {t.c_prefix}{it.name + '_BIT':<26} {it.value}u\n")
                 o.append(f"#define {t.c_prefix}{it.name:<26} 0x{1 << it.value:0{digits}X}{suffix}"
-                         f" /* {_c_comment(it.desc)} */\n")
-            o.append(f"#define {t.c_prefix}{'DEFINED_MASK':<26} 0x{mask:0{digits}X}{suffix}\n\n")
+                         f" /* {_c_comment(d)} */\n")
+            o.append(f"#define {t.c_prefix}{'DEFINED_MASK':<26} 0x{mask:0{digits}X}{suffix}\n")
+            if rmask:
+                o.append(f"#define {t.c_prefix}{'RETIRED_MASK':<26} 0x{rmask:0{digits}X}{suffix}\n")
+            o.append("\n")
     o.append("#ifdef __cplusplus\n}\n#endif\n\n#endif /* PROTO_GEN_H */\n")
     return "".join(o)
 
@@ -332,6 +355,14 @@ def gen_py(p: Protocol) -> str:
             o.append(f"\n\n{uid}_NAMES: tuple[str, ...] = {tuple(p.names(t.id))!r}\n")
         desc = {it.name: (it.desc if t.kind != "events" else it.extra["arg"]) for it in t.items}
         o.append(f"{uid}_DESC: Mapping[str, str] = MappingProxyType({desc!r})\n")
+        ret = sorted(it.name for it in t.items if it.retired)
+        o.append(f"{uid}_RETIRED: frozenset[str] = frozenset({set(ret)!r})"
+                 "  # reserved, never sent, never reused (members kept for compatibility)\n"
+                 if ret else f"{uid}_RETIRED: frozenset[str] = frozenset()\n")
+        if t.kind == "bitset" and any(it.feature for it in t.items):
+            o.append(f"{uid}_FEATURE: Mapping[str, str] = MappingProxyType("
+                     f"{ {it.name: it.feature for it in t.items if it.feature}!r})"
+                     "  # bit valid only while this INFO feature bit is 1 (ICD §7.6)\n")
         if t.kind == "events":
             o.append(f"{uid}_ARG: Mapping[str, str] = MappingProxyType("
                      f"{ {it.name: it.extra['arg'] for it in t.items}!r})\n")
@@ -394,23 +425,35 @@ def md_table(t: Table) -> list[str]:
            else f"Python `{t.py_name}` (not on the wire)")
     o = [f"Generated from `protocol.yaml` table `{t.id}` ({ids}).", ""]
     if t.kind == "bitset":
-        o += ["| Bit | Name | Meaning |", "|---|---|---|"]
+        feat = any(i.feature for i in t.items)
+        o += ["| Bit | Name | Meaning |" + (" Valid only with |" if feat else ""),
+              "|---|---|---|" + ("---|" if feat else "")]
         used = {i.value: i for i in t.items}
         b = 0
         while b < t.width:
             if b in used:
-                o.append(f"| {b} | `{used[b].name}` | {_cell(used[b].desc)} |")
+                u = used[b]
+                if u.retired:
+                    o.append(f"| {b} | ~~`{u.name}`~~ | **retired in v{u.retired}**: reserved, sent as 0, never "
+                             f"reused — {_cell(u.desc)} |" + (" – |" if feat else ""))
+                else:
+                    o.append(f"| {b} | `{u.name}` | {_cell(u.desc)} |"
+                             + (f" `FEAT_{u.feature}` |" if u.feature else (" – |" if feat else "")))
                 b += 1
                 continue
             e = b
             while e + 1 < t.width and e + 1 not in used:
                 e += 1
-            o.append(f"| {b}{'–' + str(e) if e > b else ''} | — | reserved (0) |")
+            o.append(f"| {b}{'–' + str(e) if e > b else ''} | — | reserved (0) |" + (" – |" if feat else ""))
             b = e + 1
         return o
     if t.kind == "events":
         o += ["| Code | Name | `arg` | `value` / `value2` |", "|---|---|---|---|"]
         for it in sorted(t.items, key=lambda i: i.value):
+            if it.retired:
+                o.append(f"| {it.value} | ~~`{it.name}`~~ | **retired in v{it.retired}**: never sent, code never "
+                         f"reused — {_cell(it.desc)} | – |")
+                continue
             o.append(f"| {it.value} | `{it.name}` | {_cell(it.extra['arg'])} | "
                      f"{_cell(it.extra['values'])} |")
         return o
@@ -418,6 +461,10 @@ def md_table(t: Table) -> list[str]:
     o += [head, "|---|---|---|" + "---|" * len(t.columns)]
     for it in sorted(t.items, key=lambda i: i.value):
         v = f"`0x{it.value:02X}`" if it.value >= 0x80 else str(it.value)
+        if it.retired:
+            o.append(f"| {v} | ~~`{it.name}`~~ | **retired in v{it.retired}**: never sent, code never reused — "
+                     f"{_cell(it.desc)} |" + "".join(" – |" for _ in t.columns))
+            continue
         o.append(f"| {v} | `{it.name}` | {_cell(it.desc)} |"
                  + "".join(f" {_cell(it.extra[c])} |" for c in t.columns))
     return o

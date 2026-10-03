@@ -52,10 +52,12 @@ uint32_t hal_time_ms(void) { return s_ms; }
 void TIM5_IRQHandler(void)
 {
     uint32_t sr = TIM5->SR;
+#if defined(FW_AFE_SYNTHETIC) && FW_AFE_SYNTHETIC
     if ((sr & TIM_SR_CC2IF) != 0u && (TIM5->DIER & TIM_DIER_CC2IE) != 0u) {
         TIM5->SR = ~TIM_SR_CC2IF;
         afe_synth_on_cc2(TIM5->CCR2);                       /* pends EXTI4 (level 3) */
     }
+#endif
     if ((sr & TIM_SR_CC1IF) != 0u) {
         uint32_t now, ccr;
         TIM5->SR = ~TIM_SR_CC1IF;

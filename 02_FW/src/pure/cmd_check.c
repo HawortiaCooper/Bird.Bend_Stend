@@ -1,5 +1,5 @@
 /* Pure command acceptance (ICD §4.4). Implements: FW-CMD-001, FW-CFG-003, SAF-FW-006,
- * SAF-FW-020, SAF-FW-021, SAF-FW-022, SAF-FW-023, SAF-FW-024, SAF-FW-026, FW-CMD-003, FW-MOT-009,
+ * SAF-FW-020, SAF-FW-021, SAF-FW-023, SAF-FW-024, SAF-FW-026, FW-CMD-003, FW-MOT-009,
  * D-30, D-31
  */
 #include "cmd_check.h"
@@ -275,16 +275,7 @@ cmd_verdict_t cmd_check(const cmd_ctx_t *c, uint8_t type, const uint8_t *payload
         }
         return verdict(ST_OK, 0u);
     case CMD_HALT_CLEAR:
-        if (c->halt_latched) {
-            uint32_t need_ms = c->p->io.release_ms;
-            if (c->stop_btn_active) {
-                return verdict(ST_E_CAUSE_ACTIVE, PROTO_DETAIL_CAUSE_INPUT);
-            }
-            if (c->stop_btn_released_ms < need_ms) {
-                return verdict(ST_E_CAUSE_ACTIVE, need_ms - c->stop_btn_released_ms);
-            }
-        }
-        return verdict(ST_OK, 0u);
+        return verdict(ST_OK, 0u);          /* never refused since ICD v0.5 (D-36: no STOP button) */
     case CMD_RESUME: {
         /* D-31: only ESTOP, HALT and FAULT are evaluated; never E_BUSY */
         uint16_t b = 0u;

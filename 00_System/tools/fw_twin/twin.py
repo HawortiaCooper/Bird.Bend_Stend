@@ -255,6 +255,9 @@ class Twin:
                   f"W spm {w.get('steps_per_mm', 800.0)}", f"W shift {self.shift_um}",
                   f"W afe cpn {w['cell_counts_per_n']}", f"W afe offset {w['load_offset_counts']}",
                   f"W afe seed {self.seed}", f"W lsi {self.lsi_hz}", self.spec_line]
+        if getattr(self, "fault_rec", None):
+            lines.append("W faultrec %x %x" % self.fault_rec)
+            self.fault_rec = None
         afe = w.get("afe", {})
         lines += [f"W afe rate_error {afe.get('rate_error', 0.0)}", f"W afe noise {afe.get('noise_counts', 0.0)}"]
         for k, v in self.afe_cfg.items():
@@ -370,6 +373,14 @@ class Twin:
         with self.lock:
             self._flush_hold()
             while True:
+                # OBS-M1-02: timed RX bytes (rx_bytes at_us) are handed to the engine BEFORE it advances to
+                # their time, so bytes arriving during a flash stall land in the RX ring at their wire time
+                # (as the RX DMA does) instead of at the end of the stall
+                while self._heap and self._heap[0][3] == "rx_bytes" and self._heap[0][0] <= t:
+                    _, _, fn, _ = heapq.heappop(self._heap)
+                    fn()
+                    if self.eng:
+                        self.eng.flush()
                 nxt = self._heap[0][0] if self._heap else None
                 target = t if nxt is None else min(t, nxt)
                 self._engine_advance(target)
@@ -649,7 +660,7 @@ class Twin:
 
     def _a_button(self, name: str, pressed: bool, bounce_ms=None):
         if name == "stop":
-            return {"ok": False, "error": "button stop: not modelled (D-36: no separate STOP button; ICD v0.5 CR-01)"}
+            return {"ok": False, "error": "button stop: retired (ICD v0.5, CR-01 / D-36: the red button is the E-stop, use 'estop')"}
         if name != "pause":
             raise ValueError(f"button {name}")
         self._set_input("pause", lambda: self.inputs.__setitem__("pause", 0 if pressed else 1), bounce_ms)
@@ -669,7 +680,7 @@ class Twin:
         if input not in INPUT_ID:
             raise ValueError(f"wire {input}")
         if input == "stop":
-            return {"ok": False, "error": "wire stop: STOP input not modelled (D-36)"}
+            return {"ok": False, "error": "wire stop: retired (ICD v0.5, CR-01 / D-36: PC7 is no longer an input)"}
         (self.broken.add if broken else self.broken.discard)(input)
         self._push_level(input, self._level(input))
 
@@ -745,11 +756,13 @@ class Twin:
         elif fault == "link_silence":
             self.link_silence_until = end
         elif fault == "hang":
-            if where not in ("main", "tick"):
-                return {"ok": False, "error": "hang where=isr1 (isr_storm): not implemented (M2)"}
+            if where not in ("main", "tick", "isr1"):
+                return {"ok": False, "error": f"hang where={where}"}
             self._send(f"W hang {where} {min(end, 2**63)}")
-        elif fault == "isr_storm":
-            return {"ok": False, "error": "isr_storm: not implemented yet (twin, M2)"}
+        elif fault == "isr_storm":                   # level-1 ISR storm (M2): = hang where=isr1
+            if duration_ms is None:
+                return {"ok": False, "error": "isr_storm needs duration_ms"}
+            self._send(f"W hang isr1 {end}")
         elif fault in ("drop_next", "duplicate_next", "delay_next", "corrupt_next"):
             if cmd is None:
                 raise ValueError("cmd required")
@@ -767,7 +780,7 @@ class Twin:
         t = int(round(at_us * 1000))
         if t < self.now:
             return {"ok": False, "error": f"at_us {at_us} is in the past (now {self.now_us})"}
-        self.at(t, lambda: self._inject(data, self.now), "rx_bytes")
+        self.at(t, lambda: self._inject(data, t), "rx_bytes")     # injected at t (may be ahead of now)
 
     def _a_on_frame(self, cmd: str, then: dict, delay_us: float = 0, nth: int = 1):
         t = rc.CMD[cmd]
@@ -797,7 +810,10 @@ class Twin:
         self.hse_fail = bool(hse_fail)
         return {"ok": True, "note": "effective at the next boot"}
 
-    def _a_reset(self, cause: str = "pin"):
+    def _a_reset(self, cause: str = "pin", pc: int = 0x08001A2C, cfsr: int = 0x00008200):
+        if cause == "hardfault":                     # seam v1.2: HardFault record + NVIC_SystemReset (M2)
+            self.fault_rec = (int(pc) & 0xFFFFFFFF, int(cfsr) & 0xFFFFFFFF)
+            cause = "software"
         if cause not in RESET_CAUSE_OF:
             raise ValueError(f"cause {cause}")
         self._restart(cause, self.now)

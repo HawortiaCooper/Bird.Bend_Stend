@@ -69,6 +69,16 @@ void params_rt_apply(uint16_t id)
     case PID_AFE_RATE_SPS:
         afe_reconfigure();                       /* hal_hx711_config + RATE pin, settle re-armed */
         break;
+    case PID_SAFETY_LOAD_RAW_MIN:
+    case PID_SAFETY_LOAD_RAW_MAX:
+    case PID_SAFETY_LOAD_TRIP_SAMPLES:
+    case PID_SAFETY_LOAD_REGROW_RAW:
+        afe_loadlim_apply();                     /* from the next sample (SAF-FW-010) */
+        break;
+    case PID_IO_PAUSE_ACTIVE_LEVEL:
+    case PID_DRV_ALM_ACTIVE_LEVEL:
+        safety_inputs_config();                  /* HAL polarity; re-armed without a press */
+        break;
     case PID_STREAM_FALLBACK_HZ:
         if (g_fw.st.fb_running) {
             CRIT_BEGIN(HAL_CRIT_TICK);
@@ -87,4 +97,6 @@ void params_rt_apply_all(void)
 {
     params_rt_apply(PID_AFE_RATE_SPS);
     params_rt_apply(PID_STREAM_FALLBACK_HZ);
+    params_rt_apply(PID_SAFETY_LOAD_RAW_MAX);
+    params_rt_apply(PID_IO_PAUSE_ACTIVE_LEVEL);
 }

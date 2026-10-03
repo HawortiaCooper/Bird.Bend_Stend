@@ -11,9 +11,13 @@
                     are written at once through the priority lock, outside lanes, outstanding limit and bucket.
                     Motion epoch: a request carrying an older epoch is dropped before it is written (KD-04).
                     Only response **timeouts** count toward DEGRADED; a NACK is an answer (D-33 k).
+                    **NVM quiesce (D-37 a, ICD v0.5 §2.4):** while a SAVE / LOAD / DEFAULT_PARAMS is outstanding no
+                    other frame is written except the stop class (STOP, HALT, PAUSE); lane traffic and the clears
+                    are held and follow the response (or the VERIFY timeout) in submission order.
 ``StopConfirmer``   repeats STOP/HALT/PAUSE every 50 ms (≤ 20 attempts in 1 s) until ACK or the FW indication
-                    (STOP: MOVING = 0, HALT: flags.HALT, PAUSE: status.PAUSED); polls GET_STATUS with the stream
-                    off; ``stop.unconfirmed`` after 1 s.
+                    (STOP: MOVING = 0, HALT: flags.HALT, PAUSE: status.PAUSED) **produced after the FW received the
+                    command** (device-time order, D-37 d — the predicate is built by ``core.device``); polls
+                    GET_STATUS with the stream off; ``stop.unconfirmed`` after 1 s.
 ``link_state_for``  DEGRADED after 3 consecutive timeouts or 300 ms without any frame while streaming; LOST
                     after 1 s without frames.
 
@@ -65,6 +69,8 @@ DEGRADED_TIMEOUTS = 3
 DEGRADED_RX_NS = 300 * MS
 LOST_RX_NS = 1000 * MS
 FW_TX_BACKLOG_NS = 25 * MS
+NVM_CMDS = frozenset({int(pg.Cmd.SAVE_PARAMS), int(pg.Cmd.LOAD_PARAMS), int(pg.Cmd.DEFAULT_PARAMS)})
+STOP_CLASS = frozenset({int(pg.Cmd.STOP), int(pg.Cmd.HALT), int(pg.Cmd.PAUSE)})
 
 
 class Lane(IntEnum):
@@ -148,6 +154,7 @@ class Response:
     body: bytes
     t_host_ns: int
     attempts: int = 1
+    t_sent_ns: int = 0                 # write time of the request (device-time ordering, D-37 d)
 
     @property
     def ok(self) -> bool:
@@ -227,17 +234,20 @@ class CommandChannel:
         self._tokens_t = clock.monotonic_ns()
         self.on_timeout: Callable[[Request], None] | None = None
         self.on_tx_error: Callable[[Exception], None] | None = None
+        self.on_rtt: Callable[[int, int], None] | None = None     # (cmd, round-trip ns) of every response
         self.closed: Exception | None = None
+        self._held: collections.deque[Request] = collections.deque()   # priority non-stop frames held (D-37 a)
 
     # ---- lifecycle ----------------------------------------------------------------------------------
     def close(self, exc: Exception | None = None) -> None:
         exc = exc or LinkError("link closed")
         with self._lock:
             self.closed = exc
-            reqs = [r for q in self._queues.values() for r in q] + list(self._inflight.values())
+            reqs = [r for q in self._queues.values() for r in q] + list(self._inflight.values()) + list(self._held)
             for q in self._queues.values():
                 q.clear()
             self._inflight.clear()
+            self._held.clear()
         for r in reqs:
             self._fail(r, exc)
 
@@ -291,12 +301,23 @@ class CommandChannel:
                             q.remove(old)
                             self._chain(fut, old.future)     # the replaced request resolves with the newer
                             self.stats.coalesced += 1
-            if priority:
+            if priority and (cmd in STOP_CLASS or not self._quiesced_locked()):
                 self._send_locked(req, self.clock.monotonic_ns())
+            elif priority:
+                self._held.append(req)                    # a clear during SAVE/LOAD/DEFAULTS waits (D-37 a)
             else:
                 self._queues[req.lane].append(req)
                 self._pump_locked()
         return fut
+
+    # ---- NVM quiesce (D-37 a) -------------------------------------------------------------------------
+    def _quiesced_locked(self) -> bool:
+        return any(r.cmd in NVM_CMDS for r in self._inflight.values())
+
+    def quiesced(self) -> bool:
+        """True while a SAVE / LOAD / DEFAULT_PARAMS is outstanding: only STOP / HALT / PAUSE are written."""
+        with self._lock:
+            return self._quiesced_locked()
 
     def send_priority(self, cmd: int, payload: bytes = b"") -> tuple[ReleasingFuture, int | None, str | None]:
         """Write a priority command now. Returns ``(future, t_write_ns | None, error | None)``; never raises."""
@@ -334,9 +355,17 @@ class CommandChannel:
 
     def _pump_locked(self) -> None:
         now = self.clock.monotonic_ns()
+        if self._quiesced_locked():
+            return
+        while self._held:                                 # held clears first, in submission order
+            self._send_locked(self._held.popleft(), now)
+            if self._quiesced_locked():                   # pragma: no cover - clears are never NVM commands
+                return
         for lane in Lane:
             q = self._queues[lane]
             while q:
+                if self._quiesced_locked():
+                    return
                 n = self._counts()
                 if sum(n.values()) >= MAX_OUTSTANDING or n[lane] >= LANE_CAP[lane]:
                     break
@@ -398,8 +427,11 @@ class CommandChannel:
         except ValueError as exc:
             self._fail(req, exc)
         else:
-            resp = Response(req.cmd, fr.seq, r.status, r.detail, r.body, fr.t_ns or self.clock.monotonic_ns(),
-                            req.attempts)
+            t_rx = fr.t_ns or self.clock.monotonic_ns()
+            resp = Response(req.cmd, fr.seq, r.status, r.detail, r.body, t_rx, req.attempts, req.sent_ns)
+            cb = self.on_rtt
+            if cb is not None and req.cmd not in NVM_CMDS:
+                cb(req.cmd, max(0, t_rx - req.sent_ns))
             if r.status != 0:
                 self.stats.nacks += 1
                 self._fail(req, NackError(req.name, r.status, r.status_name, r.detail,

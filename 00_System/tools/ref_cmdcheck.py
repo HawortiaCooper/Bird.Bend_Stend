@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference command-acceptance model (test oracle) for ICD_protocol.md v0.4.1 §4-§6.
+"""Reference command-acceptance model (test oracle) for ICD_protocol.md v0.5 §4-§6.
 
 Implements: FW-CMD-001 (check order), FW-CFG-003 (SET_PARAM checks), SAF-FW-020 (motion
 gating), SAF-FW-006/-021/-022, FW-CMD-003, FW-MOT-004/-005/-008/-009 (acceptance only).
@@ -22,7 +22,7 @@ import ref_codec as rc
 
 MOVING_STATES = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOMING", "STOPPING")
 MOTION_CMDS = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOME")
-STATE_SCHEMA = 2        # check_vectors.json state_schema: FwState keys (F-B-25); bump on any key change
+STATE_SCHEMA = 2        # check_vectors.json state_schema (F-B-25); keys unchanged in v0.5 (stop_btn_* never set)
 SPS = {0: 10, 1: 80}    # afe.rate_sps enum code -> conversions per second (H5)
 
 
@@ -40,8 +40,8 @@ class FwState:
     estop_input_open: bool = False
     estop_closed_ms: int = 100_000  # time the sense input has been closed continuously
     halt_latched: bool = False
-    stop_btn_active: bool = False
-    stop_btn_released_ms: int = 100_000
+    stop_btn_active: bool = False             # IGNORED since ICD v0.5 (D-36), never set by a vector (key kept)
+    stop_btn_released_ms: int = 100_000       # IGNORED since ICD v0.5 (D-36), never set by a vector (key kept)
     faults: list[str] = field(default_factory=list)        # latched FAULT bits
     fault_causes: list[str] = field(default_factory=list)  # faults whose cause is still present
     limit_start: bool = False       # START limit input active or LIMIT_START latched
@@ -232,6 +232,8 @@ class Model:
         if name == "DISABLE":
             return ("E_BUSY", 1) if moving else ("OK", 0)
         if name == "ESTOP_CLEAR":
+            # an open sense input always means ESTOP (§4.3): E_CAUSE_ACTIVE 0xFFFF whether or not
+            # the latch is (already) set; the unlatched + open state is not reachable in the FW
             if st.estop_latched or st.estop_input_open:
                 if st.estop_input_open:
                     return "E_CAUSE_ACTIVE", 0xFFFF
@@ -240,13 +242,7 @@ class Model:
                     return "E_CAUSE_ACTIVE", need - st.estop_closed_ms
             return "OK", 0
         if name == "HALT_CLEAR":
-            if st.halt_latched:
-                if st.stop_btn_active:
-                    return "E_CAUSE_ACTIVE", 0xFFFF
-                need = self.value(st, "io.release_ms")
-                if st.stop_btn_released_ms < need:
-                    return "E_CAUSE_ACTIVE", need - st.stop_btn_released_ms
-            return "OK", 0
+            return "OK", 0      # D-36 (v0.5): no STOP button -> HALT_CLEAR is never refused
         if name == "RESUME":
             # D-31: clears only PAUSED; refused while ESTOP (latched or input open), HALT or any
             # FAULT is latched; no other BLOCK bit is evaluated; never E_BUSY (no motion start)

@@ -1,6 +1,7 @@
 /* Seam v1 - step generator / ENA (tools/README "Seam v1", FW_design §5.6, §8.1).
- * Target: hal/f446/step_tim2.c (M2). M1: no step generation (motion commands NOT_IN_BUILD); the
- * core defines the step_isr() callback as an M1 stub (core/m1_stubs.c) and calls no hal_step_*.
+ * Target: hal/f446/step_tim2.c. Core: core/motion.c (step_isr() callback, ramp, segments).
+ * hal_step_set_dir(dir): +-1 logical direction; +-2 = logical direction with the DIR output inverted
+ * (motion.dir_invert) - interim encoding, seam request SR-M2-01 (the HAL counts by the sign).
  * Implements: FW-MOT-001, SAF-FW-002/004, SYS-008
  */
 #ifndef HAL_STEP_H

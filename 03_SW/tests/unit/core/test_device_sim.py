@@ -224,13 +224,11 @@ def test_halt_clear_dropped_response_one_frame_and_resolution(be) -> None:
 @pytest.mark.req("SW-STOP-003")
 def test_clears_refused_and_fault_clear(be) -> None:
     h, sim = be.test_hooks, be.sim
-    sim.act("button", name="stop", pressed=True)
+    assert not sim.act("button", name="stop", pressed=True)["ok"]       # retired (ICD v0.5, D-36 / CR-01)
+    be.halt("test")
     h.advance(50)
-    res = h.result(be.clear_stop_async())
-    assert res.outcome == "REFUSED" and "STOP input" in res.text
-    sim.act("button", name="stop", pressed=False)
-    h.advance(50)
-    assert h.result(be.clear_stop_async()).confirmed
+    res = h.result(be.clear_stop_async())                                # never refused since ICD v0.5
+    assert res.confirmed and res.cleared == ("HALT",)
     sim.act("afe", saturate="pos")
     h.advance(100)
     sim.act("afe", saturate=None)

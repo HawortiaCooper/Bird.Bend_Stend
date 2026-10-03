@@ -2,11 +2,11 @@
 
 | Doc | ICD_protocol |
 |---|---|
-| Version | **0.4.1 — final P1 draft** (change history §15) |
+| Version | **0.5 — M1 gate / CR-01** (change history §15) |
 | Date | 2026-10-03 |
 | Owner | Implementer C — Integrator (changes only with a version bump + change-history entry, IF-001) |
-| Implements | SRS v0.3: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34; SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
-| Protocol | **PROTO_VERSION 1.0**, **PAYLOAD_VERSION 1**, dictionary `params.yaml` dict_version 3 (hash in Appendix A) |
+| Implements | SRS v0.5: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34, D-36, D-37; SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
+| Protocol | **PROTO_VERSION 1.0**, **PAYLOAD_VERSION 1**, dictionary `params.yaml` dict_version 4 (hash in Appendix A) |
 | Machine-readable companions | `00_System/specs/protocol.yaml` (names and codes, §0.3, Appendix B), `00_System/specs/params.yaml` (parameters, Appendix A), `00_System/tools/ref_codec.py` (codec oracle), `ref_cmdcheck.py` (acceptance oracle), `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (§12) |
 | Origin | framing, CRC, parser, PARAM_ENTRY, NVM and versioning rules follow Thrust_Stand_HAW `00_System/specs/ICD_protocol.md` @9473c68 (trimmed per R3 §1.6) |
 
@@ -25,8 +25,10 @@
 - **µm ↔ steps (normative, SYS-003, OI-FW-20):** with `spm` = the binary32 value of `motion.steps_per_mm`,
   evaluated in IEEE-754 binary64 left to right: `steps = round(um · spm / 1000)`,
   `um = round(steps · 1000 / spm)` (round = half away from zero, C99 `round()`), speed cap
-  `floor(max_step_rate_hz · 1000 / spm)` (§5.4). Any other arithmetic (float32, fixed point) MUST reproduce
-  `vectors/units_vectors.json` exactly (tie cases included).
+  `floor(max_step_rate_hz · 1000 / spm)` (§5.4). Results **saturate**: µm and steps to the int32 range
+  [−2³¹, 2³¹−1], the speed cap to [0, 2³²−1] (OBS-M1-05; not reachable with the parameter ranges, defined
+  for completeness). Any other arithmetic (float32, fixed point) MUST reproduce
+  `vectors/units_vectors.json` exactly (tie and saturation cases included).
 - Machine coordinate: x = 0 at the home reference, **+x points from the START switch toward the END
   switch** (`motion.dir_invert` is set at the hardware gate so that this holds). LIMIT_START is the −x end,
   LIMIT_END the +x end.
@@ -153,7 +155,15 @@ identical to `ref_codec.FrameParser` on all `streams` vectors).
   are never dropped**.
 - SW: STOP, HALT, PAUSE and the clear commands are written through a priority path that bypasses every SW
   queue, lane, rate limit and outstanding-command limit; the longest wait is one frame already being written
-  (IF-011, NFR-002/003).
+  (IF-011, NFR-002/003). RESUME is **not** on the priority path: it is sent on the normal (CONTROL) lane in
+  order with the motion commands that follow it (D-37c).
+- **SAVE exemption (D-37a, OBS-M1-01):** a SAVE_PARAMS (idle only) stalls the CPU for the flash erase +
+  program (≈ 0.5 s with an erase). Command frames received meanwhile are buffered in the RX ring and answered
+  **after** the flash operation; this exempts them from the 10 ms response time (§9.1) and, for STOP/HALT/PAUSE,
+  from the stop-path budget — acceptable because no motion is possible during a SAVE. The SW therefore sends
+  **no non-stop command while a SAVE is outstanding** (until its response or the VERIFY resolution, §9.3);
+  stop-class frames (STOP, HALT, PAUSE) stay allowed and are executed right after the flash operation, so the
+  RX ring (2 KB) cannot overflow.
 
 ---
 
@@ -203,7 +213,7 @@ Generated from `protocol.yaml` `commands` (C `CMD_*`, `CMD_REQ_LEN_*`; Python `C
 | `0x35` | MOVE_UNTIL_LOAD | `i32 bound_um, u32 v_um_s, u32 a_um_s2, i32 raw_stop, u8 cmp` (17) | – | VERIFY | – | FW-MOT-006 |
 | `0x36` | STOP | `u8 mode` (stop_mode): 0 = immediate, 1 = controlled (1) | – | CONFIRM | priority / sniffed | FW-MOT-007, SW-STOP-001 |
 | `0x37` | HALT | – (0) | – | CONFIRM | priority / sniffed | FW-MOT-007, SW-STOP-002 |
-| `0x38` | HALT_CLEAR | – (0) | – | VERIFY (priority lane, D-34) | priority | FW-MOT-007, SAF-FW-022, SAF-FW-023, D-34 |
+| `0x38` | HALT_CLEAR | – (0) | – | VERIFY (priority lane, D-34) | priority | FW-MOT-007, SAF-FW-023, D-34, D-36 |
 | `0x39` | ESTOP_CLEAR | – (0) | – | VERIFY (priority lane, D-34) | priority | SAF-FW-006, D-34 |
 | `0x3A` | FAULT_CLEAR | – (0) | `u16 cleared` (FAULT mask §7.6) | VERIFY (priority lane, D-34) | priority | FW-CMD-003, SAF-FW-011, D-34 |
 | `0x3B` | PAUSE | – (0) | – | CONFIRM | priority / sniffed | SAF-FW-023, D-14, D-26, D-29a |
@@ -247,7 +257,7 @@ Generated from `protocol.yaml` table `status_code` (C `ST_*`, Python `Status`).
 | 6 | `E_CONFIG` | SET_PARAM violates a hard rule (§11.4) | id of the other parameter of the rule |
 | 7 | `E_BUSY` | not possible now, retry later | busy_detail (Appendix B): 1 = MOTION (moving, homing or stopping), 2 = ENABLING (ENA settle running) |
 | 8 | `E_STATE` | motion / enable / RESUME refused in the current state | BLOCK mask (§4.3): all blocking conditions evaluated for that command |
-| 9 | `E_CAUSE_ACTIVE` | clear refused, cause still present | ESTOP_CLEAR: 0xFFFF = sense input open, else ms still missing until io.estop_release_ms; HALT_CLEAR: 0xFFFF = STOP button active, else ms still missing until io.release_ms; FAULT_CLEAR: FAULT mask (§7.6) of the latched faults whose cause is still present |
+| 9 | `E_CAUSE_ACTIVE` | clear refused, cause still present | ESTOP_CLEAR: 0xFFFF = sense input open (latched or not), else ms still missing until io.estop_release_ms; HALT_CLEAR: never refused since v0.5 (D-36); FAULT_CLEAR: FAULT mask (§7.6) of the latched faults whose cause is still present |
 | 10 | `E_CONFIRM` | HOME with load above home.max_load_raw without the confirmed flag | 0 |
 | 11 | `E_NVM` | NVM failure | nvm_detail (Appendix B): 1 = no valid record (LOAD), 2 = erase/program error, 3 = verify error |
 | 12 | `E_INTERNAL` | implementation error or command not in this build; nothing executed | internal_detail (Appendix B): 1 = NOT_IN_BUILD, 2 = INVARIANT; other values implementation-defined |
@@ -265,7 +275,7 @@ Generated from `protocol.yaml` table `block` (C `BLOCK_*`, Python `Block`).
 | Bit | Name | Meaning |
 |---|---|---|
 | 0 | `ESTOP` | ESTOP latched or E-stop sense input open (also evaluated by RESUME) |
-| 1 | `HALT` | HALT latched (also evaluated by RESUME) |
+| 1 | `HALT` | HALT latched (PC: HALT command / Pause-Break key) (also evaluated by RESUME) |
 | 2 | `FAULT` | any FAULT latched (§7.6) (also evaluated by RESUME) |
 | 3 | `NOT_ENABLED` | motion state NOT_ENABLED (ENABLE never done, or DISABLE / E-stop / idle disable / driver power loss since) |
 | 4 | `NOT_HOMED` | MOVE_ABS, MOVE_UNTIL_LOAD or JOG with a bound while not homed |
@@ -319,7 +329,7 @@ drains TX and resets ≤ 50 ms later (boot behaviour §6.4; EVENT BOOT follows).
 
 ### 5.2 Parameters and NVM (FW-CFG-001…003, FW-NVM-001…003)
 **GET_ALL_PARAMS** — entries in ascending id order; page p holds table indices `20·p … 20·p+19`;
-`page_count = ceil(PARAM_COUNT / 20)` (dict_version 2: 48 parameters → 3 pages, 152/152/68 B frames);
+`page_count = ceil(PARAM_COUNT / 20)` (dict_version 4: 47 parameters → 3 pages, 152/152/61 B frames);
 `page ≥ page_count` → `E_RANGE` (detail 0). Reading pages 0..page_count−1 returns every parameter exactly
 once with its current RAM value (FW-CFG-002).
 
@@ -341,9 +351,10 @@ kept, RAM unchanged. Response ≤ 2.5 s (NFR-008). HX711 conversions missed duri
 `OVERRUN` in the next DATA frame (FW-NVM-003). Duration → STATUS `nvm_save_ms`.
 
 **LOAD_PARAMS** — moving → `E_BUSY` 1. Applies boot rules 3–5 (§11.3) to the newest valid record; session
-parameters (`nvm: false`) keep their RAM values. No valid record → `E_NVM` 1, RAM unchanged; a record that
-violates a hard rule → `E_NVM` 1, RAM unchanged. EVENT PARAMS_LOADED (arg = values replaced by defaults) or,
-for a record with another dictionary hash, PARAMS_DEFAULTED (arg 3).
+parameters (`nvm: false`) keep their RAM values. No valid record → `E_NVM` 1, RAM unchanged, **no EVENT**; a
+record that violates a hard rule → `E_NVM` 1, RAM unchanged, **no EVENT** (nothing was loaded or defaulted;
+OBS-M1-03). On success: EVENT PARAMS_LOADED (arg = values replaced by defaults) or, for a record with another
+dictionary hash, PARAMS_DEFAULTED (arg 3).
 
 **DEFAULT_PARAMS** — moving → `E_BUSY` 1. RAM = defaults for **all** parameters incl. session values (FW load
 thresholds back to ±7 022 271, SAF-FW-010); NVM untouched; EVENT PARAMS_DEFAULTED (arg 0). The SW MUST
@@ -440,7 +451,7 @@ the remaining settle time in ms (0 if already enabled = no-op). (FW-MOT-008, D-2
 **DISABLE** — moving → `E_BUSY` 1. Drives ENA to the disabled level, clears ENABLED and HOMED, EVENT
 DRIVER_DISABLED (arg 1). The SW asks "specimen unloaded?" first (SAF-SW-004).
 
-### 5.5 Stops, pause and clears (FW-MOT-007, SAF-FW-001…006, SAF-FW-022/023, D-14, D-26)
+### 5.5 Stops, pause and clears (FW-MOT-007, SAF-FW-001…006, SAF-FW-023, D-14, D-26, D-36)
 STOP, HALT, HALT_CLEAR, PAUSE, ESTOP_CLEAR and FAULT_CLEAR are accepted in **every** state (no `E_STATE` /
 `E_BUSY`) and are idempotent. RESUME is idempotent but refused (`E_STATE`) while ESTOP, HALT or a FAULT is
 latched. **No clear and no RESUME ever starts motion.**
@@ -450,13 +461,14 @@ command byte, SAF-FW-002), 1 = controlled stop (`motion.a_stop_um_s2`). Not latc
 target and ramp state are discarded (SAF-FW-001); VALID cleared (also when idle). EVENT STOPPED (cause
 PC_STOP / PC_STOP_CONTROLLED) if a motion was running.
 
-**HALT** — immediate stop + **HALT latch** (`halt_src` = PC unless already latched by the button) + VALID
-cleared; EVENT HALT_SET (arg = source) on the first HALT only. Motion refused (`E_STATE` HALT) until
+**HALT** — immediate stop + **HALT latch** (`halt_src` = PC: the HALT command, sent for GUI HALT and the
+Pause/Break key) + VALID cleared; EVENT HALT_SET (arg = 1 PC) on the first HALT only. Since v0.5 there is no
+physical holding STOP/BREAK button and no HALT source BUTTON (D-36, CR-01; SAF-FW-022 withdrawn): the single red
+mushroom button is the E-stop (power cut + sense, §6.2 E-stop row). Motion refused (`E_STATE` HALT) until
 HALT_CLEAR.
 
-**HALT_CLEAR** — if HALT is latched: refused with `E_CAUSE_ACTIVE` while the physical STOP button is active or
-released for less than `io.release_ms` (the NACK has no effect: PAUSED is kept too); otherwise clears HALT
-(EVENT HALT_CLEARED). An accepted HALT_CLEAR also clears **PAUSED** if set — whether or not HALT was latched
+**HALT_CLEAR** — never refused (no cause input since v0.5, D-36): clears HALT if latched (EVENT
+HALT_CLEARED). An accepted HALT_CLEAR also clears **PAUSED** if set — whether or not HALT was latched
 (EVENT PAUSE_CLEARED arg 2 = HALT_CLEAR; D-31: a HALT terminates the sequence, so the pause ends with it). No
 motion restarts (SW-STOP-003). Nothing latched → OK, no other effect.
 
@@ -540,7 +552,6 @@ NOT_ENABLED.
 | E-stop sense opens | immediate (≤ 100 µs) | disabled ≤ 1 ms | ESTOP → ESTOP_CLEAR (input closed ≥ `io.estop_release_ms`), then ENABLE + HOME | cleared | cleared | ESTOP_SET, STOPPED (ESTOP), DRIVER_DISABLED (3) |
 | PC STOP | immediate / controlled | kept | none | kept | cleared | STOPPED |
 | PC HALT | immediate | kept | HALT (PC) → HALT_CLEAR | kept | cleared | HALT_SET, STOPPED |
-| physical STOP/BREAK button | immediate (≤ 200 µs) | kept | HALT (BUTTON) → released ≥ `io.release_ms` + HALT_CLEAR | kept | cleared | STOP_BUTTON, HALT_SET, STOPPED |
 | physical PAUSE button / PC PAUSE | controlled (if moving) | kept | PAUSED (`pause_src` BUTTON / PC): new motion refused (BLOCK PAUSED); cleared **only** by RESUME or HALT_CLEAR (D-30, D-31, §5.5); button press while PAUSED → RESUME_REQUEST only | kept | cleared | PAUSE_BUTTON (button only), PAUSED (arg = source), STOPPED (PAUSE_BUTTON / PC_PAUSE) |
 | limit switch while moving | immediate (≤ 200 µs) | kept | LIMIT_x → auto-clear when the input has been released continuously for `io.release_ms`; while latched only motion **away** from the switch is accepted (BLOCK LIMIT toward it) (D-33h) | kept | cleared | LIMIT_SET, STOPPED, LIMIT_CLEARED |
 | both limit inputs active | immediate | kept | fault LIMIT_WIRING → both released + FAULT_CLEAR | kept | cleared | FAULT_SET, STOPPED |
@@ -594,7 +605,8 @@ is assumed present and K1_WELDED is never detected). The DRV_POWER input is debo
 | JOG ≠ 0 | S(NOT_ENABLED) | B(2) | ✓ | JOG: ✓, else B | B | S(ESTOP) | S(HALT) | S(FAULT) | S(PAUSED) (also refreshes) | ✓ (≤ v_unhomed, no bound) |
 | HOME | S(NOT_ENABLED) | B(2) | ✓ (E_CONFIRM if loaded) | B | B | S(ESTOP) | S(HALT) | S(FAULT) | S(PAUSED) | ✓ |
 | JOG 0, STOP, HALT, PAUSE | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| HALT_CLEAR / ESTOP_CLEAR / FAULT_CLEAR | ✓ | ✓ | ✓ | ✓ | ✓ | C while cause active | C while cause active | C while cause active | ✓ (HALT_CLEAR clears PAUSED) | ✓ |
+| HALT_CLEAR | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (clears HALT) | ✓ | ✓ (clears PAUSED) | ✓ |
+| ESTOP_CLEAR / FAULT_CLEAR | ✓ | ✓ | ✓ | ✓ | ✓ | C while cause active (ESTOP_CLEAR) | ✓ | C while cause active (FAULT_CLEAR) | ✓ | ✓ |
 | RESUME | ✓ | ✓ | ✓ | ✓ (no-op) | ✓ | S(ESTOP) | S(HALT) | S(FAULT) | ✓ (clears PAUSED) | ✓ |
 
 Additional refusals of motion commands: LIMIT toward an active/latched switch, AFE stale/saturated,
@@ -605,7 +617,7 @@ blocking bit.
 PUL idle from reset release; ENA left at the "no current" level (driver enabled, holding) unless the E-stop
 input is open **or** (`drv.pwr_sense_enable` and DRV_POWER reads off) — then the disabled level, so the driver
 comes up disabled when K1 is reset (OI-FW-22, consistent with §6.2); motion state NOT_ENABLED; HOMED = 0;
-VALID = 0; PAUSED = 0; stream off; inputs active at boot (E-stop, limits, STOP button) are latched/reported
+VALID = 0; PAUSED = 0; stream off; inputs active at boot (E-stop, limits) are latched/reported
 from the first GET_STATUS and refuse motion accordingly; parameters per §11.3; EVENT BOOT queued (arg = reset
 cause; value / value2 = faulting PC / CFSR of a HardFault recorded before the reset, else 0 / 0; OI-FW-21).
 
@@ -657,7 +669,7 @@ Generated from `protocol.yaml` table `features` (C `FEAT_*`, Python `Features`).
 | 4 | `MOVE_UNTIL_LOAD` | MOVE_UNTIL_LOAD command |
 | 5 | `NVM` | SAVE/LOAD_PARAMS |
 | 6 | `TWIN` | host twin build |
-| 7 | `BUTTONS` | STOP/PAUSE inputs |
+| 7 | `BUTTONS` | PAUSE button input (the STOP/BREAK input is retired, D-36) |
 | 8 | `DRV_SIGNALS` | ALM/PEND/DRV_POWER inputs |
 | 9–31 | — | reserved (0) |
 
@@ -753,7 +765,14 @@ counted; EVENTs are sent whether or not the stream is on.
 | 3 | u8[4] | `value`: little-endian in the low `sizeof(type)` bytes, padding bytes = 0; f32 = binary32; bool 0/1; enum = code |
 
 ### 7.6 Bit tables
-Reserved bits are sent as 0 and ignored by receivers.
+Reserved and **retired** bits are sent as 0 and ignored by receivers; a retired bit position is never reused
+(D-36: STOP_BTN in `status` bit 9 and `io` bit 3).
+
+**Feature-dependent bits (D-37b, IF-C-M1-02):** a bit marked "Valid only with `FEAT_x`" (DATA/STATUS
+`status` PAUSE_BTN, ALM, PEND, DRV_PWR; STATUS `io` PAUSE_BTN, ALM, PEND, DRV_PWR) is **sent as 0 while that
+INFO feature bit is 0** and is then **invalid**: the SW shows it as UNKNOWN (not "inactive"), never as a
+measured value. The simulator mirrors the FW feature mask (single source: `protocol.yaml` `feature:`, Python
+`<ID>_FEATURE`).
 
 **DATA `flags` (u8)** (also STATUS `flags`):
 
@@ -768,7 +787,7 @@ Generated from `protocol.yaml` table `data_flags` (C `DF_*`, Python `DataFlags`)
 | 2 | `HOMED` | machine zero valid |
 | 3 | `ENABLED` | driver enabled and settled (motion state ≥ IDLE) |
 | 4 | `ESTOP` | ESTOP latched or E-stop sense input open |
-| 5 | `HALT` | HALT latched (source: STATUS halt_src) |
+| 5 | `HALT` | HALT latched (PC HALT command / Pause-Break key; STATUS halt_src = PC) |
 | 6 | `FAULT` | any FAULT latched (STATUS faults) |
 | 7 | `OVERRUN` | ≥ 1 DATA frame dropped or ≥ 1 conversion missed by the FW since the previous sent frame |
 
@@ -780,24 +799,24 @@ Generated from `protocol.yaml` table `data_flags` (C `DF_*`, Python `DataFlags`)
 
 Generated from `protocol.yaml` table `data_status` (C `DS_*`, Python `DataStatus`).
 
-| Bit | Name | Meaning |
-|---|---|---|
-| 0 | `PAUSED` | PAUSED latch (source: STATUS pause_src, EVENT PAUSED arg); blocks new motion (BLOCK PAUSED); cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (§5.5, D-30, D-31) |
-| 1 | `LIMIT_START` | START limit input active or LIMIT_START latched |
-| 2 | `LIMIT_END` | END limit input active or LIMIT_END latched |
-| 3 | `LOAD_LIMIT` | FAULT LOAD_LIMIT latched |
-| 4 | `AFE_STALE` | no HX711 sample for afe.timeout_ms |
-| 5 | `AFE_SATURATED` | this sample at a rail |
-| 6 | `AFE_SETTLING` | sample within afe.settle_discard after a (re)configuration |
-| 7 | `AFE_RATE_MISMATCH` | measured rate deviates more than afe.rate_tol_pct |
-| 8 | `LINK_WDG` | link watchdog tripped, until the next valid command frame |
-| 9 | `STOP_BTN` | physical STOP/BREAK button input active |
-| 10 | `PAUSE_BTN` | physical PAUSE button input active |
-| 11 | `ALM` | driver ALM active |
-| 12 | `PEND` | driver PEND (in position) active |
-| 13 | `POS_UNCERTAIN` | an immediate stop may have truncated a pulse (±1 step), cleared by the next HOME |
-| 14 | `NO_AFE_DATA` | fallback frame (afe_raw = 0x80000000) |
-| 15 | `DRV_PWR` | driver power present (reads 1 when drv.pwr_sense_enable = false) |
+| Bit | Name | Meaning | Valid only with |
+|---|---|---|---|
+| 0 | `PAUSED` | PAUSED latch (source: STATUS pause_src, EVENT PAUSED arg); blocks new motion (BLOCK PAUSED); cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (§5.5, D-30, D-31) | – |
+| 1 | `LIMIT_START` | START limit input active or LIMIT_START latched | – |
+| 2 | `LIMIT_END` | END limit input active or LIMIT_END latched | – |
+| 3 | `LOAD_LIMIT` | FAULT LOAD_LIMIT latched | – |
+| 4 | `AFE_STALE` | no HX711 sample for afe.timeout_ms | – |
+| 5 | `AFE_SATURATED` | this sample at a rail | – |
+| 6 | `AFE_SETTLING` | sample within afe.settle_discard after a (re)configuration | – |
+| 7 | `AFE_RATE_MISMATCH` | measured rate deviates more than afe.rate_tol_pct | – |
+| 8 | `LINK_WDG` | link watchdog tripped, until the next valid command frame | – |
+| 9 | ~~`STOP_BTN`~~ | **retired in v0.5**: reserved, sent as 0, never reused — was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) | – |
+| 10 | `PAUSE_BTN` | physical PAUSE button input active | `FEAT_BUTTONS` |
+| 11 | `ALM` | driver ALM active | `FEAT_DRV_SIGNALS` |
+| 12 | `PEND` | driver PEND (in position) active | `FEAT_DRV_SIGNALS` |
+| 13 | `POS_UNCERTAIN` | an immediate stop may have truncated a pulse (±1 step), cleared by the next HOME | – |
+| 14 | `NO_AFE_DATA` | fallback frame (afe_raw = 0x80000000) | – |
+| 15 | `DRV_PWR` | driver power present (reads 1 when drv.pwr_sense_enable = false and FEAT_DRV_SIGNALS = 1) | `FEAT_DRV_SIGNALS` |
 
 <!-- END GENERATED protocol:data_status -->
 
@@ -830,19 +849,19 @@ Generated from `protocol.yaml` table `faults` (C `FAULT_*`, Python `Faults`).
 
 Generated from `protocol.yaml` table `io` (C `IO_*`, Python `IoBits`).
 
-| Bit | Name | Meaning |
-|---|---|---|
-| 0 | `ESTOP_OPEN` | E-stop sense input open |
-| 1 | `LIMIT_START` | START limit input active |
-| 2 | `LIMIT_END` | END limit input active |
-| 3 | `STOP_BTN` | STOP/BREAK button input active |
-| 4 | `PAUSE_BTN` | PAUSE button input active |
-| 5 | `ALM` | driver ALM input active |
-| 6 | `PEND` | driver PEND input active |
-| 7 | `DRV_PWR` | raw driver-power sense input 'powered' |
-| 8 | `ENA_DISABLED` | ENA output at the disabled level |
-| 9 | `RATE_80` | HX711 RATE output high |
-| 10–15 | — | reserved (0) |
+| Bit | Name | Meaning | Valid only with |
+|---|---|---|---|
+| 0 | `ESTOP_OPEN` | E-stop sense input open | – |
+| 1 | `LIMIT_START` | START limit input active | – |
+| 2 | `LIMIT_END` | END limit input active | – |
+| 3 | ~~`STOP_BTN`~~ | **retired in v0.5**: reserved, sent as 0, never reused — was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) | – |
+| 4 | `PAUSE_BTN` | PAUSE button input active | `FEAT_BUTTONS` |
+| 5 | `ALM` | driver ALM input active | `FEAT_DRV_SIGNALS` |
+| 6 | `PEND` | driver PEND input active | `FEAT_DRV_SIGNALS` |
+| 7 | `DRV_PWR` | raw driver-power sense input 'powered' | `FEAT_DRV_SIGNALS` |
+| 8 | `ENA_DISABLED` | ENA output at the disabled level | – |
+| 9 | `RATE_80` | HX711 RATE output high | – |
+| 10–15 | — | reserved (0) | – |
 
 <!-- END GENERATED protocol:io -->
 
@@ -865,7 +884,7 @@ Generated from `protocol.yaml` table `event` (C `EV_*`, Python `Event`).
 | 3 | `MOVE_DONE` | move_done_reason (§8.3) | final pos_um / pos_steps |
 | 4 | `ESTOP_SET` | 0 | pos_um / pos_steps |
 | 5 | `ESTOP_CLEARED` | 0 | 0 / 0 |
-| 6 | `HALT_SET` | source: 1 PC, 2 BUTTON | 0 / 0 |
+| 6 | `HALT_SET` | source: 1 PC (HALT command / Pause-Break key); 2 BUTTON never since v0.5 (D-36) | 0 / 0 |
 | 7 | `HALT_CLEARED` | 0 | 0 / 0 |
 | 8 | `PAUSED` | source: 1 PC, 2 BUTTON (sent when PAUSED goes 0 → 1 only) | 0 / 0 |
 | 9 | `PAUSE_CLEARED` | pause_cleared_reason: 2 HALT_CLEAR, 3 RESUME (code 1 unused since ICD v0.3) | 0 / 0 |
@@ -881,7 +900,7 @@ Generated from `protocol.yaml` table `event` (C `EV_*`, Python `Event`).
 | 19 | `HOME_FAILED` | home_fail_reason: 1 NOT_FOUND, 2 WIRING, 3 ABORTED | pos_um / pos_steps |
 | 20 | `DRIVER_ENABLED` | 0 | 0 / 0 |
 | 21 | `DRIVER_DISABLED` | driver_disabled_cause: 1 PC DISABLE, 2 IDLE, 3 ESTOP, 4 DRV_POWER_LOST | 0 / 0 |
-| 22 | `STOP_BUTTON` | 1 pressed, 0 released (debounced) | 0 / 0 |
+| 22 | ~~`STOP_BUTTON`~~ | **retired in v0.5**: never sent, code never reused — was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) | – |
 | 23 | `PAUSE_BUTTON` | 1 pressed, 0 released | 0 / 0 |
 | 24 | `ALM_CHANGED` | 1 active, 0 inactive | 0 / 0 |
 | 25 | `AFE_REINIT` | re-init count (low 16 bit) | 0 / 0 |
@@ -908,7 +927,7 @@ Generated from `protocol.yaml` table `stop_cause` (C `SC_*`, Python `StopCause`)
 | 1 | `PC_STOP` | STOP mode 0 |
 | 2 | `PC_STOP_CONTROLLED` | STOP mode 1 |
 | 3 | `PC_HALT` | HALT command |
-| 4 | `STOP_BUTTON` | physical STOP/BREAK button |
+| 4 | ~~`STOP_BUTTON`~~ | **retired in v0.5**: never sent, code never reused — was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) |
 | 5 | `PAUSE_BUTTON` | physical PAUSE button |
 | 6 | `PC_PAUSE` | PAUSE command |
 | 7 | `ESTOP` | E-stop sense opened |
@@ -953,7 +972,7 @@ Argument enums of the other EVENTs (`source`, `pause_cleared_reason`, `home_fail
   cleared, EVENTs LINK_WDG + STOPPED; LINK_WDG clears at the next valid command frame (EVENT LINK_RESTORED);
   no motion restarts. Checked at ≥ 1 kHz (deceleration starts ≤ timeout + 2 ms).
 - **Response time**: ≤ 10 ms from the last command byte to the first response byte; SAVE/LOAD/DEFAULT_PARAMS
-  ≤ 2.5 s (NFR-008). STOP/HALT: no further PUL edge ≤ 2 ms after the last command byte (SAF-FW-002).
+  ≤ 2.5 s (NFR-008); commands received during a SAVE flash operation: after it (§2.4 SAVE exemption, D-37a). STOP/HALT: no further PUL edge ≤ 2 ms after the last command byte (SAF-FW-002).
 - **Input capacity**: bursts of up to 4 commands back-to-back (RX DMA ring ≥ 1 KB, overflow counted).
 - Time intervals scale with the clock: on the HSI fallback (`CLK_FALLBACK`) up to ±1 %.
 
@@ -998,8 +1017,11 @@ streaming; LOST after 1 s without frames; during motion, no DATA for > 500 ms �
 ### 9.4 Confirming STOP / HALT / PAUSE with the stream off (F-B-05, SW-STOP-002)
 The ACK proves reception and execution (the stop is executed before the response is sent). Without an ACK,
 the SW keeps repeating (§9.3) and polls GET_STATUS: `flags.MOVING = 0` (STOP), `flags.HALT` (HALT),
-`status.PAUSED` (PAUSE). If neither arrives within 1 s the SW alarms "use the physical STOP / E-stop"; the
-FW link watchdog stops a motion whose PC went silent.
+`status.PAUSED` (PAUSE). An indication confirms the stop only if it was produced **after the FW received the
+STOP** — ordered by device time (`t_us` of the DATA frame / STATUS ≥ the device receive time of the STOP,
+estimated from the PC–device time pairing), never by PC receive stamps alone (D-37d, OBS-M1-R1). If none
+arrives within 1 s the SW alarms "use the red E-stop button"; the FW link watchdog stops a motion whose PC
+went silent.
 
 ### 9.5 Connect sequence and version negotiation (IF-008, SW-PLT-003)
 1. Open the port; feed pending bytes to a fresh parser (stale responses have no pending SEQ and are ignored,
@@ -1060,8 +1082,8 @@ previous record valid. Boot (and LOAD steps 3–5):
 4. Different hash → **migration by id**: entries whose id exists with the same type and an in-range value
    are kept, everything else defaulted; CFG_DIRTY = 1, NVM_DEFAULTED, PARAMS_DEFAULTED (3). Safe because an
    id never changes type, unit or meaning.
-5. The resulting image violates a hard rule → all defaults (boot) / `E_NVM` 1 and RAM unchanged (LOAD);
-   PARAMS_DEFAULTED (4).
+5. The resulting image violates a hard rule → boot: all defaults + EVENT PARAMS_DEFAULTED (4); LOAD: `E_NVM` 1,
+   RAM unchanged, no EVENT (OBS-M1-03).
 Session parameters always start at their defaults. Flash erase/program only while idle (FW-NVM-003).
 
 ### 11.4 Hard rules (SET_PARAM → `E_CONFIG`, detail = id of the other parameter)
@@ -1110,8 +1132,12 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
     the state keys: keys are only added, never renamed or removed, and every addition bumps it (F-B-25).
   - `vectors/units_vectors.json` (v0.4, OI-FW-20, M1): µm → steps, steps → µm and step-rate speed cap for
     8 steps/mm values incl. ties (§0.1).
-  - `vectors/motion_vectors.json` (**planned for M2**, OI-FW-20): R4 §12 TV-M ramp periods and planner from the
-    same generator; FW float32 tolerance ±1 tick per period, sum ±N/1000 ticks.
+  - `vectors/motion_vectors.json` (M2, OI-FW-20; definitions in `00_System/tools/ref_motion.py`): step periods
+    of position moves (R4 TV-M trapezoid / triangle / asymmetric, defaults, slow move), controlled stops in
+    cruise / acceleration / near the end (stop sized `r0 = ceil(v²/2a_stop)`, never faster than the current
+    period, so the deceleration never exceeds `motion.a_stop_um_s2`), JOG on-the-fly speed changes (speed-up
+    resumes the accel index from the exact current speed), the §6.5 stop-path rule (CLEAN / ISR / STRETCH) and
+    the planner; FW float32 tolerance ±1 tick per period, sum ±N/1000 ticks; the SW simulator matches exactly.
 - `00_System/tools/gen_params.py` — dictionary generator (§11.1); also runs `gen_protocol.py` (protocol name
   registry `protocol.yaml` → `proto_gen.h`, `protocol_gen.py`, generated ICD tables, §0.3).
 - FW host tests and SW pytest MUST (a) decode every vector frame to `decoded`, (b) re-encode `decoded` to the
@@ -1145,6 +1171,8 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 | D-29 (a) / (b) / (c) / (d) | §5.5 + §7.2 / §5.4 + App. A / §6.2 + §7.6 / §6.5 |
 | D-30 (PAUSED blocks motion, clean-halt condition) | §4.3, §5.4, §5.5, §6.2, §6.3, §6.5 |
 | D-31 (RESUME 0x3C) | §3.2, §4.3, §5.5, §6.3, §9.3, App. B |
+| D-36 / CR-01 (no physical holding STOP) | §5.5, §6.2, §6.3, §6.4, §7.6, §8, App. A/B |
+| D-37 (a) / (b) / (c) / (d) | §2.4 + §9.1 / §7.6 / §2.4 / §9.4 |
 | D-33 (a) / (f) / (g) / (h) / (k) | §11.4 + App. A / §6.2 / §6.2 + §7.2 / §6.2 / §9.3 |
 | OI-FW-17 / 18 / 19 / 20 / 21 / 22 / 23 | `tools/README.md` seams / §2.4 / §2 / §0.1 + §12 / §4.2 + §6.4 / §6.4 / §5.4 |
 | GF-01 / GF-08 / OI-FW-11 | §5.5, §7.2 / §0.3, App. B / §0.3, App. B |
@@ -1176,11 +1204,16 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 | SD-14 | **D-31 / D-33 SRS deltas:** IF-012 + RESUME (0x3C); SAF-FW-023 RESUME semantics; IF-005 RESUME never auto-retried; SAF-FW-012 hard rule H5 and `afe.timeout_ms` default 250 ms (Table 5.1: min 25, default 250); SAF-FW-017 no idle disable while stale; SAF-FW-013 limit latch clear = released ≥ `io.release_ms`, only motion away while latched; SAF-FW-024/025 timing bounds (NVM operation + 25 ms; K1 ≤ `k1_weld_ms` + 25 ms); FW-MOT-006 bound = position → E_RANGE. | Orchestrator: SRS v0.4. |
 | F-B-06 / F-B-25 / F-B-28 / F-B-30 / F-B-32 / F-B-33 | **Closed (v0.4):** shared sim/twin vocabulary v2 frozen (`tools/README.md`); `state_schema` 2 + stable keys; MOVE_UNTIL_LOAD bound = position → `E_RANGE` 0; RESUME (D-31) refused only by ESTOP (latched or input open), HALT and latched faults, never by NOT_ENABLED, DRV_UNPOWERED, DRIVER_ALARM, LIMIT, AFE or motion state, retry class VERIFY; H5 with partner-id detail and write order (§11.4), `motion.steps_per_mm` default 800 (D-27 closed). | — |
 | OI-ICD-08 | **Closed (D-34, v0.4.1):** HALT_CLEAR, ESTOP_CLEAR and FAULT_CLEAR are VERIFY (never auto-retried; priority lane), so a retry can no longer clear a latch set again in between (§9.3). | — |
+| SD-15 | **CR-01 / D-36 + D-37 SRS deltas** (SRS v0.5): SAF-FW-022 withdrawn; FW-SW-003 STOP part removed; HALT source PC only; `io.stop_active_level` retired; IF-011/NFR-008 SAVE exemption (D-37a); status-bit validity by feature bit (D-37b); STOP confirmation ordered by device time (D-37d). | Orchestrator: SRS v0.5 (applied in parallel). |
+| OBS-M1-01…05 | **Closed (v0.5):** SAVE exemption §2.4 (01); twin RX during flash stalls fixed (02, `tools/README.md`); LOAD sends no EVENT on failure §5.2 / §11.3 (03); unit-conversion saturation §0.1 (05). | — |
+| IF-C-M1-02 | **Closed (v0.5):** §7.6 feature-dependent bits. Follow-ups: A sends DRV_PWR = 0 while FEAT_DRV_SIGNALS = 0 also with `drv.pwr_sense_enable` = false; B's simulator masks the bits by its feature mask. | A, B |
+| OI-ICD-09 | **Ramp definition for stops / JOG changes (M2, to A):** A's in-progress `pure/ramp.c` matches every position-move case of `motion_vectors.json` within ±1 tick, but differs by one virtual-index step in the controlled-stop cases (stop sized with `floor` of a float32 index: e.g. 1 279 instead of 1 280 steps at 12 800 steps/s, a = 64 000 steps/s²; the deceleration then exceeds `a_stop`) and after a JOG speed-up (resumes at integer index `floor(k0) + 2` instead of the exact current speed: the first period after the change is one ramp step short). | A: align `ramp_stop()` (ceil, index in binary64) and `ramp_set_speed()` speed-up (exact `k0`) to `ref_motion.py`, or bring a counter-proposal to the Integrator (vectors change only by agreement). |
 
 ## 15. Change history
 
 | ICD | Date | PROTO / PAYLOAD / dict | Change |
 |---|---|---|---|
+| 0.5 | 2026-10-04 | 1.0 / 1 / 4 | **CR-01 / D-36** (one red button = E-stop with power cut; no physical holding STOP): DATA/STATUS `status` bit 9 and `io` bit 3 STOP_BTN, EVENT 22 STOP_BUTTON and stop cause 4 STOP_BUTTON **retired** (reserved, never reused; generated identifiers kept and marked RETIRED for compatibility, `RETIRED_MASK`); HALT source PC only; `io.stop_active_level` (0x0603) retired → **dict_version 4, 47 parameters**; SAF-FW-022 path removed (§5.5 HALT/HALT_CLEAR, §6.2 row, §6.3, §6.4); HALT_CLEAR never refused. **D-37**: (a) SAVE exemption + SW quiesce during SAVE (§2.4, §9.1); (b) feature-dependent status/IO bits sent as 0 and invalid while the feature bit is 0 (§7.6, `protocol.yaml` `feature:`, Python `<ID>_FEATURE`); (c) RESUME on the normal lane (§2.4); (d) STOP confirmation by device time (§9.4). **Queue**: OBS-M1-03 LOAD failure sends no EVENT (§5.2, §11.3); OBS-M1-05 µm/steps saturation (§0.1, `units_vectors.json` saturation cases); ESTOP_CLEAR with the input open but no latch = `E_CAUSE_ACTIVE` 0xFFFF (vector); `state_schema` stays 2 (STOP-button keys kept, ignored, never set); seam semantics + `afe_sample_t.status` bits + seam v1.2 `hal_fault_record()` in `tools/README.md`; OBS-M1-02 twin RX during flash stalls fixed; vocabulary: STOP-button inputs removed. **M2 start**: `motion_vectors.json` + `ref_motion.py` (§12), OI-ICD-09. |
 | 0.4.1 | 2026-10-03 | 1.0 / 1 / 3 | **D-34**: HALT_CLEAR, ESTOP_CLEAR, FAULT_CLEAR move from ONCE_PRIORITY to retry class **VERIFY** (never auto-retried; still on the SW priority lane; lost response resolved by GET_STATUS) — `protocol.yaml` retry class, §3.2 (generated), §9.3 table + rationale; ONCE_PRIORITY kept as an unused code. OI-ICD-08 closed (D-34); OI-ICD-06 closed (SRS v0.4 SAF-FW-024: STOPPED only when a move was ended). No wire, layout or dictionary change (hash unchanged). |
 | 0.4 | 2026-10-03 | 1.0 / 1 / 3 | Final P1 round. **D-31** RESUME 0x3C (clears only PAUSED; E_STATE ESTOP/HALT/FAULT; retry class VERIFY; not sniffed; PAUSE_CLEARED arg 3); HALT_CLEAR clears HALT + PAUSED; §5.5, §6.3 RESUME row, §9.3 rationale. **D-33** (a) `afe.timeout_ms` default 250 ms, min 25, hard rule **H5** (dict_version 3); (f) DRV_PWR / K1 timing bounds; (g) no idle disable while stale; (h) limit latch clear rule; (k) PAUSED refusal = expected outcome. **FW_design**: OI-FW-18 wire order DATA > responses > EVENT + drop order (§2.4); OI-FW-19 sniffer STOP/HALT/PAUSE (`sniffed` in `protocol.yaml`, `CMD_IS_SNIFFED`); OI-FW-20 µm↔steps arithmetic (§0.1) + `units_vectors.json`, motion vectors planned M2; OI-FW-21 `internal_detail` (NOT_IN_BUILD, INVARIANT) + HardFault record in BOOT; OI-FW-22 boot ENA disabled with DRV_PWR off; OI-FW-23 homing bounds (constants `HOME_RELEASE_MAX_UM`, `HOME_SLOW_EXTRA_UM`); OI-FW-17 / DEF-P1-02 seam v1 = FW_design §8.1 in `tools/README.md`. **DEF-P1-03** twin world-control/observation vocabulary v2 (`tools/README.md`, M1 subset marked, shared with the SW simulator). **F-B-28** MOVE_UNTIL_LOAD bound = position → E_RANGE 0; **F-B-25** `state_schema` 2. OI-ICD-07 closed; SD-14, OI-ICD-08 added. Vectors: RESUME / H5 / F-B-28 / BOOT-HardFault / E_INTERNAL cases; generator asserts valid vector states. |
 | 0.3 | 2026-10-03 | 1.0 / 1 / 2 | **D-30**: PAUSED becomes a motion-blocking latch — new BLOCK bit 10 PAUSED (`protocol.yaml`); MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 incl. refreshes refused while PAUSED; cleared **only** by HALT_CLEAR (PAUSE_CLEARED arg 1 MOTION_CMD removed, code 1 unused); Resume = HALT_CLEAR + re-issue the absolute target (§4.3, §5.4, §5.5, §6.2, §6.3 new PAUSED column). §6.5 clean halt only with step period > 2 ms **and** FW-computed stop distance ≤ 1 step. OI-ICD-04/05 closed; SD-13, OI-ICD-07 added. Vectors regenerated (PAUSED check vectors now E_STATE PAUSED with `paused_after`, `move_abs_paused_nack`, EVENT PAUSE_CLEARED arg 2). Dictionary unchanged (dict_version 2). |
@@ -1193,7 +1226,7 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 
 <!-- BEGIN GENERATED PARAM TABLE (gen_params.py) -->
 
-Generated from `params.yaml` dict_version 3 — **PARAM_DICT_HASH = 0xF0376293**, 48 parameters. Flags: **M** = moving_ok (settable while moving), **N** = nvm (persisted), **R** = reboot_required. Normative descriptions: `params.yaml`.
+Generated from `params.yaml` dict_version 4 — **PARAM_DICT_HASH = 0xFCC54C90**, 47 parameters. Flags: **M** = moving_ok (settable while moving), **N** = nvm (persisted), **R** = reboot_required. Normative descriptions: `params.yaml`.
 
 | ID | Key | Type | Unit | Min | Max | Default | Flags | Values / notes |
 |---|---|---|---|---|---|---|---|---|
@@ -1237,7 +1270,6 @@ Generated from `params.yaml` dict_version 3 — **PARAM_DICT_HASH = 0xF0376293**
 | 0x0508 | `safety.link_timeout_ms` | u16 | ms | 200 | 5000 | 1000 | MN |  |
 | 0x0601 | `io.release_ms` | u8 | ms | 5 | 200 | 20 | N |  |
 | 0x0602 | `io.estop_release_ms` | u16 | ms | 50 | 2000 | 100 | N |  |
-| 0x0603 | `io.stop_active_level` | enum |  |  |  | OPEN_ACTIVE | N | 0=OPEN_ACTIVE, 1=CLOSED_ACTIVE |
 | 0x0604 | `io.pause_active_level` | enum |  |  |  | CLOSED_ACTIVE | N | 0=OPEN_ACTIVE, 1=CLOSED_ACTIVE |
 | 0x0701 | `drv.alm_active_level` | enum |  |  |  | HIGH_ACTIVE | N | 0=HIGH_ACTIVE, 1=LOW_ACTIVE |
 | 0x0702 | `drv.pend_active_level` | enum |  |  |  | HIGH_ACTIVE | N | 0=HIGH_ACTIVE, 1=LOW_ACTIVE |
@@ -1287,6 +1319,7 @@ Generated from `protocol.yaml` — the single source of protocol names and codes
 | `pause_cleared_reason` | enum | App. B | `PCLR_*`, `proto_pause_cleared_reason_t` | `PauseClearedReason` |
 | `params_defaulted_reason` | enum | App. B | `PDEF_*`, `proto_params_defaulted_reason_t` | `ParamsDefaultedReason` |
 | `limit_id` | enum | App. B | `LIM_*`, `proto_limit_id_t` | `LimitId` |
+| `afe_sample_status` | bitset | App. B | `AFES_*` | `AfeSampleStatus` |
 | `retry_class` | enum | App. B | — | `RetryClass` |
 
 ### B.1 Constants
@@ -1365,7 +1398,7 @@ Generated from `protocol.yaml` table `stop_mode` (C `STOPMODE_*`, Python `StopMo
 | Code | Name | Meaning |
 |---|---|---|
 | 0 | `IMMEDIATE` | no further PUL edge ≤ 2 ms after the last command byte (SAF-FW-002) |
-| 1 | `CONTROLLED` | planned deceleration at motion.a_stop_um_s2 (clean halt allowed at step period > 2 ms, §6.5) |
+| 1 | `CONTROLLED` | planned deceleration at motion.a_stop_um_s2 (clean halt only at step period > 2 ms and planned stop distance <= 1 step, §6.5) |
 
 ### B.7 MOVE_UNTIL_LOAD cmp
 
@@ -1408,7 +1441,7 @@ Generated from `protocol.yaml` table `source` (C `SRC_*`, Python `Source`).
 |---|---|---|
 | 0 | `NONE` | not latched |
 | 1 | `PC` | PC command (HALT, PAUSE) |
-| 2 | `BUTTON` | physical STOP/BREAK or PAUSE button |
+| 2 | `BUTTON` | physical PAUSE button (pause_src / PAUSED only; halt_src is never BUTTON since v0.5, D-36) |
 
 ### B.11 Reset cause (STATUS reset_cause, EVENT BOOT arg)
 
@@ -1476,7 +1509,17 @@ Generated from `protocol.yaml` table `limit_id` (C `LIM_*`, Python `LimitId`).
 | 0 | `START` | START switch (−x end, home reference) |
 | 1 | `END` | END switch (+x end) |
 
-### B.17 SW retry class (§9.3; not on the wire)
+### B.17 afe_sample_t.status (seam hal_hx711, tools/README; not on the wire)
+
+Generated from `protocol.yaml` table `afe_sample_status` (C `AFES_*`, Python `AfeSampleStatus`).
+
+| Bit | Name | Meaning |
+|---|---|---|
+| 0 | `SCK_OVERRUN` | the read of this sample overran (SCK high > 60 us or DOUT still low after the last pulse): the HX711 may have entered power-down; the core re-initialises it (afe_reinit_count, EVENT AFE_REINIT) and flags the next afe.settle_discard samples AFE_SETTLING |
+| 1 | `MISSED_EDGE` | at least one DOUT-ready edge was missed before this sample (recovered by hal_hx711_kick or a late edge): the core sets OVERRUN in the next DATA frame |
+| 2–7 | — | reserved (0) |
+
+### B.18 SW retry class (§9.3; not on the wire)
 
 Generated from `protocol.yaml` table `retry_class` (Python `RetryClass` (not on the wire)).
 

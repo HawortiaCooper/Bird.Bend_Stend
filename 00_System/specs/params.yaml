@@ -81,7 +81,7 @@
 # =====================================================================================
 
 schema_version: 1
-dict_version: 3
+dict_version: 4
 # dict_version history:
 #   1  ICD v0.1 — initial 48 parameters
 #   2  ICD v0.2 — D-29: home.ref_switch (0x0401) removed (homing only at START, D-29b);
@@ -91,8 +91,10 @@ dict_version: 3
 #   3  ICD v0.4 — D-33a: afe.timeout_ms default 100 -> 250 ms, min 20 -> 25 ms, hard rule H5
 #                 (timeout >= 2 x conversion period, DEF-P1-01); D-27 closed:
 #                 motion.steps_per_mm default 160 -> 800 (4000 p/rev, closed loop).
+#   4  ICD v0.5 — CR-01 / D-36: io.stop_active_level (0x0603) retired (no physical holding STOP
+#                 button; the red button is the E-stop) -> 47 parameters.
 
-retired_ids: [0x0401]   # home.ref_switch (dict_version 1)
+retired_ids: [0x0401, 0x0603]   # home.ref_switch (dict_version 1), io.stop_active_level (dict_version 3)
 
 groups:
 
@@ -687,10 +689,10 @@ groups:
         default: 20
         moving_ok: false
         description: >-
-          A limit switch or STOP/PAUSE button counts as released after a stable inactive level
+          A limit switch or the PAUSE button counts as released after a stable inactive level
           for this time (1 kHz sampling). Activation acts on the first edge (no delay).
           (SRS name input.release_ms.)
-        srs: [FW-SW-001, FW-SW-003, SAF-FW-013, SAF-FW-022, FW-PAR-006]
+        srs: [FW-SW-001, FW-SW-003, SAF-FW-013, FW-PAR-006, D-36]
 
       - id_off: 0x02
         name: estop_release_ms
@@ -706,20 +708,8 @@ groups:
           continuously for this time. (SRS name input.estop_release_ms.)
         srs: [SAF-FW-006, FW-SW-002, FW-PAR-006]
 
-      - id_off: 0x03
-        name: stop_active_level
-        label: STOP button contact
-        type: enum
-        enum:
-          - {name: OPEN_ACTIVE, value: 0, label: "NC contact: open / high = pressed"}
-          - {name: CLOSED_ACTIVE, value: 1, label: "NO contact: closed / low = pressed"}
-        default: OPEN_ACTIVE
-        moving_ok: false
-        description: >-
-          Physical STOP/BREAK button contact type (NC recommended and default, R5 §5.5). A
-          change re-arms the input without generating a press; if the input then reads active
-          it is reported and HALT_CLEAR is refused.
-        srs: [FW-SW-003, SAF-FW-022, FW-PAR-006, D-26, D-28]
+      # id_off 0x03 (io.stop_active_level) retired in dict_version 4: no physical holding STOP
+      # button (CR-01, D-36); never reuse 0x0603.
 
       - id_off: 0x04
         name: pause_active_level

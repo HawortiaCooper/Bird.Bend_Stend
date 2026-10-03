@@ -69,10 +69,11 @@ def test_connect_stream_plot(sim_window, sim_backend, qtbot) -> None:
     plot.tree.set_checked("raw", True)
     plot.tree.set_checked("bit.moving", True)
     def finite_points() -> int:
-        _x, y = plot.time_view.curves["raw"].items[0].getData()
+        _x, y = plot.pane_of("raw").curve("raw").getData()
         return 0 if y is None else int(np.isfinite(y).sum())
     qtbot.waitUntil(lambda: plot.updates > 5 and finite_points() > 40, timeout=5000)   # ≥ 0.25 s of 80 Hz data
-    assert plot.lanes.visible
+    assert plot.pane_of("bit.moving") is not plot.pane_of("raw")                     # quantity grouping (D-38)
+    assert plot.pane_of("bit.moving").bit_keys() == ["bit.moving"]
     qtbot.waitUntil(lambda: win.readout_dock.state_of("raw") == "OK", timeout=3000)
     rate = float(win.readout_dock.value_text("rate_sps"))
     assert 70.0 < rate < 90.0
@@ -198,10 +199,11 @@ def test_stop_pause_resume_clear_on_simulator(sim_window, sim_backend, qtbot) ->
     dlg.close()
 
 
-@pytest.mark.req("NFR-001")
+@pytest.mark.req("NFR-001", "SW-RT-006")
 def test_perf_smoke_on_simulator(sim_window, qtbot, capsys) -> None:
-    """Verifies: NFR-001 (smoke, informative; binding at M3 on the reference PC) — real timer, real backend, raw +
-    setpoint + all status bits in Plot 1 for 5 s offscreen; frame interval and stage times recorded."""
+    """Verifies: NFR-001, SW-RT-006 (smoke, informative; binding at M3 on the reference PC) — real timer, real backend,
+    4 time panes (raw, status bits, travel, rate) + an X-Y pane in 2 columns for 5 s offscreen; one snapshot per
+    refresh; frame interval and stage times recorded."""
     win = sim_window
     plot = win.plot_dock
     for g in plot.tree.group_names():
@@ -209,12 +211,18 @@ def test_perf_smoke_on_simulator(sim_window, qtbot, capsys) -> None:
             plot.tree.set_group_checked(g, True)
     plot.tree.set_checked("raw", True)
     plot.tree.set_checked("x_mm", True)
+    plot.tree.set_checked("rate_sps", True)
+    plot.add_xy_pane()
+    plot.set_columns(2)
+    assert len(plot.panes()) == 5                 # raw · bits · travel · rate · X-Y (4 time panes, SW-RT-006)
+    n0 = win.snapshot_calls
     start = win.perf_stats()["ticks"]
     qtbot.wait(5000)
     ps = win.perf_stats()
     with capsys.disabled():
-        print(f"\n[perf smoke sim, offscreen, 5 s] ticks {ps['ticks'] - start}, interval p50 "
+        print(f"\n[perf smoke sim, 4 time panes + X-Y, offscreen, 5 s] ticks {ps['ticks'] - start}, interval p50 "
               f"{ps['interval_p50_ms']:.1f} ms p95 {ps['interval_p95_ms']:.1f} ms max {ps['interval_max_ms']:.1f} ms;"
               f" plots p95 {ps['plots_p95_ms']:.2f} ms; status p95 {ps['status_p95_ms']:.2f} ms")
     assert ps["ticks"] - start > 50 and ps["errors"] == {}
+    assert win.snapshot_calls - n0 <= ps["ticks"] - start          # one snapshot per refresh for all panes
     assert sim_window.backend.status().gates[GateId.STREAM_STOP].ok

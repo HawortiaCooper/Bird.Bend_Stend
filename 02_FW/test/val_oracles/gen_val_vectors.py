@@ -360,12 +360,43 @@ def units_lines(uv: dict) -> list[str]:
     return out
 
 
+def motion_lines(mv: dict) -> list[str]:
+    """motion_vectors.json (M2, OI-FW-20) -> test_val_ramp lines (one logical case per line):
+    C name f spm_hex v_um_s a_um_s2 d_um_s2 a_stop(0 = none) n_steps n_ev [kind after v]* n_periods sum tol_p tol_s p...
+    S p_ticks spm_hex a_stop_um_s2 path(ISR/HALT/STRETCH -> 0/1/2)          (ctrl_stop_paths rows)
+    Every case is first re-derived by the validator's independent oracle (ramp_ref.case_periods); a
+    disagreement refuses to write the file (never a silent pass on a wrong vector)."""
+    import ramp_ref as rr
+    out = []
+    for c in mv["cases"]:
+        mine = rr.case_periods(c)
+        if mine != c["periods"]:
+            die(f"motion_vectors case {c['name']}: validator oracle disagrees with the shared vector")
+        spm_hex = f"{struct.unpack('<I', struct.pack('<f', c['steps_per_mm']))[0]:08X}"
+        ev = []
+        for e in c["events"]:
+            kind = {"controlled_stop": "S", "jog": "J"}[e["event"]]
+            ev += [kind, str(e["after_step"]), str(e.get("v_um_s", 0))]
+        sum_tol = max(1, c["n_periods"] // 1000)          # SRS literal ±N/1000 (OBS-E-M2-02: vectors use ceil)
+        out.append(" ".join(["C", c["name"], str(c["f_tick"]), spm_hex, str(c["v_um_s"]), str(c["a_um_s2"]),
+                             str(c["d_um_s2"]), str(c["a_stop_um_s2"] or 0), str(c["n_steps"]),
+                             str(len(c["events"]))] + ev +
+                            [str(c["n_periods"]), str(c["sum_ticks"]), str(c["tolerance"]["period_ticks"]),
+                             str(sum_tol)] + [str(p) for p in c["periods"]]))
+    code = {"ISR": 0, "CLEAN": 1, "STRETCH": 2}
+    for r in mv["ctrl_stop_paths"]:
+        spm_hex = f"{struct.unpack('<I', struct.pack('<f', r['steps_per_mm']))[0]:08X}"
+        out.append(f"S {r['p_ticks']} {spm_hex} {r['a_stop_um_s2']} {code[r['path']]}")
+    return out
+
+
 def bits_lines() -> list[str]:
     """Bit positions (ICD §7.6 via ref_codec tables) for the flags/io/sys composition suite."""
     out = []
     for tab, names in (("DF", rc.DATA_FLAGS), ("DS", rc.DATA_STATUS), ("IO", rc.IO), ("SY", rc.SYS_FLAGS)):
         for i, n in enumerate(names):
-            out.append(f"B {tab} {n} {i}")
+            if n:                                   # "" = reserved / retired (v0.5: STOP_BTN, D-36)
+                out.append(f"B {tab} {n} {i}")
     return out
 
 
@@ -398,6 +429,14 @@ def main() -> int:
         "corpus.txt": corpus_lines(CORPUS_N, CORPUS_SEED),
         "bits.txt": bits_lines(),
     }
+    mvf = VEC / "motion_vectors.json"                  # M2 (OI-FW-20); absent before M2 -> no motion.txt
+    if mvf.exists():
+        mv = json.loads(mvf.read_text(encoding="utf-8"))
+        if mv["icd_version"] != icd or int(mv["param_dict_hash"], 16) != h:
+            die(f"motion_vectors.json ({mv['icd_version']}, {mv['param_dict_hash']}) != FW headers")
+        sys.path.insert(0, str(HERE))
+        files["motion.txt"] = motion_lines(mv)
+        jsons["motion_vectors"] = mv
     counts = {}
     for name, lines in files.items():
         hdr = [f"H {icd} {h}", f"N {len(lines)}"]

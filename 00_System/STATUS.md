@@ -1,6 +1,6 @@
 # Project status
 
-**Phase:** P2 Implementation — **M1 ACCEPTED WITH CONDITIONS (Orchestrator gate 2026-10-04)** · M1 close-out round (CR-01, ICD/SRS v0.5, CR-02) → then M2 (Sensor & motion) · D-06 in force · **Date:** 2026-10-04
+**Phase:** P2 Implementation — M1 ACCEPTED WITH CONDITIONS · **M2 (Sensor & motion) in progress** (D-39, 2026-10-04) · ICD v0.5 / CR-01 landing · SW-RT-006 plot panes (D-38) in progress · D-06 in force · **Date:** 2026-10-04
 
 ## P0 gate (Orchestrator, 2026-10-03) — ACCEPTED
 R1–R4 written; conflicts resolved: (a) Stefan step-timer error: checked `Stefan/FW/stanok/Core/Src/main.c:136-158` + `tim.c:45` → TIM2 84 MHz / (9+1) = 8.4 MHz vs assumed 10 MHz → 16 % slow (R1/R4 correct, R2's 6.7 % ignores the prescaler); irrelevant for us (D-09). (b) Step timing: SRS takes R2's conservative defaults (≥ 10 µs high/low, ≤ 50 kHz, DIR setup 20 µs) as parameters; R4's TIM2 PWM-mode-2 scheme stays (CCR scaled). Key safety finding R2 §8: motor force ≈ 9 kN ≫ cell safe overload 2.35 kN → FW per-sample load limit is safety-critical.
@@ -67,7 +67,7 @@ From R4 (recommended defaults in R4 §14): Q-R4-01 **safety: holding E-stop (D-1
 | CR | Content | Applies | State |
 |---|---|---|---|
 | CR-01 | D-36: withdraw physical STOP/BREAK holding-stop button (SAF-FW-022, FW-SW-003 STOP part, PC7, `io.stop_active_level`, STOP_BTN, HALT src BUTTON); single red button = E-stop (power cut + sense); PAUSE on operator panel; R-01 resolved | SRS v0.5, ICD v0.5 + protocol/params regen, pinout/wiring, FW/SW/GUI designs, test plans | planned for M1 gate |
-| CR-02 | D-35 G5: HW-gate evidence without scope/logic analyzer (on-chip DWT/timer-capture loopback, PC-side timing) | FW_test_plan HG list, wiring check list, possibly a loopback jumper in pinout | planned before M2 |
+| CR-02 | D-35 G5: HW-gate evidence without scope/logic analyzer | FW_test_plan v0.3 §6 (done, Validator E), D-40 c; pinout/wiring/HW_MEAS build (A), DIAG_MEAS 0x3D + twin model (C) | in progress |
 
 ## M1 progress (Orchestrator, 2026-10-03)
 | Role | Result | Orchestrator re-run |
@@ -101,3 +101,6 @@ Evidence: FW_test_report_M1 (Validator E: **GO WITH CONDITIONS**, 45/45 M1 TCs, 
 | F-MC-2 reference PC spec | PO | M3 entry |
 | F-MC-4 remove StopConfirmation string shim; OBS-M1-R1 order STOP confirmation by FW t_us (D-37 d) | B | M2 entry |
 | CR-02 HW-gate evidence without scope (on-chip measurement) | E (+A pinout loopback) | before HW gate |
+- SW-RT-006 plot panes (D-38) done by D: SW_design_GUI v0.4 §4.7; GUI 186 passed ×3; smoke 4 panes + X-Y, 0 lost, layout restored. Tree temporarily red (ICD v0.5 regenerated, simulator CR-01 pending in B's M2 round).
+- **ICD v0.5** (Integrator, 2026-10-04): CR-01 retired STOP_BTN/EVENT 22/stop cause 4/`io.stop_active_level` (RETIRED_MASK), D-37 a–d, M1 queue items, seam v1.2; dict v4, 47 params, hash 0xFCC54C90; motion_vectors.json (9 cases, 121 623 periods, 28 stop paths) + ref_motion.py; Orchestrator re-run: both --check exit 0, tools 848/848. M2 twin models + 11 M2 integration tests pass vs A's in-progress FW (56 passed / 4 skipped). Open OI-ICD-09 ramp_stop rounding (A).
+- Validator E: **FW_test_plan v0.3** (CR-01, CR-02 §6 on-chip measurement, HG-01…31, M2 TCs refined; pre-written M2 suites; dry run vs A's WIP: twin 74 passed + 1 xfail, Unity 7/7, ramp 9/9 + 28/28 — not evidence). Decisions → D-40. HW-gate questions for the PO (later): multimeter available? accept E-stop power-cut evidence via contactor aux + driver drop-out + MCU-in-reset test instead of supply voltage < 5 V? SWD debugger connection at the HW gate (D-06)? bench safety procedure for E-stop sense stimulus.

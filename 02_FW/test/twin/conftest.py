@@ -32,7 +32,11 @@ from twin import Twin  # noqa: E402
 
 @pytest.fixture(scope="session")
 def twin_exe() -> Path:
-    exe = twin_build.ensure_built("fw")
+    # VAL_TWIN_BUILD_DIR: build A's FW twin into a private directory (e.g. the validator scratchpad) so a
+    # concurrently running shared fw_twin.exe of another role is never rebuilt or locked by this run.
+    import os
+    bd = os.environ.get("VAL_TWIN_BUILD_DIR")
+    exe = twin_build.ensure_built("fw", Path(bd)) if bd else twin_build.ensure_built("fw")
     assert "probe" not in exe.name, "validator evidence must use A's FW core, never the probe"
     return exe
 

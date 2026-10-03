@@ -30,11 +30,36 @@ void     fake_hal_reset(void);              /* everything except the flash conte
 void     fake_flash_blank(void);
 uint8_t *fake_flash_sector(uint8_t i);      /* 0 = sector 1 (A), 1 = sector 2 (B) */
 
-/* time */
+/* time (one 64-bit clock in step-timer ticks, FAKE_F_TICK) */
+#define FAKE_F_TICK 90000000u
 void     fake_set_time_us(uint32_t t);
 uint32_t fake_now_us(void);
-/** n x 1 ms: advance 1000 us, core_tick_1ms(), app_loop(). */
+/** n x 1 ms: advance 1000 us (step-timer events + step_isr on the way), core_tick_1ms(), app_loop(). */
 void     fake_run_ms(uint32_t n);
+/** as fake_run_ms, plus one AFE sample `raw` whenever the ms count is a multiple of period_us/1000. */
+void     fake_run_ms_samples(uint32_t n, uint32_t period_us, int32_t raw);
+/** advance dt timer ticks processing only the step-timer events (no tick, no main loop). */
+void     fake_advance_tk(uint64_t dt);
+
+/* step timer model (twin semantics, tools/README hal_step row) */
+#define FAKE_RISE_LOG 70000u
+extern uint64_t fake_rise_tk[FAKE_RISE_LOG];         /* PUL rising-edge times (ticks) */
+extern uint32_t fake_rise_n;
+extern bool     fake_ena_enabled;
+extern uint32_t fake_ena_changes, fake_set_now_calls, fake_stop_now_calls, fake_abort_calls, fake_step_inits;
+extern int      fake_dir_arg;                        /* last hal_step_set_dir() argument */
+extern bool     fake_step_skip_isr;                  /* inject: next update without step_isr */
+int32_t  fake_step_count(void);
+bool     fake_step_uncertain(void);
+uint32_t fake_step_pw(void);
+
+/* inputs (electrical levels, 1 = pin high; ids = ICD IO bit indices) */
+void     fake_input_set(uint8_t id, bool level);     /* EXTI inputs: HAL fixed reaction + on_input_edge */
+/** world: START active while count <= start_le, END active while count >= end_ge (on = true) */
+void     fake_world_limits(bool on, int32_t start_le, int32_t end_ge);
+/** lost steps: the switches move by `steps` relative to the counter (HOME_DRIFT tests) */
+void     fake_world_shift(int32_t steps);
+extern uint8_t fake_pause_level_cfg;
 
 /* link */
 void     fake_rx(const uint8_t *d, size_t n);
@@ -58,6 +83,10 @@ extern uint32_t fake_flash_erases, fake_flash_words;
 extern bool     fake_flash_fail_program;           /* program returns false (no cut) */
 
 /* AFE / outputs / sys recorders */
+extern uint32_t fake_hx_kicks;
+extern bool     fake_fault_valid;
+extern uint32_t fake_fault_pc, fake_fault_cfsr;
+void fake_sample_st(uint32_t t_us, int32_t raw, uint8_t status);
 extern uint8_t  fake_hx_gain_pulses;
 extern bool     fake_hx_rate80, fake_hx_hold, fake_rate_pin, fake_led, fake_trip;
 extern uint32_t fake_hx_config_calls;

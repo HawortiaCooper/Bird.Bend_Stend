@@ -10,7 +10,7 @@ import random
 import pytest
 import ref_codec as rc
 from twin import Twin
-from vhelp import PBYKEY, V
+from vhelp import PBYKEY, V, idle_status_bits
 
 SAFE_CMDS = ["PING", "GET_INFO", "GET_STATUS", "GET_PARAM", "SET_PARAM", "STREAM_START", "STREAM_STOP",
              "SET_VALID", "HALT", "HALT_CLEAR", "PAUSE", "RESUME", "STOP", "ESTOP_CLEAR", "FAULT_CLEAR",
@@ -386,7 +386,9 @@ def test_data_bits_provoked_in_m1(v: V, tw):
         v.advance(30)
         return v.data()[-1]
 
-    assert last()["flags"] == [] and last()["status"] == []
+    base = idle_status_bits(v)                                    # v0.3: {PEND, DRV_PWR} with DRV_SIGNALS
+    d0 = last()
+    assert d0["flags"] == [] and set(d0["status"]) == base, d0
     v.ok("SET_VALID", {"valid": 1})
     assert "VALID" in last()["flags"]
     v.ok("HALT")
@@ -423,7 +425,10 @@ def test_data_bits_provoked_in_m1(v: V, tw):
     tw.act("afe", rate_error=0.0)
     v.advance(1500)
     assert "AFE_RATE_MISMATCH" not in v.data()[-1]["status"]
-    assert "DRV_PWR" not in last()["status"]                       # sense enabled: not confirmed (M1)
+    if "DRV_SIGNALS" in v.info()["features"]:                      # M2 build: valid input, make it "off"
+        tw.act("drv_power", on=False)
+        v.advance(40)
+    assert "DRV_PWR" not in last()["status"]                       # sense enabled: not confirmed (M1) / off (M2)
     assert v.set("drv.pwr_sense_enable", 0)["status"] == "OK"
     v.ok("SAVE_PARAMS")
     v.reboot()

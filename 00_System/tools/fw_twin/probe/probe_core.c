@@ -394,7 +394,7 @@ void app_init(void)
     hal_step_cfg_t sc = { 900u, 1800u, P.motion.pul_invert, P.motion.ena_invert };
     (void)hal_step_init(&sc);
     hal_ena_set(true);
-    hal_in_cfg_t ic; memset(&ic, 0, sizeof ic); ic.stop_active_level = P.io.stop_active_level; ic.pause_active_level = P.io.pause_active_level;
+    hal_in_cfg_t ic; memset(&ic, 0, sizeof ic); ic.stop_active_level = 0u; /* retired (D-36) */ ic.pause_active_level = P.io.pause_active_level;
     hal_inputs_config(&ic);
     hal_hx711_config(25, P.afe.rate_sps != 0);
     event(EV_BOOT, hal_reset_cause(), 0);

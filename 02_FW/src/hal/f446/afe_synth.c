@@ -1,4 +1,5 @@
-/* M1 synthetic AFE source (FW_design §5.8 last bullet, FEAT_AFE_SYNTHETIC): TIM5 CC2 at the
+/* Synthetic AFE source - M1, and since M2 only the bring-up image nucleo_f446re_synth
+ * (FW_AFE_SYNTHETIC = 1, FEAT_AFE_SYNTHETIC; FW_design §9.7): TIM5 CC2 at the
  * configured conversion period (80 / 10 SPS) records the "data-ready" time and pends the EXTI4
  * vector (level 3, the HX711 DOUT vector of M2); the EXTI4 handler delivers a deterministic sample
  * (sawtooth +- 400 000 counts over 10 s + pseudo-noise, never at a rail, scaled by the gain) through
@@ -7,9 +8,11 @@
  * Implements: FW-STR-002 (M1), FW-TIM-001 (t_us = data-ready compare time), FW-AFE-002 (rate /
  *             gain applied), FW-NVM-003 (hold -> conversions missed)
  */
+#if defined(FW_AFE_SYNTHETIC) && FW_AFE_SYNTHETIC
 #include "f446.h"
 #include "board_pins.h"
 #include "hal_hx711.h"
+#include "hal_step.h"
 #include "irq_prio.h"
 
 static volatile uint32_t s_period_us = 12500u;
@@ -74,10 +77,11 @@ void EXTI4_IRQHandler(void)
 #endif
     s.t_us = s_t_ready;
     s.raw = synth_raw();
-    s.pos_steps = 0;                                     /* M1: no step generator */
+    s.pos_steps = hal_step_count();
     s.status = 0u;
     on_afe_sample(&s);
 #if defined(FW_DEBUG_PINS) && FW_DEBUG_PINS
     gpio_write(GPIOC, PIN_DBG1_BIT, false);
 #endif
 }
+#endif /* FW_AFE_SYNTHETIC */

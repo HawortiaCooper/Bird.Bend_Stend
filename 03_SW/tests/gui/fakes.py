@@ -241,10 +241,13 @@ class FakeData:
         self.vstate: dict[str, np.ndarray] = {}
         self.latest_values: dict[str, tuple[float, str]] = {"raw": (123456.0, "OK"), "rate_sps": (80.0, "OK")}
         self.snapshot_calls = 0
+        self.snapshot_args: list[tuple[tuple[str, ...], float, int]] = []
+        self.xy_calls: list[tuple[str, str, float | None]] = []
         self.fail: BaseException | None = None
 
     def snapshot(self, keys: Sequence[str], window_s: float, px_width: int) -> PlotSnapshot:
         self.snapshot_calls += 1
+        self.snapshot_args.append((tuple(keys), float(window_s), int(px_width)))
         if self.fail is not None:
             raise self.fail
         t = np.linspace(-window_s, 0.0, int(px_width))
@@ -262,8 +265,9 @@ class FakeData:
 
     def xy(self, x_key: str, y_key: str, window_s: float | None = None, max_points: int = 4000, *,
            since: Literal["window", "record", "sequence"] = "window") -> XYSnapshot:
-        e = np.zeros(0)
-        return XYSnapshot(e, e, np.zeros(0, dtype=np.uint8), 0.0)
+        self.xy_calls.append((x_key, y_key, window_s))
+        x = np.linspace(0.0, 10.0, 200)
+        return XYSnapshot(x, 50.0 * x + 3.0, np.zeros(200, dtype=np.uint8), 12.5)
 
     def latest(self, key: str) -> LatestSample:
         if key not in self.latest_values:

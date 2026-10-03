@@ -1,8 +1,9 @@
-/* Board bring-up (FW_design §3.2 boot steps 2/3/6/8/11/12 for M1) and the hal_outputs seam.
- * M1 leaves the motor-driver pins PA0 (PUL) / PA1 (DIR) / PA4 (ENA) in their reset state (Hi-Z: no
- * LED current = driver holding, D-13; no pulse possible: TIM2 is not configured) and samples no
- * input (M2). Outputs: LED PA5, RATE PB5 (ODR before MODER, 80 SPS default), TRIP PB9 low.
- * D-36: PC7 is not configured as a STOP input.
+/* Board bring-up (FW_design §3.2 boot steps 2/3/5/8/10/11/12) and the hal_outputs seam.
+ * The motor-driver pins PA0 (PUL) / PA1 (DIR) / PA4 (ENA) stay in their reset state (Hi-Z: no LED
+ * current = driver holding, D-13) until hal_step_init() (boot step 6, from app_init after the
+ * parameters are known); the inputs are configured here and their EXTI lines enabled in
+ * board_start() after the core latched the boot-time input state. Outputs: LED PA5, RATE PB5 (ODR
+ * before MODER, 80 SPS default), TRIP PB9 low. D-36: PC7 is not configured (no STOP input).
  * Implements: SAF-FW-018 (no PUL edge, ENA untouched at boot), FW-PLT-001, FW-AFE-002 (RATE pin)
  */
 #include "f446.h"
@@ -35,13 +36,23 @@ void board_init(void)
     gpio_mode(GPIOC, PIN_DBG1_BIT, GPIO_MODE_OUT_, GPIO_PUPD_NONE_, GPIO_SPEED_HIGH_);
 #endif
     time_init();                                                   /* TIM5 1 MHz, no IRQ yet */
+    exti_init();                                                   /* inputs: pull-ups, EXTI routing */
+#if !(defined(FW_AFE_SYNTHETIC) && FW_AFE_SYNTHETIC)
+    hx711_init();                                                  /* SCK low, DOUT input, EXTI4 */
+#endif
     uart_init();                                                   /* RX DMA runs, IRQs later */
+    /* PUL / DIR / ENA are configured by hal_step_init() from app_init() (boot step 6) */
 }
 
 void board_start(void)
 {
+    exti_start();                                                  /* E-stop 0, limits / PAUSE 1 */
     uart_start_irqs();
+#if defined(FW_AFE_SYNTHETIC) && FW_AFE_SYNTHETIC
     afe_synth_start();                                             /* CC2 + EXTI4 vector (level 3) */
+#else
+    hx711_start();                                                 /* DOUT EXTI4 (level 3) */
+#endif
     time_start_tick();                                             /* CC1 1 kHz tick (level 4) */
     iwdg_start();                                                  /* run window 32..90 ms */
 }

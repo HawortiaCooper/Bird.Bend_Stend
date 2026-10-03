@@ -10,7 +10,8 @@ M-1  no HardwareSerial / HardwareTimer / TwoWire / Servo / tone / attachInterrup
 M-2  nothing is loaded into the NVM hole 0x08004000..0x0800BFFF (flash sectors 1 + 2); .isr_vector is
      the only load section in sector 0; .noinit is a NOLOAD RAM section between .bss and the stack.
 M-3  no malloc / free / realloc / calloc / _sbrk / printf family / operator new|delete (NFR-005).
-M-4  the flash erase/program busy loops are in .RamFunc (RAM address).
+M-4  the flash erase/program busy loops, the level-0/1 input handlers and the stop / ENA primitives
+     are in .RamFunc (RAM address).
 
 Origin: Thrust_Stand_HAW/02_FW/tools/check_map.py @37c8747 (adapted: F446 vector slots, NVM hole,
 RamFunc check, no test-hook image).
@@ -27,17 +28,26 @@ NVM_END = 0x0800C000
 RAM_BASE = 0x20000000
 RAM_END = 0x20020000
 
-# own handlers (M1) and their exception numbers (vector index = 16 + IRQn, RM0390 Table 38)
+# own handlers and their exception numbers (vector index = 16 + IRQn, RM0390 Table 38); M2 adds
+# TIM2 (step) and the input EXTI vectors
 OWN_HANDLERS = {
     "NMI_Handler": 2,
     "HardFault_Handler": 3,
+    "EXTI0_IRQHandler": 16 + 6,
+    "EXTI1_IRQHandler": 16 + 7,
     "EXTI4_IRQHandler": 16 + 10,
     "DMA1_Stream5_IRQHandler": 16 + 16,
     "DMA1_Stream6_IRQHandler": 16 + 17,
+    "EXTI9_5_IRQHandler": 16 + 23,
+    "TIM2_IRQHandler": 16 + 28,
     "USART2_IRQHandler": 16 + 38,
+    "EXTI15_10_IRQHandler": 16 + 40,
     "TIM5_IRQHandler": 16 + 50,
 }
-RAMFUNCS = ["ram_erase", "ram_program"]
+# flash busy loops + the level-0/1 input handlers and the stop / ENA primitives they call (FW_design
+# §5.11: served from RAM while the flash is busy)
+RAMFUNCS = ["ram_erase", "ram_program", "EXTI15_10_IRQHandler", "EXTI0_IRQHandler", "EXTI1_IRQHandler",
+            "EXTI9_5_IRQHandler", "hal_step_stop_now", "hal_step_abort", "hal_ena_set"]
 FORBIDDEN_SUBSTR = ["HardwareSerial", "HardwareTimer", "TwoWire", "Servo", "attachInterrupt"]
 FORBIDDEN_EXACT = {"tone", "noTone", "malloc", "free", "realloc", "calloc", "_sbrk", "_sbrk_r",
                    "_malloc_r", "_free_r", "_realloc_r", "_calloc_r", "printf", "sprintf",

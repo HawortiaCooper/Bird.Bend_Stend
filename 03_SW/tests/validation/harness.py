@@ -62,6 +62,17 @@ def run_until(be, pred, timeout_ms: float = 5000.0, step_ms: float = 1.0) -> boo
     return be.test_hooks.run_until(pred, timeout_ms, step_ms)
 
 
+def until(be, pred, timeout_ms: float = 5000.0, chunk_ms: float = 25.0) -> bool:
+    """Lock-step wait whose predicate decodes the wire (expensive): advance in chunks of ``chunk_ms``."""
+    t = 0.0
+    while t < timeout_ms:
+        if pred():
+            return True
+        advance(be, chunk_ms)
+        t += chunk_ms
+    return bool(pred())
+
+
 def wait_rt(pred, timeout_s: float = 10.0, poll_s: float = 0.02) -> bool:
     t_end = time.monotonic() + timeout_s
     while time.monotonic() < t_end:
@@ -402,6 +413,106 @@ def forced_move_abs(be, target_um: int, v_um_s: int = 10_000):
     d = forced_device(be)
     return d.request(pg.Cmd.MOVE_ABS, rc.encode_request("MOVE_ABS", {"target_um": target_um, "v_um_s": v_um_s,
                                                                       "a_um_s2": 0}), epoch=d.channel.motion_epoch)
+
+
+def forced_request(be, name: str, fields: dict | None = None, *, motion: bool = False):
+    """Any ICD request on the forced path (payload built by the oracle ``ref_codec``). Stimulus only."""
+    from bend_stand.core import protocol_gen as pg  # noqa: PLC0415
+
+    d = forced_device(be)
+    kw = {"epoch": d.channel.motion_epoch} if motion else {}
+    return d.request(pg.Cmd[name], rc.encode_request(name, fields or {}), **kw)
+
+
+def forced_outcome(be, name: str, fields: dict | None = None, *, motion: bool = False,
+                   wait_ms: float = 300.0) -> tuple[str, int]:
+    """Send on the forced path, then read the verdict from the **wire** (ref_codec): (status name, detail)."""
+    m0 = wire_mark(be)
+    fut = forced_request(be, name, fields, motion=motion)
+    run_until(be, lambda: fut.done(), wait_ms)
+    req = tx(be, name, since=m0)[0]
+    resp = [w for w in rx(be, name, since=m0, kind="response") if w.seq == req.seq]
+    assert resp, f"no response to {name}"
+    f = resp[0].fields
+    return str(f.get("status", "OK")), int(f.get("detail", 0) or 0)
+
+
+def events(be, since: int = 0, code: str | None = None) -> list[W]:
+    return [w for w in rx(be, "EVENT", since=since) if code is None or w.fields.get("code") == code]
+
+
+def param_default(pdict, key: str):
+    return next(p.default for p in pdict.params if p.key == key)
+
+
+# =============================================================================================== M2 verbs
+# Pre-written M2 tests (SW_test_plan v0.3 §3.14) use only these; when B's M2 API lands with other names, only
+# this block follows.
+
+def move_to(be, target_mm: float, **kw: Any):
+    return be.motion.move_to(target_mm, **kw)
+
+
+def move_by(be, delta_mm: float, **kw: Any):
+    return be.motion.move_by(delta_mm, **kw)
+
+
+def jog_start(be, direction: int, speed_mm_s: float) -> None:
+    be.motion.jog_start(direction, speed_mm_s)
+
+
+def jog_stop(be) -> None:
+    be.motion.jog_stop()
+
+
+def enable(be):
+    return be.motion.enable()
+
+
+def disable(be, confirmed: bool = False):
+    return be.motion.disable(confirmed=confirmed)
+
+
+def home(be, load_confirmed: bool = False):
+    return be.motion.home(load_confirmed=load_confirmed)
+
+
+def motion_check(be, kind: str, **kw: Any):
+    from bend_stand.core.model import MotionKind  # noqa: PLC0415
+
+    return be.motion.check(MotionKind[kind], **kw)
+
+
+def motion_limits(be):
+    return be.motion.limits()
+
+
+def motion(be):
+    return be.status().motion
+
+
+def set_travel_limits(be, lo_mm: float | None, hi_mm: float | None) -> list:
+    from dataclasses import replace  # noqa: PLC0415
+
+    cfg = be.limits.get()
+    return be.limits.set(replace(cfg, travel_min_mm=lo_mm, travel_min_enabled=lo_mm is not None,
+                                 travel_max_mm=hi_mm, travel_max_enabled=hi_mm is not None))
+
+
+def hotkey_press(be) -> None:
+    """Fake global-hotkey press (requested hook GRQ-F-M2-01: ``test_hooks.hotkey_press()`` calls the same callback
+    as the Win32 hook / RegisterHotKey thread)."""
+    be.test_hooks.hotkey_press()
+
+
+def m2_ready(be, *, home_first: bool = True) -> None:
+    """Public-API preparation for the M2 motion tests: ENABLE (wait for ENABLED), then HOME (load not known → the
+    confirmed flag), wait for HOMED and standstill."""
+    enable(be)
+    assert run_until(be, lambda: motion(be).enabled, 2000), "ENABLE"
+    if home_first:
+        result(be, home(be, load_confirmed=True), 120_000)
+        assert run_until(be, lambda: motion(be).homed and not motion(be).moving, 120_000), "HOME"
 
 
 def rss_bytes() -> int:

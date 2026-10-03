@@ -5,7 +5,7 @@ B's production ``calc.timebase.frame_gaps``. Evidence for FW_test_plan T-level M
 Validator E) and SW_test_plan level X.
 
 Verifies: IF-005, IF-007, IF-011, NFR-008, FW-STR-002, FW-STR-004, FW-CMD-001, FW-CMD-002, FW-CMD-003,
-          FW-NVM-001, FW-NVM-002, FW-NVM-003, SAF-FW-002 (sniffer path, M1 part), SAF-FW-022/023 (no-motion part),
+          FW-NVM-001, FW-NVM-002, FW-NVM-003, SAF-FW-002 (sniffer path, M1 part), SAF-FW-023 (no-motion part; SAF-FW-022 withdrawn by D-36),
           D-30, D-31, D-34
 """
 from __future__ import annotations
@@ -252,7 +252,7 @@ def _enter(link: TwinLink, halt: bool, paused: bool) -> None:
         assert link.cmd("HALT")["status"] == "OK"
 
 
-@pytest.mark.req("FW-CMD-003", "SAF-FW-022", "SAF-FW-023", "FW-CMD-001")
+@pytest.mark.req("FW-CMD-003", "SAF-FW-023", "FW-CMD-001")
 @pytest.mark.parametrize("vec", VECS, ids=[v["name"] for v in VECS])
 def test_stop_family_vectors_in_twin(twin, vec):
     link = TwinLink(twin)
@@ -275,7 +275,7 @@ def test_stop_family_vectors_in_twin(twin, vec):
         assert ("PAUSED" in st["status"]) == vec["expect"]["paused_after"]
 
 
-@pytest.mark.req("SAF-FW-022", "SAF-FW-023", "FW-CMD-003", "D-30", "D-31")
+@pytest.mark.req("SAF-FW-023", "FW-CMD-003", "D-30", "D-31", "D-36")
 @pytest.mark.parametrize("halt,paused", [(False, False), (True, False), (False, True), (True, True)])
 def test_stop_family_oracle_and_events(twin, halt, paused):
     """Every stop/clear command in the 4 reachable latch states: verdict = ref_cmdcheck, latch effects + EVENTs."""
@@ -314,7 +314,7 @@ def test_stop_family_oracle_and_events(twin, halt, paused):
         assert sorted(ev) == sorted(want_ev), (name, halt, paused, ev)
 
 
-@pytest.mark.req("SAF-FW-022", "FW-CMD-003")
+@pytest.mark.req("FW-CMD-003", "D-36")
 def test_confirm_repeats_are_idempotent(twin):
     """20 CONFIRM repeats of HALT / PAUSE (SW retry class CONFIRM): one EVENT, every repeat answered OK."""
     link = TwinLink(twin)

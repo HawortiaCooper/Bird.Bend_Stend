@@ -16,7 +16,7 @@ extern "C" {
 
 /* main.cpp: board_init() -> app_init() -> board_start() */
 void board_init(void);           /* reset cause, stack paint, DWT, NVIC levels, GPIO, TIM5, USART2/DMA */
-void board_start(void);          /* enable the IRQs (tick, AFE, link), start the synthetic AFE + IWDG */
+void board_start(void);          /* enable the IRQs (inputs, tick, AFE, link), start the AFE + IWDG */
 
 /* clock.c */
 bool clock_hsi_fallback(void);
@@ -24,9 +24,18 @@ bool clock_hsi_fallback(void);
 void time_init(void);
 void time_start_tick(void);
 uint32_t time_timer_hz(void);
-/* afe_synth.c (called from the TIM5 ISR on CC2) */
+/* afe_synth.c (bring-up image FW_AFE_SYNTHETIC only; called from the TIM5 ISR on CC2) */
 void afe_synth_start(void);
 void afe_synth_on_cc2(uint32_t t_us);
+/* hx711_f4.c (HX711 on PB4 / PB10 / PB5) */
+void hx711_init(void);
+void hx711_start(void);
+/* exti.c (E-stop, limits, PAUSE) */
+void exti_init(void);
+void exti_start(void);
+/* flash_f4.c: an erase / program is running (input callbacks skipped, FW_design §5.11) */
+extern volatile bool g_flash_op;
+static inline bool flash_op_active(void) { return g_flash_op; }
 /* uart2_dma.c */
 void uart_init(void);
 void uart_start_irqs(void);

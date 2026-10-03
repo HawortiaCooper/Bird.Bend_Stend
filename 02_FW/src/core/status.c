@@ -1,6 +1,7 @@
 /* State snapshots: DATA flags/status, GET_STATUS (86 B), GET_INFO (44 B) (FW_design §5.10, §5.14;
- * ICD §7.1, §7.2, §7.6). Bits come only from the state; M1 input-derived bits are 0 (not sampled),
- * DRV_PWR = 1 only with drv.pwr_sense_enable = false (power not confirmed otherwise).
+ * ICD §7.1, §7.2, §7.6). Bits come only from the state: latches, the polarity-corrected inputs of the
+ * last tick sample (safety.c), the driver monitor (DRV_PWR filtered, ALM filtered), the motion state.
+ * The retired STOP_BTN bits are always 0 (ICD v0.5, D-36). fw_flags() also runs in the sample ISR.
  * Implements: FW-CMD-004, FW-STR-003, FW-CFG-004, IF-008, NFR-005 (stack_free_min),
  *             NFR-006 (loop_max_us), FW-MOT-009 (v_limit_um_s)
  */
@@ -9,6 +10,7 @@
 #include "fw.h"
 
 #include "hal_outputs.h"
+#include "hal_step.h"
 #include "hal_sys.h"
 #include "hal_time.h"
 #include "hal_uart.h"
@@ -25,7 +27,7 @@
 
 int32_t fw_pos_um(void)
 {
-    return units_steps_to_um(g_fw.pos_steps, g_fw.p.motion.steps_per_mm);
+    return units_steps_to_um(hal_step_count(), g_fw.p.motion.steps_per_mm);
 }
 
 uint32_t fw_v_limit(void)
@@ -51,7 +53,25 @@ void fw_flags(flags_in_t *f, uint32_t t_us)
     f->afe_stale = g_fw.afe.stale;
     f->afe_saturated = g_fw.afe.saturated;
     f->afe_rate_mismatch = g_fw.afe.rate.mismatch;
-    f->drv_pwr = !g_fw.boot_p.drv.pwr_sense_enable;   /* M1: not sensed; boot value (DEF-M1-01) */
+    f->limit_start = g_fw.lat.limit_start || safety_active((uint8_t)IO_LIMIT_START_BIT);
+    f->limit_end = g_fw.lat.limit_end || safety_active((uint8_t)IO_LIMIT_END_BIT);
+    f->link_wdg = g_fw.in.link_wdg;
+    f->pause_btn = g_fw.in.pause.pressed;
+    f->alm = drvmon_alm(&g_fw.in.drv);
+    f->pend = g_fw.in.pend;
+    f->pos_uncertain = g_fw.pos_uncertain;
+    f->drv_pwr = drvmon_power(&g_fw.in.drv);          /* filtered; 1 with sensing disabled (boot value) */
+    f->estop = g_fw.lat.estop || safety_active((uint8_t)IO_ESTOP_OPEN_BIT);
+    /* D-37 b: bits of a feature whose GET_INFO bit is 0 are sent as 0 (invalid), also DRV_PWR with
+     * power sensing off */
+    if ((FW_FEATURES & FEAT_DRV_SIGNALS) == 0u) {
+        f->alm = false;
+        f->pend = false;
+        f->drv_pwr = false;
+    }
+    if ((FW_FEATURES & FEAT_BUTTONS) == 0u) {
+        f->pause_btn = false;
+    }
 }
 
 void status_build(status_t *s)
@@ -71,8 +91,22 @@ void status_build(status_t *s)
     s->motion_state = g_fw.motion_state;
     s->faults = g_fw.lat.faults;
     memset(&io, 0, sizeof io);
-    io.drv_pwr = false;                          /* raw input not sampled in M1 */
-    io.ena_disabled = false;                     /* ENA untouched (reset level = holding, D-13) */
+    io.estop_open = safety_active((uint8_t)IO_ESTOP_OPEN_BIT);
+    io.limit_start = safety_active((uint8_t)IO_LIMIT_START_BIT);
+    io.limit_end = safety_active((uint8_t)IO_LIMIT_END_BIT);
+    io.pause_btn = safety_active((uint8_t)IO_PAUSE_BTN_BIT);
+    io.alm = safety_active((uint8_t)IO_ALM_BIT);
+    io.pend = safety_active((uint8_t)IO_PEND_BIT);
+    io.drv_pwr = safety_active((uint8_t)IO_DRV_PWR_BIT);   /* raw 'powered' */
+    io.ena_disabled = !g_fw.ena_on;
+    if ((FW_FEATURES & FEAT_DRV_SIGNALS) == 0u) {    /* D-37 b */
+        io.alm = false;
+        io.pend = false;
+        io.drv_pwr = false;
+    }
+    if ((FW_FEATURES & FEAT_BUTTONS) == 0u) {
+        io.pause_btn = false;
+    }
     io.rate_80 = g_fw.p.afe.rate_sps == (uint8_t)AFE_RATE_SPS_SPS80;
     s->io = flags_io(&io);
     s->home_phase = g_fw.home_phase;
@@ -81,11 +115,11 @@ void status_build(status_t *s)
     s->sys_flags = flags_sys(g_fw.clk_fallback, g_fw.cfg_dirty, g_fw.st.on, params_rt_reboot_pending(),
                              g_fw.nvm_defaulted);
     s->pos_um = fw_pos_um();
-    s->target_um = s->pos_um;                    /* idle */
-    s->pos_steps = g_fw.pos_steps;
+    s->target_um = motion_target_um();           /* = pos_um when idle */
+    s->pos_steps = hal_step_count();
     s->afe_raw_last = g_fw.afe.raw_last;
     s->afe_rate_dsps = afe_rate_dsps(&g_fw.afe.rate);
-    s->afe_reinit_count = 0u;
+    s->afe_reinit_count = g_fw.afe.reinit_count;
     link_counters(&ok, &crc, &ferr);
     s->rx_frames_ok = ok;
     s->rx_crc_errors = crc;
@@ -98,7 +132,7 @@ void status_build(status_t *s)
     s->link_age_ms = (age > 0xFFFFu) ? 0xFFFFu : (uint16_t)age;
     s->stack_free_min = hal_stack_free_min();
     s->nvm_save_ms = g_fw.nvm_save_ms;
-    s->idle_disable_left_s = 0xFFFFu;            /* not counting: driver not enabled */
+    s->idle_disable_left_s = safety_idle_left_s();
     s->nvm_record_seq = g_fw.nvm_record_valid ? g_fw.nvm_record_seq : 0u;
     s->nvm_save_uptime_ms = g_fw.nvm_save_uptime_ms;
     s->v_limit_um_s = fw_v_limit();

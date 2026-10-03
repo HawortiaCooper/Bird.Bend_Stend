@@ -1,5 +1,5 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.4.1, PROTO 1.0, PAYLOAD 1)
+ * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.5, PROTO 1.0, PAYLOAD 1)
  * Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
  * Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes
  * and their argument enums. FW code uses these identifiers only (no hand-listed codes).
@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define PROTO_ICD_VERSION      "0.4.1"
+#define PROTO_ICD_VERSION      "0.5"
 #define PROTO_MAJOR            1u
 #define PROTO_MINOR            0u
 #define PROTO_PAYLOAD_VERSION  1u
@@ -167,7 +167,7 @@ typedef enum {
 #define BLOCK_ESTOP_BIT                  0u
 #define BLOCK_ESTOP                      0x0001u /* ESTOP latched or E-stop sense input open (also evaluated by RESUME) */
 #define BLOCK_HALT_BIT                   1u
-#define BLOCK_HALT                       0x0002u /* HALT latched (also evaluated by RESUME) */
+#define BLOCK_HALT                       0x0002u /* HALT latched (PC: HALT command / Pause-Break key) (also evaluated by RESUME) */
 #define BLOCK_FAULT_BIT                  2u
 #define BLOCK_FAULT                      0x0004u /* any FAULT latched (§7.6) (also evaluated by RESUME) */
 #define BLOCK_NOT_ENABLED_BIT            3u
@@ -191,7 +191,7 @@ typedef enum {
 /* ---- STOP mode (ICD §5.5) ---- */
 typedef enum {
     STOPMODE_IMMEDIATE                = 0, /* no further PUL edge ≤ 2 ms after the last command byte (SAF-FW-002) */
-    STOPMODE_CONTROLLED               = 1, /* planned deceleration at motion.a_stop_um_s2 (clean halt allowed at step period > 2 ms, §6.5) */
+    STOPMODE_CONTROLLED               = 1, /* planned deceleration at motion.a_stop_um_s2 (clean halt only at step period > 2 ms and planned stop distance <= 1 step, §6.5) */
 } proto_stop_mode_t;
 
 /* ---- MOVE_UNTIL_LOAD cmp (ICD §5.4) ---- */
@@ -233,7 +233,7 @@ typedef enum {
 typedef enum {
     SRC_NONE                     = 0, /* not latched */
     SRC_PC                       = 1, /* PC command (HALT, PAUSE) */
-    SRC_BUTTON                   = 2, /* physical STOP/BREAK or PAUSE button */
+    SRC_BUTTON                   = 2, /* physical PAUSE button (pause_src / PAUSED only; halt_src is never BUTTON since v0.5, D-36) */
 } proto_source_t;
 
 /* ---- Reset cause (STATUS reset_cause, EVENT BOOT arg) (ICD §7.2) ---- */
@@ -277,7 +277,7 @@ typedef enum {
 #define FEAT_TWIN_BIT                   6u
 #define FEAT_TWIN                       0x00000040UL /* host twin build */
 #define FEAT_BUTTONS_BIT                7u
-#define FEAT_BUTTONS                    0x00000080UL /* STOP/PAUSE inputs */
+#define FEAT_BUTTONS                    0x00000080UL /* PAUSE button input (the STOP/BREAK input is retired, D-36) */
 #define FEAT_DRV_SIGNALS_BIT            8u
 #define FEAT_DRV_SIGNALS                0x00000100UL /* ALM/PEND/DRV_POWER inputs */
 #define FEAT_DEFINED_MASK               0x000001FFUL
@@ -294,7 +294,7 @@ typedef enum {
 #define DF_ESTOP_BIT                  4u
 #define DF_ESTOP                      0x10u /* ESTOP latched or E-stop sense input open */
 #define DF_HALT_BIT                   5u
-#define DF_HALT                       0x20u /* HALT latched (source: STATUS halt_src) */
+#define DF_HALT                       0x20u /* HALT latched (PC HALT command / Pause-Break key; STATUS halt_src = PC) */
 #define DF_FAULT_BIT                  6u
 #define DF_FAULT                      0x40u /* any FAULT latched (STATUS faults) */
 #define DF_OVERRUN_BIT                7u
@@ -321,20 +321,21 @@ typedef enum {
 #define DS_LINK_WDG_BIT               8u
 #define DS_LINK_WDG                   0x0100u /* link watchdog tripped, until the next valid command frame */
 #define DS_STOP_BTN_BIT               9u
-#define DS_STOP_BTN                   0x0200u /* physical STOP/BREAK button input active */
+#define DS_STOP_BTN                   0x0200u /* RETIRED in ICD v0.5: reserved, sent as 0, never reused. was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) */
 #define DS_PAUSE_BTN_BIT              10u
-#define DS_PAUSE_BTN                  0x0400u /* physical PAUSE button input active */
+#define DS_PAUSE_BTN                  0x0400u /* physical PAUSE button input active [valid only with FEAT_BUTTONS] */
 #define DS_ALM_BIT                    11u
-#define DS_ALM                        0x0800u /* driver ALM active */
+#define DS_ALM                        0x0800u /* driver ALM active [valid only with FEAT_DRV_SIGNALS] */
 #define DS_PEND_BIT                   12u
-#define DS_PEND                       0x1000u /* driver PEND (in position) active */
+#define DS_PEND                       0x1000u /* driver PEND (in position) active [valid only with FEAT_DRV_SIGNALS] */
 #define DS_POS_UNCERTAIN_BIT          13u
 #define DS_POS_UNCERTAIN              0x2000u /* an immediate stop may have truncated a pulse (±1 step), cleared by the next HOME */
 #define DS_NO_AFE_DATA_BIT            14u
 #define DS_NO_AFE_DATA                0x4000u /* fallback frame (afe_raw = 0x80000000) */
 #define DS_DRV_PWR_BIT                15u
-#define DS_DRV_PWR                    0x8000u /* driver power present (reads 1 when drv.pwr_sense_enable = false) */
-#define DS_DEFINED_MASK               0xFFFFu
+#define DS_DRV_PWR                    0x8000u /* driver power present (reads 1 when drv.pwr_sense_enable = false and FEAT_DRV_SIGNALS = 1) [valid only with FEAT_DRV_SIGNALS] */
+#define DS_DEFINED_MASK               0xFDFFu
+#define DS_RETIRED_MASK               0x0200u
 
 /* ---- FAULT mask (u16) (ICD §7.6) ---- */
 #define FAULT_LOAD_LIMIT_BIT             0u
@@ -363,20 +364,21 @@ typedef enum {
 #define IO_LIMIT_END_BIT              2u
 #define IO_LIMIT_END                  0x0004u /* END limit input active */
 #define IO_STOP_BTN_BIT               3u
-#define IO_STOP_BTN                   0x0008u /* STOP/BREAK button input active */
+#define IO_STOP_BTN                   0x0008u /* RETIRED in ICD v0.5: reserved, sent as 0, never reused. was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) */
 #define IO_PAUSE_BTN_BIT              4u
-#define IO_PAUSE_BTN                  0x0010u /* PAUSE button input active */
+#define IO_PAUSE_BTN                  0x0010u /* PAUSE button input active [valid only with FEAT_BUTTONS] */
 #define IO_ALM_BIT                    5u
-#define IO_ALM                        0x0020u /* driver ALM input active */
+#define IO_ALM                        0x0020u /* driver ALM input active [valid only with FEAT_DRV_SIGNALS] */
 #define IO_PEND_BIT                   6u
-#define IO_PEND                       0x0040u /* driver PEND input active */
+#define IO_PEND                       0x0040u /* driver PEND input active [valid only with FEAT_DRV_SIGNALS] */
 #define IO_DRV_PWR_BIT                7u
-#define IO_DRV_PWR                    0x0080u /* raw driver-power sense input 'powered' */
+#define IO_DRV_PWR                    0x0080u /* raw driver-power sense input 'powered' [valid only with FEAT_DRV_SIGNALS] */
 #define IO_ENA_DISABLED_BIT           8u
 #define IO_ENA_DISABLED               0x0100u /* ENA output at the disabled level */
 #define IO_RATE_80_BIT                9u
 #define IO_RATE_80                    0x0200u /* HX711 RATE output high */
-#define IO_DEFINED_MASK               0x03FFu
+#define IO_DEFINED_MASK               0x03F7u
+#define IO_RETIRED_MASK               0x0008u
 
 /* ---- EVENT codes (ICD §8.1) ---- */
 typedef enum {
@@ -401,7 +403,7 @@ typedef enum {
     EV_HOME_FAILED              = 19,
     EV_DRIVER_ENABLED           = 20,
     EV_DRIVER_DISABLED          = 21,
-    EV_STOP_BUTTON              = 22,
+    EV_STOP_BUTTON              = 22, /* RETIRED in ICD v0.5: never sent, code never reused. was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) */
     EV_PAUSE_BUTTON             = 23,
     EV_ALM_CHANGED              = 24,
     EV_AFE_REINIT               = 25,
@@ -422,7 +424,7 @@ typedef enum {
     SC_PC_STOP                  = 1, /* STOP mode 0 */
     SC_PC_STOP_CONTROLLED       = 2, /* STOP mode 1 */
     SC_PC_HALT                  = 3, /* HALT command */
-    SC_STOP_BUTTON              = 4, /* physical STOP/BREAK button */
+    SC_STOP_BUTTON              = 4, /* RETIRED in ICD v0.5: never sent, code never reused. was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) */
     SC_PAUSE_BUTTON             = 5, /* physical PAUSE button */
     SC_PC_PAUSE                 = 6, /* PAUSE command */
     SC_ESTOP                    = 7, /* E-stop sense opened */
@@ -483,6 +485,13 @@ typedef enum {
     LIM_START                    = 0, /* START switch (−x end, home reference) */
     LIM_END                      = 1, /* END switch (+x end) */
 } proto_limit_id_t;
+
+/* ---- afe_sample_t.status (seam hal_hx711, tools/README; not on the wire) (ICD tools/README seam v1.2) ---- */
+#define AFES_SCK_OVERRUN_BIT            0u
+#define AFES_SCK_OVERRUN                0x01u /* the read of this sample overran (SCK high > 60 us or DOUT still low after the last pulse): the HX711 may have entered power-down; the core re-initialises it (afe_reinit_count, EVENT AFE_REINIT) and flags the next afe.settle_discard samples AFE_SETTLING */
+#define AFES_MISSED_EDGE_BIT            1u
+#define AFES_MISSED_EDGE                0x02u /* at least one DOUT-ready edge was missed before this sample (recovered by hal_hx711_kick or a late edge): the core sets OVERRUN in the next DATA frame */
+#define AFES_DEFINED_MASK               0x03u
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,6 @@
 # 00_System/tools — Integrator tools (owner: Implementer C)
 
-Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.4.1, `params.yaml` dict_version 3 and `protocol.yaml`
+Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.5, `params.yaml` dict_version 4 and `protocol.yaml`
 (protocol name registry, ICD §0.3).
 Python ≥ 3.11, standard library + PyYAML (generators only). Use the project venv: `.venv\Scripts\python`.
 
@@ -9,8 +9,9 @@ Python ≥ 3.11, standard library + PyYAML (generators only). Use the project ve
 | `gen_params.py` | **Single generator entry point.** `params.yaml` → `02_FW/src/gen/params_gen.{h,c}`, `03_SW/src/bend_stand/core/params_gen.py`, ICD Appendix A; runs `gen_protocol.py`. Origin: Thrust_Stand_HAW `00_System/tools/gen_params.py` @9473c68 (trimmed). |
 | `gen_protocol.py` | `protocol.yaml` → `02_FW/src/gen/proto_gen.h` (C), `03_SW/src/bend_stand/core/protocol_gen.py` (Python `IntEnum`/`IntFlag`, `<ID>_BITS`, `<ID>_DESC`, `CMD_REQ_LEN`, `CMD_RETRY`), ICD tables between `GENERATED protocol:<id>` markers + Appendix B (GF-08). |
 | `ref_codec.py` | Reference codec (oracle): CRC-16/CCITT-FALSE, frame encoder, ICD §2.3 parser with resync, encode/decode of every request, response, DATA and EVENT payload. Stdlib only. |
+| `ref_motion.py` | Reference step-period generator (M2): exact sqrt ramp with max rule and fractional carry (R4 §1.5), controlled stop, JOG on-the-fly changes, ICD §6.5 stop-path rule, planner. The docstring is the normative definition behind `motion_vectors.json`. |
 | `ref_cmdcheck.py` | Reference acceptance model of ICD §4–§6 (check order, BLOCK mask, busy, clears, SET_PARAM checks, hard rules). Acceptance only, no execution. |
-| `gen_vectors.py` | **The single vector generator** → `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (M1); `vectors/motion_vectors.json` (R4 TV-M) is planned for M2 in the same generator. |
+| `gen_vectors.py` | **The single vector generator** → `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (M1), `vectors/motion_vectors.json` (M2, from `ref_motion.py`). |
 | `vectors/` | Generated shared vectors (never hand-edited). |
 | `fw_twin/` | **FW host twin** (P2/M1): `build.py` (host gcc build of A's unmodified `02_FW/src/{pure,core,gen}` + twin seams), `engine/` (C: scheduler, seam implementations, world model), `twin.py` (launcher: virtual time, TCP ports, vocabulary v2, logs; Python API `Twin` / `TwinLink`), `contract/` (seam v1 header copies, used only while A's headers are absent), `probe/` (harness probe core — **not the FW**). See "FW host twin — how to run it" below. |
 | `tests/` | pytest proving the codec, the model and the generators against the vectors; `test_fw_twin.py` = twin harness self-tests (probe core). |
@@ -39,6 +40,7 @@ Both implementations MUST pass the same files; the vectors are the oracle for by
 | `frames` `framing_only` / `invalid` | frame layer only / must be dropped with `crc_errors += 1` | same |
 | `streams` | feed `chunks_hex` in order to a fresh `frame.c` parser; call the 20 ms timeout hook if `idle_timeout_at_end`; frames **and** counters equal | same with `io.framing.FrameDecoder` |
 | `units_vectors.json` (ICD §0.1) | `units.c` `um_to_steps` / `steps_to_um` / rate cap with `spm` = the binary32 from `spm_f32_hex`: every value exact | `calc.motion.um_to_steps` / `steps_to_um` and the simulator's step model: every value exact |
+| `motion_vectors.json` (M2) | `ramp.c` / `stepgen_core` from the case parameters and events: every period within `tolerance.period_ticks` (±1) and the sum within `tolerance.sum_ticks` (±N/1000) of `periods`; `ctrl_stop_path()` equals every `ctrl_stop_paths` row | the simulator's step model: every period and sum exact (binary64) |
 | `check_vectors.json` | set up the pure command-check context from `state_defaults` ⊕ `state` (and the param overrides), run the command check on `request.payload_hex`, compare STATUS/detail and, for NACKs, the encoded response with `response_frame_hex`; no side effect on NACK | the simulator (`io.sim.fw_logic`) in the same state answers identically (differential check of the SimBoard) |
 
 FW side: a pre-script in `02_FW` (owned by A/E) converts the JSON into a C header (arrays of hex strings +
@@ -132,6 +134,8 @@ void hal_wdg_kick(void);  void hal_wdg_set_timeout(uint32_t ms);
 uint8_t hal_reset_cause(void);            /* RST_* (proto_gen.h) */
 void hal_reset(void);  void hal_uid(uint8_t uid[12]);  bool hal_clk_fallback(void);
 uint16_t hal_stack_free_min(void);
+bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);   /* seam v1.2 (OI-FW-32): HardFault record of the
+                                                          previous run, true once after boot, then cleared */
 /* critical sections (seam v1.1, A's proposal adopted in P2/M1): HALT = PRIMASK, AFE/MOTION = BASEPRI 0x20,
    DATA = 0x30, TICK = 0x40; no-ops in the twin (single thread, ISRs never preempt; nesting checked) */
 typedef enum { HAL_CRIT_HALT = 0, HAL_CRIT_AFE = 1, HAL_CRIT_MOTION = 2, HAL_CRIT_DATA = 3, HAL_CRIT_TICK = 4 } hal_crit_level_t;
@@ -151,6 +155,30 @@ void       hal_crit_exit(hal_crit_t saved);
 | `hal_hx711` | EXTI on DOUT + bit-bang (`hx711_seq.h`, Thrust origin) | sample source from the load model at rate·(1+ε); `hold` = no samples delivered; `kick` = no-op; gain pulses per read recorded |
 | `hal_flash` | F4 sector erase / word program | file `flash.bin` (persists across twin resets); power cut injectable after program word n / during erase k; write counter |
 | `hal_sys` | IWDG, RCC, SCB | IWDG model (timeout from `hal_wdg_set_timeout`, LSI selectable), reset = engine process restart by `twin.py` with the selected cause (flash kept, frames in flight cut), HSE-fail flag; `hal_crit_*` no-ops (nesting checked) |
+
+**Seam semantics (normative, fixed by A's FW and fakes, adopted at ICD v0.5; OI-C-M1-03 answered):**
+- `hal_uart_tx_free(cls)` = the largest frame (bytes) the class queue accepts **now** (0 = none).
+- `hal_uart_peek(buf, max, &cursor)`: `cursor` = absolute RX byte count since boot (the core starts it at 0);
+  returns the bytes after `cursor` without consuming them and advances `cursor`; a lapped cursor skips to the
+  oldest byte still in the ring.
+- `hal_flash_erase(sector)`: F4 sector number 1 or 2 (0x0800 4000…0x0800 7FFF / 0x0800 8000…0x0800 BFFF);
+  `hal_flash_program(addr, src, n)`: addresses inside sectors 1–2, `n` a multiple of 4 B (word), at most
+  512 B per call; programming can only clear bits (a 0→1 bit returns false).
+- `hal_wdg_set_timeout(ms)` selects a window, it is not scaled: **ms ≤ 90 → run window** (PR /8, RLR 190:
+  32.5 ms at LSI 47 kHz … 89.9 ms at 17 kHz; i.e. 90 = the worst-case timeout at the slowest LSI), **ms > 90
+  → NVM long window** (PR /32, RLR 4095: 2.79 s … 7.71 s), idle only. The FW arms the run window at boot.
+- `afe_sample_t.status` bits (`protocol.yaml` table `afe_sample_status`, C `AFES_*`): bit 0 `SCK_OVERRUN`
+  (the read overran; the HX711 may have entered power-down → the core re-initialises it), bit 1 `MISSED_EDGE`
+  (≥ 1 DOUT-ready edge missed before this sample → OVERRUN in the next DATA frame); bits 2–7 = 0.
+
+**Seam v1.2 (M2; OI-FW-32)** — one addition, made by A in `hal_sys.h` and mirrored into the block above
+(ICD v0.5; the twin provides it):
+```c
+bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);   /* HardFault record of the previous run (.noinit):
+                                                          true once after boot if present, then cleared */
+```
+The core puts `pc` / `cfsr` into EVENT BOOT `value` / `value2` (ICD §6.4). Twin: vocabulary `reset` with
+`cause: "hardfault"` plants a record and resets with cause SOFTWARE; `--fault-rec <pc_hex>:<cfsr_hex>`.
 
 Rules for A: the protocol, command check, state machines, NVM codec, ramp planner and safety logic call only
 these seams (no direct register access outside `src/hal/`); every seam call that the twin cannot serve
@@ -205,13 +233,19 @@ $env:BEND_TWIN_CORE="probe"; .venv\Scripts\python -m pytest 03_SW\tests\integrat
   active → `hal_step_stop_now()`; every EXTI-input edge calls `on_input_edge` (lines never masked, `rearm` no-op);
   ALM / PEND / DRV_PWR are only polled. AFE: 80 SPS from reset (RATE pull-up), `hal_rate_pin` /
   `hal_hx711_config` select 10/80 SPS, conversions at `1/(sps·(1+rate_error))`, raw = round-half-away(offset +
-  `cell_counts_per_n`·F(x) + N(0, noise)) clamped to the rails, `afe_sample_t.status` = 0 (bit 0 = the
-  `sck_overrun` symptom, semantics to be confirmed by A); `hold` = conversions continue, none delivered.
+  `cell_counts_per_n`·F(x) + N(0, noise)) clamped to the rails, `afe_sample_t.status` per the seam semantics
+  (bit 0 = `afe sck_overrun`, bit 1 = after `afe miss_next`); `hold` = conversions continue, none delivered.
   Flash: sectors 1+2 (0x0800 4000…0x0800 BFFF) in `flash.bin`, program = AND (a 0→1 bit returns false), sector =
-  1/2 or an address in it. IWDG armed by the first kick / `set_timeout`; `hal_wdg_set_timeout(ms)`: `ms` = worst-case timeout (slowest LSI 17 kHz), the twin fires after `ms·17000/LSI` (default LSI 32 kHz, default 90 ms → 47.8 ms = the target run window; semantics to be confirmed by A, OI-C-M1-03).
+  1/2 or an address in it. IWDG armed by the first kick / `set_timeout`; window per the seam semantics at the model LSI (`iwdg lsi_hz`,
+  default 32 kHz: run window 47.75 ms, long window 4.10 s).
   `hal_uid` = `--uid` (default "TWIN-UID-001"), `hal_stack_free_min` = 3072 (no stack painting).
-- **D-36**: the separate STOP/BREAK button input is **not modelled** (electrical level 0 = released); `button
-  stop`, `wire stop`, `chatter stop` answer `{"ok": false}` until ICD v0.5 (CR-01) retires the names.
+- **D-36 / CR-01 (ICD v0.5)**: there is no STOP/BREAK button input (PC7 is free; the red button is the E-stop,
+  `estop`). The names `button stop`, `wire stop`, `chatter stop` are **retired** from the vocabulary and answer
+  `{"ok": false}`.
+- **RX during a flash stall (OBS-M1-02, fixed in v0.5)**: bytes injected with `rx_bytes at_us` reach the
+  engine before it advances to their time, so bytes arriving during a SAVE stall land in the RX ring at their
+  wire time (as the RX DMA does; logged there in `wire_log`), and the command is processed and answered after
+  the flash operation (ICD §2.4 SAVE exemption, D-37a).
 - **Python API** (validators, integration tests): `Twin(clock, core|exe, run_dir, scenario, t0_us, speed)`,
   `advance_us/ms/to`, `act(...)` (= control port), `feed_rx(bytes)`, `read_client()`, `serve(port, ctl)`,
   `fw_t_us()`, logs `wire_log`, `sent`, `edges`, `seam_log`, `conversions`, `input_log`, `resets`;
@@ -231,12 +265,12 @@ relaxation not yet: M3), `load_offset`, `afe` (all arguments), `inject` (`tx_con
 first byte, world µs), `on_frame` (after the last byte of the nth matching request), `on_event` (after the last
 byte of the nth matching EVENT on the wire), `flash`, `clock`, `reset`, `query` (`world`, `pulses`, `outputs`,
 `edges`, `seam_log`, `wire_log`, `sent`, `flash`); also `wire`, `chatter`, `world_shift`, `iwdg`, `clk`.
-Not yet: `inject isr_storm` / `where: isr1` (M2). Twin-only `query` extensions: `conversions` (every HX711
+M2 additions (ICD v0.5): `inject isr_storm` (= `hang where=isr1`: main loop, tick, step ISR and sample delivery starved for `duration_ms`, hardware pulses continue at the preloaded period, level-1 input callbacks deferred, the level-0 E-stop reaction still acts; seam log `step_isr_starved`), `reset cause=hardfault` (seam v1.2 record), `afe_sample_t.status` bit 1 after `afe miss_next` / `drop_every`. Twin-only `query` extensions: `conversions` (every HX711
 conversion: world `t_us`, FW `fw_t_us`, raw, delivered) and `inputs` (electrical input changes). Times in logs
 are world µs since the twin start (float, ns resolution); `wire_log` `first_us` = start of the first byte,
 `last_us` = end of the last byte.
 
-## Shared simulator / twin world-control vocabulary v2 (F-B-06, DEF-P1-03) — names FROZEN (ICD v0.4)
+## Shared simulator / twin world-control vocabulary v2 (F-B-06, DEF-P1-03) — names FROZEN (ICD v0.4; v0.5: STOP-button names retired)
 
 Both the SW simulator (`io.sim.SimControl.act(action, **args)`, Implementer B) and the FW twin control port
 accept the **same action names and arguments**, so differential tests (`03_SW/tests/integration/
@@ -253,9 +287,9 @@ T = twin, S = simulator, both = both (differential tests use only "both" actions
 |---|---|---|---|---|
 | `estop` | `open: bool`, `drv_power_follows?: bool` (default true), `k1_delay_ms?: int` (default 20), `bounce_ms?: [int]` | E-stop sense input; if `drv_power_follows`, DRV_POWER drops `k1_delay_ms` later (K1 weld = `drv_power_follows: false`) | ✓ | both |
 | `drv_power` | `on: bool`, `bounce_ms?: [int]` | DRV_POWER input / driver supply | ✓ | both |
-| `button` | `name: "stop"\|"pause"`, `pressed: bool`, `bounce_ms?: [int]` | physical buttons (polarity per `io.*_active_level`) | ✓ | both |
+| `button` | `name: "pause"`, `pressed: bool`, `bounce_ms?: [int]` | physical PAUSE button (polarity per `io.pause_active_level`); `name: "stop"` retired (v0.5, D-36) | ✓ | both |
 | `limit` | `name: "start"\|"end"`, `active?: bool` (forced), `position_um?: int` (switch location), `bounce_ms?: [int]` | limit switches | ✓ | both |
-| `wire` | `input: "estop"\|"start"\|"end"\|"stop"\|"pause"\|"alm"\|"pend"\|"drv_power"`, `broken: bool` | broken wire on any input (NC inputs read active / unpowered) |  | both |
+| `wire` | `input: "estop"\|"start"\|"end"\|"pause"\|"alm"\|"pend"\|"drv_power"` ("stop" retired, v0.5), `broken: bool` | broken wire on any input (NC inputs read active / unpowered) |  | both |
 | `chatter` | `input: <as wire>`, `period_ms: float`, `duration_ms: int` | periodic toggling (e.g. ALM 1 kHz chatter) |  | T |
 | `alm` / `pend` | `active: bool` | driver outputs | ✓ | both |
 | `specimen` | `kind: "none"\|"spring"\|"bilinear"`, `k_n_per_mm`, `x_contact_um`, `k2_n_per_mm?`, `f_yield_n?`, `f_break_n?`, `relax_pct?`, `relax_tau_s?` | load model | ✓ | both |
@@ -269,7 +303,7 @@ T = twin, S = simulator, both = both (differential tests use only "both" actions
 | `iwdg` | `lsi_hz?: int` (17 000…47 000) | IWDG model clock |  | T |
 | `clk` | `hse_fail: bool` | `hal_clk_fallback()` at the next boot |  | T |
 | `clock` | `advance_ms?: int`, `advance_us?: int` | advance virtual time (lock-step only) | ✓ | both |
-| `reset` | `cause: "pin"\|"power"\|"iwdg"\|"software"` | board reset, flash kept | ✓ | both |
+| `reset` | `cause: "pin"\|"power"\|"iwdg"\|"software"\|"hardfault"`, `pc?: int`, `cfsr?: int` | board reset, flash kept; `hardfault` = HardFault record (seam v1.2) + reset cause SOFTWARE (M2) | ✓ (hardfault: M2) | both (hardfault: T) |
 | `query` | `what: "world"\|"pulses"\|"outputs"\|"edges"\|"seam_log"\|"wire_log"\|"sent"\|"flash"` , `since_us?: int` | `world`: `x_um_true`, inputs, load; `pulses`: PUL count; `outputs`: ENA, RATE, LED, trip relay; `edges`: `[{t_us, pin: "PUL"\|"DIR"\|"ENA", level}]`; `seam_log`: `[{t_us, call, args}]`; `wire_log`: `[{dir, type, seq, first_us, last_us, hex}]`; `sent`: frames produced incl. dropped DATA; `flash`: write counter, records | world/pulses/outputs/edges/wire_log/sent ✓ | both (`edges`, `seam_log`: T; S returns its model equivalent where defined) |
 
 Scenario file (`bird.bend.simscenario` v1, JSON, shared by simulator and twin):

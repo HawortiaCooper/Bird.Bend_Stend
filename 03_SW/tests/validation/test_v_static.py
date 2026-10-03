@@ -171,8 +171,62 @@ def test_tc_if_001_01_every_name_used_is_in_the_icd():
     uses = _attr_uses(_modules("core", "io", "calc", "gui") + [SRC / "__main__.py"], {"pg", "protocol_gen"},
                       set(tables))
     assert len(uses) > 60
-    missing = sorted(f"{e}.{m}" for e, m in uses if m not in tables[e])
+    retired = _retired_icd_names()
+    missing = sorted(f"{e}.{m}" for e, m in uses if m not in tables[e] and m not in retired)
     assert not missing, missing
+
+
+def _retired_icd_names() -> set[str]:
+    """Names withdrawn in the ICD (``retired:`` in protocol.yaml, ICD v0.5 CR-01: STOP_BTN, STOP_BUTTON) — oracle =
+    the Integrator's single source, read directly (never protocol_gen)."""
+    import yaml
+
+    doc = yaml.safe_load((REPO / "00_System" / "specs" / "protocol.yaml").read_text(encoding="utf-8"))
+    return {it["name"] for t in doc.get("tables", []) for it in t.get("items", []) if it.get("retired")}
+
+
+@pytest.mark.req("IF-001", "SAF-SW-005")
+@pytest.mark.defect("SWD-M2-01")
+@pytest.mark.xfail(strict=True, reason="SWD-M2-01 open (B): core/gates.py:130 still evaluates IoBits.STOP_BTN")
+def test_tc_if_001_02_no_retired_icd_name_in_backend_or_gui():
+    """CR-01 / D-36 (ICD v0.5): no backend / GUI module (simulator excluded) uses a retired ICD name — STOP_BTN /
+    STOP_BUTTON are reserved, never sent, and must not drive a gate, indicator or text."""
+    # Verifies: IF-001, SAF-SW-005
+    retired = _retired_icd_names()
+    assert {"STOP_BTN", "STOP_BUTTON"} <= retired
+    files = [p for p in _modules("core", "io", "calc", "gui") if "sim" not in p.relative_to(SRC).parts]
+    used = sorted(f"{p.relative_to(SRC)}:{e}.{m}" for p in files
+                  for e, m in _attr_uses([p], {"pg", "protocol_gen"}, {"DataStatus", "IoBits", "Event", "StopCause"})
+                  if m in retired)
+    assert not used, used
+
+
+_CR01_TEXT = re.compile(r"physical STOP|STOP/BREAK|STOP input|STOP button (?:active|pressed|released)", re.I)
+
+
+def _user_strings(path: Path) -> list[tuple[int, str]]:
+    """String literals of a module except docstrings (module / class / function) and comments."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    doc_ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body and \
+                isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant):
+            doc_ids.add(id(node.body[0].value))
+    return [(n.lineno, n.value) for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in doc_ids]
+
+
+@pytest.mark.req("SAF-SW-005", "SW-STOP-002")
+@pytest.mark.defect("SWD-M2-01")
+@pytest.mark.xfail(strict=True, reason="SWD-M2-01 open (B): core/device.py:552 'use the physical STOP / E-stop', "
+                                       "core/gates.py:131 'STOP input active'")
+def test_tc_saf_sw_005_04_no_text_refers_to_a_physical_stop_button():
+    """CR-01 / D-36: the only physical stop is the red E-stop (power cut); no operator text (indicator, gate, clear
+    hint, alarm) may point to a physical STOP/BREAK button or STOP input (KL-07). Docstrings / comments excluded."""
+    # Verifies: SAF-SW-005, SW-STOP-002
+    hits = [f"{p.relative_to(SRC)}:{ln}: {s[:80]!r}" for p in _modules("core", "gui")
+            for ln, s in _user_strings(p) if _CR01_TEXT.search(s)]
+    assert not hits, hits
 
 
 @pytest.mark.req("IF-001", "IF-010")
@@ -275,7 +329,7 @@ def test_tc_if_010_01_dictionary_hash_matches(pdict):
                        text=True, timeout=120)
     assert r.returncode == 0
     h = int(re.search(r"0x[0-9A-Fa-f]{8}", r.stdout).group(0), 16)
-    assert h == pgen.PARAM_DICT_HASH == pdict.hash == 0xF0376293
+    assert h == pgen.PARAM_DICT_HASH == pdict.hash   # ICD v0.5: dict_version 4 (47 params); no literal (oracle = params.yaml)
 
 
 # ============================================================================================ SYS-010

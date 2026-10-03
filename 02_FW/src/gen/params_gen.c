@@ -1,7 +1,7 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/params.yaml (dict_version 3, schema 1)
+ * Source : 00_System/specs/params.yaml (dict_version 4, schema 1)
  * Tool   : 00_System/tools/gen_params.py
- * Hash   : PARAM_DICT_HASH = 0xF0376293
+ * Hash   : PARAM_DICT_HASH = 0xFCC54C90
  * Implements: FW-CFG-001, IF-010
  */
 #include "params_gen.h"
@@ -100,8 +100,6 @@ const param_meta_t PARAM_TABLE[PARAM_COUNT] = {
     PM(PID_IO_RELEASE_MS, PARAM_T_U8, PARAM_F_NVM, io.release_ms, 1, 0x00000005u, 0x000000C8u, 0x00000014u, "io.release_ms"),
     /* io.estop_release_ms: min 50, max 2000, default 100 ms */
     PM(PID_IO_ESTOP_RELEASE_MS, PARAM_T_U16, PARAM_F_NVM, io.estop_release_ms, 2, 0x00000032u, 0x000007D0u, 0x00000064u, "io.estop_release_ms"),
-    /* io.stop_active_level: min OPEN_ACTIVE, max CLOSED_ACTIVE, default OPEN_ACTIVE  */
-    PM(PID_IO_STOP_ACTIVE_LEVEL, PARAM_T_ENUM, PARAM_F_NVM, io.stop_active_level, 1, 0x00000000u, 0x00000001u, 0x00000000u, "io.stop_active_level"),
     /* io.pause_active_level: min OPEN_ACTIVE, max CLOSED_ACTIVE, default CLOSED_ACTIVE  */
     PM(PID_IO_PAUSE_ACTIVE_LEVEL, PARAM_T_ENUM, PARAM_F_NVM, io.pause_active_level, 1, 0x00000000u, 0x00000001u, 0x00000001u, "io.pause_active_level"),
     /* drv.alm_active_level: min HIGH_ACTIVE, max LOW_ACTIVE, default HIGH_ACTIVE  */

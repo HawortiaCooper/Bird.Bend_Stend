@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 import ref_codec as rc
-from vhelp import FW, V, gen_define
+from vhelp import FW, V, gen_define, idle_status_bits
 
 
 def _fw_version_from_ini() -> list[int]:
@@ -27,9 +27,13 @@ def test_get_info_fields(v: V, tw):
     assert i["payload_version"] == rc.PAYLOAD_VERSION == 1
     assert i["fw_version"] == _fw_version_from_ini()
     assert int(i["param_dict_hash"], 16) == int(gen_define("PARAM_DICT_HASH").rstrip("uUlL"), 16)
-    assert i["param_count"] == int(gen_define("PARAM_COUNT").rstrip("u")) == 48
+    # dict_version 4 (ICD v0.5, CR-01: io.stop_active_level retired) -> 47 parameters (v0.2 plan: 48)
+    assert i["param_count"] == int(gen_define("PARAM_COUNT").rstrip("u")) == 47
     assert i["uid"].upper() == tw.uid.upper()                      # hal_uid seam
-    assert set(i["features"]) == {"AFE_SYNTHETIC", "NVM", "TWIN"}  # M1 build + FEAT_TWIN
+    if "MOTION" in i["features"]:                                  # M2 build (plan v0.3 §5.2): MOVE_UNTIL_LOAD is M4
+        assert set(i["features"]) == {"AFE", "MOTION", "HOMING", "NVM", "TWIN", "BUTTONS", "DRV_SIGNALS"}
+    else:
+        assert set(i["features"]) == {"AFE_SYNTHETIC", "NVM", "TWIN"}  # M1 build + FEAT_TWIN
     assert i["build"]                                             # build id string present
 
 
@@ -97,7 +101,8 @@ def test_clk_fallback_status_event_not_data(tw, v: V):
     d = v.data()
     assert d and all(set(x["flags"]) <= set(rc.DATA_FLAGS) for x in d)
     # no DATA bit for the clock (FW-PLT-002): flags/status of DATA identical to a normal boot
-    assert all(x["flags"] == [] and set(x["status"]) <= {"AFE_SETTLING"} for x in d),         {(tuple(x["flags"]), tuple(x["status"])) for x in d}
+    base = {"AFE_SETTLING"} | idle_status_bits(v)                 # v0.3: driver bits valid with DRV_SIGNALS
+    assert all(x["flags"] == [] and set(x["status"]) <= base for x in d),         {(tuple(x["flags"]), tuple(x["status"])) for x in d}
 
 
 def test_twin_builds_from_unchanged_sources():

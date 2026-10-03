@@ -32,7 +32,7 @@ static void test_data_status(void)
     CHECK_S(load_limit, DS_LOAD_LIMIT); CHECK_S(afe_stale, DS_AFE_STALE);
     CHECK_S(afe_saturated, DS_AFE_SATURATED); CHECK_S(afe_settling, DS_AFE_SETTLING);
     CHECK_S(afe_rate_mismatch, DS_AFE_RATE_MISMATCH); CHECK_S(link_wdg, DS_LINK_WDG);
-    CHECK_S(stop_btn, DS_STOP_BTN); CHECK_S(pause_btn, DS_PAUSE_BTN); CHECK_S(alm, DS_ALM);
+    CHECK_S(pause_btn, DS_PAUSE_BTN); CHECK_S(alm, DS_ALM);
     CHECK_S(pend, DS_PEND); CHECK_S(pos_uncertain, DS_POS_UNCERTAIN);
     CHECK_S(no_afe_data, DS_NO_AFE_DATA); CHECK_S(drv_pwr, DS_DRV_PWR);
 }
@@ -40,7 +40,7 @@ static void test_data_status(void)
 static void test_io(void)
 {
     CHECK_IO(estop_open, IO_ESTOP_OPEN); CHECK_IO(limit_start, IO_LIMIT_START);
-    CHECK_IO(limit_end, IO_LIMIT_END); CHECK_IO(stop_btn, IO_STOP_BTN); CHECK_IO(pause_btn, IO_PAUSE_BTN);
+    CHECK_IO(limit_end, IO_LIMIT_END); CHECK_IO(pause_btn, IO_PAUSE_BTN);
     CHECK_IO(alm, IO_ALM); CHECK_IO(pend, IO_PEND); CHECK_IO(drv_pwr, IO_DRV_PWR);
     CHECK_IO(ena_disabled, IO_ENA_DISABLED); CHECK_IO(rate_80, IO_RATE_80);
 }
@@ -55,7 +55,8 @@ static void test_sys_and_all(void)
     TEST_ASSERT_EQUAL_HEX8(SYSF_NVM_DEFAULTED, flags_sys(false, false, false, false, true));
     memset(&f, 1, sizeof f);
     TEST_ASSERT_EQUAL_HEX8(DF_DEFINED_MASK, flags_data(&f));
-    TEST_ASSERT_EQUAL_HEX16(DS_DEFINED_MASK, flags_status(&f));
+    TEST_ASSERT_EQUAL_HEX16(DS_DEFINED_MASK, flags_status(&f));   /* retired STOP_BTN never set */
+    TEST_ASSERT_EQUAL_HEX16(0u, (uint16_t)(flags_status(&f) & DS_RETIRED_MASK));
 }
 
 int main(void)

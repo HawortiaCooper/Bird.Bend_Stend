@@ -1,8 +1,8 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/params.yaml (dict_version 3, schema 1)
+Source : 00_System/specs/params.yaml (dict_version 4, schema 1)
 Tool   : 00_System/tools/gen_params.py
-Hash   : PARAM_DICT_HASH = 0xF0376293
+Hash   : PARAM_DICT_HASH = 0xFCC54C90
 
 Parameter metadata for the GUI (typed config fields) and the protocol codec.
 f32 min/max/default are stored already rounded to binary32, so read-back values
@@ -19,10 +19,10 @@ from dataclasses import dataclass
 from enum import IntEnum
 from types import MappingProxyType
 
-PARAM_DICT_HASH = 0xF0376293
-PARAM_DICT_VERSION = 3
+PARAM_DICT_HASH = 0xFCC54C90
+PARAM_DICT_VERSION = 4
 PARAM_SCHEMA_VERSION = 1
-PARAM_COUNT = 48
+PARAM_COUNT = 47
 
 
 class ParamType(IntEnum):
@@ -472,12 +472,12 @@ PARAMS: tuple[ParamMeta, ...] = (
     ParamMeta(
         id=0x0601, key='io.release_ms', type=ParamType.U8, unit='ms',
         min=5, max=200, default=20,
-        description='A limit switch or STOP/PAUSE button counts as released after a stable inactive level for this time (1 kHz sampling). Activation acts on the first edge (no delay). (SRS name input.release_ms.)',
+        description='A limit switch or the PAUSE button counts as released after a stable inactive level for this time (1 kHz sampling). Activation acts on the first edge (no delay). (SRS name input.release_ms.)',
         enum=None,
         group='io', group_label='Inputs (switches / buttons)', label='Release debounce', name='release_ms',
         moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
         enum_labels=None,
-        srs=('FW-SW-001', 'FW-SW-003', 'SAF-FW-013', 'SAF-FW-022', 'FW-PAR-006')),
+        srs=('FW-SW-001', 'FW-SW-003', 'SAF-FW-013', 'FW-PAR-006', 'D-36')),
     ParamMeta(
         id=0x0602, key='io.estop_release_ms', type=ParamType.U16, unit='ms',
         min=50, max=2000, default=100,
@@ -487,15 +487,6 @@ PARAMS: tuple[ParamMeta, ...] = (
         moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
         enum_labels=None,
         srs=('SAF-FW-006', 'FW-SW-002', 'FW-PAR-006')),
-    ParamMeta(
-        id=0x0603, key='io.stop_active_level', type=ParamType.ENUM, unit='',
-        min=0, max=1, default=0,
-        description='Physical STOP/BREAK button contact type (NC recommended and default, R5 §5.5). A change re-arms the input without generating a press; if the input then reads active it is reported and HALT_CLEAR is refused.',
-        enum=_M({0: 'OPEN_ACTIVE', 1: 'CLOSED_ACTIVE'}),
-        group='io', group_label='Inputs (switches / buttons)', label='STOP button contact', name='stop_active_level',
-        moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
-        enum_labels=_M({0: 'NC contact: open / high = pressed', 1: 'NO contact: closed / low = pressed'}),
-        srs=('FW-SW-003', 'SAF-FW-022', 'FW-PAR-006', 'D-26', 'D-28')),
     ParamMeta(
         id=0x0604, key='io.pause_active_level', type=ParamType.ENUM, unit='',
         min=0, max=1, default=1,
@@ -577,7 +568,7 @@ GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ('safety', 'FW safety',
      ('safety.load_raw_max', 'safety.load_raw_min', 'safety.load_trip_samples', 'safety.load_regrow_raw', 'safety.zero_raw', 'safety.release_band_raw', 'safety.idle_disable_s', 'safety.link_timeout_ms')),
     ('io', 'Inputs (switches / buttons)',
-     ('io.release_ms', 'io.estop_release_ms', 'io.stop_active_level', 'io.pause_active_level')),
+     ('io.release_ms', 'io.estop_release_ms', 'io.pause_active_level')),
     ('drv', 'Driver signals (ALM / PEND / power)',
      ('drv.alm_active_level', 'drv.pend_active_level', 'drv.pend_timeout_ms', 'drv.pwr_sense_enable', 'drv.k1_weld_ms')),
     ('stream', 'Data stream',

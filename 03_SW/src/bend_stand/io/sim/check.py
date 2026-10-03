@@ -1,11 +1,13 @@
-"""Pure command acceptance of the simulated FW (ICD v0.4.1 §4.4 check order, §4.3 BLOCK mask, §5, §6.3,
+"""Pure command acceptance of the simulated FW (ICD v0.5 §4.4 check order, §4.3 BLOCK mask, §5, §6.3,
 §11.4). **Written from the ICD text**, not copied from the Integrator's oracle ``ref_cmdcheck.py`` (otherwise the
 differential check of SW_design §12.5 would prove nothing).
 
 ``check(st, ftype, payload) -> (status_name, detail)``: ``("OK", 0)`` when the command is accepted. The
 simulator calls it first and executes only on OK, so a NACK has no side effect by construction.
 ``SimCheckState`` has exactly the fields of ``check_vectors.json`` ``state_schema`` 2 and is built from a vector
-with ``from_vector`` (an unknown key or a newer schema fails).
+with ``from_vector`` (an unknown key or a newer schema fails). Since ICD v0.5 (D-36 / CR-01) the keys
+``stop_btn_active`` / ``stop_btn_released_ms`` are kept (keys are never removed, F-B-25) but **ignored** — there is
+no physical STOP button any more, so HALT_CLEAR is never refused.
 
 Implements: FW-CMD-001 (check order, sim), FW-CFG-003 (SET_PARAM checks, sim), SAF-FW-020 (motion refusal,
 sim), SYS-008
@@ -23,7 +25,7 @@ from bend_stand.calc.paramrules import set_violation
 from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 
-STATE_SCHEMA = 2
+STATE_SCHEMA = 2                       # keys unchanged in ICD v0.5 (stop_btn_* never set, ignored)
 B = pg.Block
 MOVING = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOMING", "STOPPING")
 MOTION = (pg.Cmd.MOVE_ABS, pg.Cmd.MOVE_UNTIL_LOAD, pg.Cmd.HOME)
@@ -42,8 +44,8 @@ class SimCheckState:
     estop_input_open: bool = False
     estop_closed_ms: int = 100_000
     halt_latched: bool = False
-    stop_btn_active: bool = False
-    stop_btn_released_ms: int = 100_000
+    stop_btn_active: bool = False              # ignored since ICD v0.5 (D-36: no STOP button)
+    stop_btn_released_ms: int = 100_000        # ignored since ICD v0.5
     faults: list[str] = field(default_factory=list)
     fault_causes: list[str] = field(default_factory=list)
     limit_start: bool = False
@@ -210,15 +212,9 @@ def check(st: SimCheckState, ftype: int, payload: bytes) -> tuple[str, int]:
     if cmd in (C.HALT, C.PAUSE):
         return "OK", 0
     if cmd == C.HALT_CLEAR:
-        if st.halt_latched:
-            if st.stop_btn_active:
-                return "E_CAUSE_ACTIVE", pg.DETAIL_CAUSE_INPUT
-            need = int(st.p("io.release_ms"))
-            if st.stop_btn_released_ms < need:
-                return "E_CAUSE_ACTIVE", need - int(st.stop_btn_released_ms)
-        return "OK", 0
+        return "OK", 0                                       # never refused since ICD v0.5 (D-36, no cause input)
     if cmd == C.ESTOP_CLEAR:
-        if st.estop_latched:
+        if st.estop_latched or st.estop_input_open:          # an open input always means ESTOP (ICD v0.5 §4.3)
             if st.estop_input_open:
                 return "E_CAUSE_ACTIVE", pg.DETAIL_CAUSE_INPUT
             need = int(st.p("io.estop_release_ms"))

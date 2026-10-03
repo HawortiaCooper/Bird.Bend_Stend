@@ -4,35 +4,48 @@ direction) and the generated dictionary; command acceptance is the pure ``sim.ch
 effect by construction — the state is only changed after an OK verdict).
 
 Time: virtual board time from the ``Clock`` (``t_us`` = µs since boot + ``t0_us``, 32-bit on the wire).
-``step(now_ns)`` processes RX, runs the 1 ms FW tick, produces HX711 conversions and flushes TX in the FW wire
-order DATA > responses > EVENT (ICD §2.4). On the real clock ``start()`` runs it in a 1 ms thread; on the
-lockstep clock the backend calls ``step`` from ``test_hooks.advance()``.
+``step(now_ns)`` runs, in time order, the 1 ms FW tick and the HX711 conversions (the axis is advanced step by step
+to each of them), then processes RX and flushes TX in the FW wire order DATA > responses > EVENT (ICD §2.4).
+On the real clock ``start()`` runs it in a 1 ms thread; on the lockstep clock the backend calls ``step``.
 
-M1 scope (WP-B7): everything of the M1 command set incl. NVM rules, stream / fallback frames / OVERRUN,
-SET_VALID boundary + auto-clear, latches (ESTOP, HALT, PAUSED, LINK_WDG, LIMIT, FAULT LOAD_LIMIT / AFE_FAULT /
-STEP_FAULT), ENABLE settle, RESUME / clears (D-31, D-34), events with the EVENT SEQ counter, GET_STATUS 86 B;
-simple trapezoid motion for MOVE_ABS / JOG (dead-man) / MOVE_UNTIL_LOAD / HOME (fast seek + edge, no back-off
-yet) and stops. Exact step-period ramps, homing back-off / slow approach, switch bounce, K1_WELDED timing,
-idle disable and load regrow are WP-B12 (M2). D-36: the physical STOP button keeps only the M1 minimum
-(HALT source BUTTON) until CR-01 retires it.
+Behaviour = ICD v0.5 §4–§9 + FW_design §5 (M2, WP-B12):
+- **Motion** with exact step counting: the step counter is the position (``steps``), every period comes from the
+  exact square-root ramp of R4 §1.5 (``calc.motion.Ramp``, 90 MHz timer ticks, fractional carry, virtual index for
+  on-the-fly jog changes, controlled stops with ``motion.a_stop_um_s2``, clean-halt substitution of §6.5);
+  immediate stops are CLEAN (a pulse in flight completes and is counted) except the E-stop (TRUNCATE → a pulse in
+  flight is cut, ``POS_UNCERTAIN``). EVENT order STOPPED → VALID_CLEARED → … → MOVE_DONE (FW_design §5.3).
+- **Homing** at START only: RELEASE → FAST_SEEK → BACKOFF → SLOW_APPROACH (edge capture per step) → zero set →
+  MOVE_TO_ZERO; HOME_NOT_FOUND / HOME_WIRING / ABORTED; HOME_DRIFT on re-homing (signed drift in HOMED).
+- **Inputs**: E-stop (act on the edge, closed ≥ ``io.estop_release_ms`` for the clear), limit switches by world
+  position or forced (first edge acts, release debounced ``io.release_ms``, latch auto-clear, LIMIT_WIRING),
+  PAUSE button (contact type ``io.pause_active_level``), ALM (active on the first sample, inactive after a stable
+  ``io.release_ms``), PEND / NOT_SETTLED, DRV_PWR with the 20 ms filter (SAF-FW-024), K1_WELDED timer
+  (SAF-FW-025), boot ENA rule (§6.4).
+- **Safety**: FW load limit on every sample incl. rails and the regrow rule after FAULT_CLEAR (SAF-FW-011), AFE
+  stale → AFE_FAULT while moving, link watchdog (controlled stop), jog dead-man, idle disable (unloaded, AFE
+  fresh, ``idle_disable_left_s`` in STATUS), ALM start-block (in ``check``).
+- **Feature mask** (D-37 b): bits of absent features are sent as 0 (DRV_SIGNALS: ALM / PEND / DRV_PWR; BUTTONS:
+  PAUSE_BTN) and those inputs are not sampled; commands of absent features answer ``E_INTERNAL`` NOT_IN_BUILD
+  after a passed check, like A's M1 FW.
+- D-36 / CR-01: no STOP/BREAK button, HALT source PC only.
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/io/simulator.py @37c87471 (architecture: loopback endpoint,
 per-command dispatch with NACK first, fault injector, NVM as JSON; behaviour rewritten for the bend stand).
 
-Implements: SYS-008, IF-007, IF-010, FW-CMD-001 (sim), FW-CMD-002 (sim), FW-STR-001…006 (sim), D-07
+Implements: SYS-008, IF-007, IF-010, FW-CMD-001 (sim), FW-CMD-002 (sim), FW-STR-001…006 (sim), FW-MOT-001…009
+(sim), FW-HOM-001/002/004 (sim), FW-SW-001/003/004/005 (sim), SAF-FW-001…026 (sim, without SAF-FW-022), D-07
 """
 from __future__ import annotations
 
 import collections
 import logging
-import math
 import struct
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from bend_stand.calc.motion import steps_to_um, um_to_steps
+from bend_stand.calc.motion import F_TICK_HZ, Ramp, ctrl_stop_path, steps_to_um, um_to_steps, v_limit_um_s
 from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.clock import Clock
@@ -49,30 +62,42 @@ Cmd = pg.Cmd
 DF, DS, FA = pg.DataFlags, pg.DataStatus, pg.Faults
 SC = pg.StopCause
 EV = pg.Event
-DEFAULT_FEATURES = int(pg.Features.AFE | pg.Features.MOTION | pg.Features.HOMING | pg.Features.MOVE_UNTIL_LOAD
-                       | pg.Features.NVM | pg.Features.BUTTONS | pg.Features.DRV_SIGNALS)
+FE = pg.Features
+DEFAULT_FEATURES = int(FE.AFE | FE.MOTION | FE.HOMING | FE.MOVE_UNTIL_LOAD | FE.NVM | FE.BUTTONS | FE.DRV_SIGNALS)
 SIM_UID = "53494D0000000000B1BDB0A0"
 EVENT_QUEUE = 32
-POSITION_FUDGE_UM = 0.5
+DRV_PWR_FILTER_MS = 20                         # FW-SW-005 stability filter, both directions
+TICKS_PER_US = F_TICK_HZ / 1e6
+#: commands that answer E_INTERNAL NOT_IN_BUILD after a passed check while their feature bit is 0 (A's M1 FW)
+FEATURE_OF_CMD: dict[int, int] = {
+    int(Cmd.ENABLE): int(FE.MOTION), int(Cmd.DISABLE): int(FE.MOTION), int(Cmd.MOVE_ABS): int(FE.MOTION),
+    int(Cmd.JOG): int(FE.MOTION), int(Cmd.HOME): int(FE.HOMING), int(Cmd.MOVE_UNTIL_LOAD): int(FE.MOVE_UNTIL_LOAD),
+}
 
 
 @dataclass
-class Motion:
+class Move:
+    """One running motion leg; ``ramp`` gives the step periods, ``t_next_us`` is the completion time of the
+    pending step (already timed)."""
+
     kind: str                      # MOVE_ABS | JOG | MOVE_UNTIL_LOAD | HOMING
-    end_um: float                  # end point (target / bound / soft limit)
+    direction: int
+    end_steps: int
+    end_reason: str
     v_um_s: float
     a_um_s2: float
-    direction: int
-    end_reason: str = "TARGET"
+    ramp: Ramp
+    t_next_us: float
     raw_stop: int = 0
     cmp: int = 0
-    home_phase: str = "FAST_SEEK"
+    phase: str = ""                # homing phase name (HomePhase)
+    released: bool = False         # RELEASE / BACKOFF: START released (stable) and the back-off retargeted
     last_refresh_us: int = 0
     stopping: bool = False
     stop_cause: int | None = None
     stop_reason: str = "STOPPED"
-    v_cur: float = 0.0
-    start_um: float = 0.0
+    reverse: tuple[int, int, float, float, str] | None = None   # jog reversal after the stop
+    start_steps: int = 0
 
 
 @dataclass
@@ -93,12 +118,21 @@ class _Fault:
 
 
 @dataclass
+class _Debounce:
+    """First edge acts; the release counts after a stable inactive level of ``release_ms`` (FW-SW-001)."""
+
+    level: bool = False
+    armed: bool = True
+    rel_since: int | None = None
+
+
+@dataclass
 class SimConfig:
     features: int = DEFAULT_FEATURES
-    fw_version: tuple[int, int, int] = (0, 1, 0)
+    fw_version: tuple[int, int, int] = (0, 2, 0)
     t0_us: int = 1_000_000
     reset_cause: int = int(pg.ResetCause.POWER_ON)
-    true_offset_um: int = 100_000          # axis position at boot relative to the machine zero (not homed)
+    true_offset_um: int = 100_000          # world position of the carriage at power-up (machine 0, not homed)
     seed: int = 1
     nvm_path: str | None = None
 
@@ -131,13 +165,29 @@ class SimBoard:
         self.hang_until_us = 0
         self.act_hook: Callable[[dict[str, Any]], Any] | None = None   # SimControl dispatches scheduled actions
         self.pulses = 0
+        self.true_offset_um = float(self.cfg.true_offset_um)
         self._pos_override: int | None = None
         self._hung = False
+        self.steps = 0
         self.boot(cause=self.cfg.reset_cause, first=True)
+
+    # ============================================================================== features
+    def has(self, feature: int) -> bool:
+        return bool(self.cfg.features & feature)
+
+    @property
+    def features(self) -> int:
+        return self.cfg.features
+
+    @features.setter
+    def features(self, mask: int) -> None:
+        self.cfg.features = int(mask)
 
     # ============================================================================== boot / time
     def boot(self, cause: int = int(pg.ResetCause.POWER_ON), first: bool = False) -> None:
         with self._lock:
+            if not first:                                 # the carriage does not move on a reset (D-13)
+                self.true_offset_um = self._x_true() - self.world.x_um_true_offset
             self.boot_ns = self.clock.monotonic_ns()
             self.t0_us = self.cfg.t0_us
             self.reset_cause = int(cause)
@@ -153,22 +203,20 @@ class SimBoard:
             self.enabling_until_us = 0
             self.homed = False
             self.home_phase = int(pg.HomePhase.NONE)
-            self.x_um = 0.0
-            self.true_offset_um = self.cfg.true_offset_um if first else getattr(self, "true_offset_um",
-                                                                                   self.cfg.true_offset_um)
-            self.motion: Motion | None = None
+            self.steps = 0
+            self.motion: Move | None = None
             self.target_um = 0
             self.pos_uncertain = False
+            self._done_pending: list[tuple[int, int, int]] = []
             self.estop_latched = self.world.estop_input_open()
             self.estop_closed_since_us: int | None = None if self.world.estop_input_open() else 0
             self.halt_latched = False
             self.halt_src = int(pg.Source.NONE)
-            self.stop_released_since_us: int | None = 0
             self.paused = False
             self.pause_src = int(pg.Source.NONE)
             self.faults_mask = 0
+            self.forced_causes: set[str] | None = None
             self.limit_latch = {"start": False, "end": False}
-            self.limit_release_since: dict[str, int | None] = {"start": None, "end": None}
             self.link_wdg = False
             self.last_cmd_us = self.now_us()
             self.afe_stale = False
@@ -192,7 +240,28 @@ class SimBoard:
             self.nvm_save_uptime_ms = 0
             self.last_tick_us = self.now_us()
             self.load_trip_count = 0
-            self.prev_inputs = self._inputs()
+            self.regrow_ref: int | None = None
+            self.idle_since_us: int | None = None
+            self.pend_wait_since_us: int | None = None
+            self.k1_since_us: int | None = None
+            self._home_drift = 0
+            # inputs (debounced / filtered FW view)
+            xt = self._x_true()
+            self.db = {"start": _Debounce(self.world.limit_start(xt)), "end": _Debounce(self.world.limit_end(xt)),
+                       "pause": _Debounce(self._pause_level())}
+            for d in self.db.values():
+                d.armed = not d.level
+            self.alm_filt = self._alm_level()
+            self.alm_rel_since: int | None = None
+            sense = bool(self.params["drv.pwr_sense_enable"])
+            self.pwr_filt = self.world.power_present() if (sense and self.has(FE.DRV_SIGNALS)) else True
+            self.pwr_change_since: int | None = None
+            self.pwr_on_us = 0
+            self.estop_level = self.world.estop_input_open()
+            for name in ("start", "end"):
+                if self.db[name].level:                   # inputs active at boot are latched (§6.4)
+                    self.limit_latch[name] = True
+            self.ena_disabled = self.estop_level or (sense and not self.pwr_filt)
             if img.event is not None:
                 self.emit(EV.PARAMS_DEFAULTED if img.event == "PARAMS_DEFAULTED" else EV.PARAMS_LOADED, img.arg)
             self.record_seq = img.record_seq
@@ -217,11 +286,20 @@ class SimBoard:
 
     @property
     def pos_steps(self) -> int:
-        return um_to_steps(int(round(self.x_um)), self.spm)
+        return self.steps
 
     @property
     def pos_um(self) -> int:
-        return steps_to_um(self.pos_steps, self.spm)
+        return steps_to_um(self.steps, self.spm)
+
+    @property
+    def x_um(self) -> float:
+        """Machine position in µm (float)."""
+        return self.steps * 1000.0 / self.spm
+
+    def _x_true(self) -> float:
+        """World position of the carriage (µm): machine position + offset + lost steps (``world_shift``)."""
+        return self.steps * 1000.0 / self.spm + self.true_offset_um + self.world.x_um_true_offset
 
     # ============================================================================== threads
     def start(self) -> None:
@@ -260,18 +338,33 @@ class SimBoard:
                 self._hung = False                  # (SWD-M1-11); the main loop resumes at "now"
                 self.afe.schedule_from(now)
                 self.last_tick_us = now
+                m = self.motion
+                if m is not None:
+                    m.t_next_us = max(m.t_next_us, float(now))
+            self._run_until(now)
             self._drain_rx(discard=now < self.link_silence_until_us)
-            while self.last_tick_us + 1000 <= now:
-                self.last_tick_us += 1000
-                self._tick_1ms(self.last_tick_us)
-            while self.afe.due(now):
-                t = self.afe.next_drdy_us
-                raw = self.afe.convert(self._force_n())
+            self._emit_done()
+            self._flush()
+
+    def _run_until(self, now: int) -> None:
+        """1 ms ticks and HX711 conversions in time order; the axis is advanced to each of them."""
+        while True:
+            t_tick = self.last_tick_us + 1000
+            t_afe = self.afe.next_drdy_us if self.afe.due(now) else None
+            if t_tick > now and t_afe is None:
+                break
+            if t_afe is not None and (t_afe < t_tick or t_tick > now):
+                self._advance_axis(t_afe)
+                raw = self.afe.convert(self._force_n(t_afe))
                 if raw is not None:
-                    self._on_sample(t, raw)
+                    self._on_sample(t_afe, raw)
                 else:
                     self.overrun_pending = True
-            self._flush()
+            else:
+                self.last_tick_us = t_tick
+                self._advance_axis(t_tick)
+                self._tick_1ms(t_tick)
+            self._emit_done()
 
     def _drain_rx(self, discard: bool) -> None:
         try:
@@ -285,6 +378,7 @@ class SimBoard:
         for fr in self.decoder.feed(data, self.clock.monotonic_ns()):
             self._log_wire("RX", fr.raw)
             self._on_frame(fr)
+            self._emit_done()
 
     # ============================================================================== output
     def _log_wire(self, direction: str, frame: bytes) -> None:
@@ -380,15 +474,13 @@ class SimBoard:
             estop_latched=self.estop_latched,
             estop_input_open=self.world.estop_input_open(),
             estop_closed_ms=0 if self.estop_closed_since_us is None else (now - self.estop_closed_since_us) // 1000,
-            halt_latched=self.halt_latched, stop_btn_active=self.world.stop_btn,
-            stop_btn_released_ms=0 if self.stop_released_since_us is None
-            else (now - self.stop_released_since_us) // 1000,
+            halt_latched=self.halt_latched,
             faults=[n for i, n in enumerate(pg.FAULTS_BITS) if self.faults_mask >> i & 1],
             fault_causes=self._fault_causes(),
             limit_start=self._limit_active("start"), limit_end=self._limit_active("end"),
             afe_stale=self.afe_stale, afe_saturated=self.afe_saturated,
             raw=0 if self.last_raw == pg.AFE_NO_DATA else self.last_raw,
-            drv_power=self.world.power_present(), alm_active=self.world.alm,
+            drv_power=self.pwr_filt, alm_active=self.alm_filt,
             nvm_record_valid=self.nvm.newest_valid() is not None, paused=self.paused)
 
     def load_check_state(self, st: SimCheckState) -> None:
@@ -398,32 +490,37 @@ class SimBoard:
         self.motion_state = st.motion_state
         self.enabling_until_us = now + st.enabling_left_ms * 1000
         self.homed = st.homed
-        self.x_um = float(st.pos_um)
+        self.steps = um_to_steps(int(st.pos_um), self.spm)
         self._pos_override = st.pos_um            # vector positions need not be step-representable
         if st.motion_state in MOVING:
-            self.motion = Motion("JOG" if st.motion_state == "JOG" else
-                                 ("HOMING" if st.motion_state == "HOMING" else st.motion_state
-                                  if st.motion_state != "STOPPING" else "MOVE_ABS"),
-                                 float(st.pos_um) + 1000.0, 1000.0, float(self.p("motion.a_max_um_s2")), 1,
-                                 last_refresh_us=now, stopping=st.motion_state == "STOPPING")
+            kind = {"STOPPING": "MOVE_ABS"}.get(st.motion_state, st.motion_state)
+            n = 1000
+            ramp = Ramp(F_TICK_HZ, 1000.0, float(self.p("motion.a_max_um_s2")), float(self.p("motion.a_max_um_s2")),
+                        n)
+            ramp.next()
+            self.motion = Move(kind, 1, self.steps + n, "TARGET", 1000.0, float(self.p("motion.a_max_um_s2")), ramp,
+                               float(now) + 1e9, last_refresh_us=now, stopping=st.motion_state == "STOPPING",
+                               phase="FAST_SEEK" if kind == "HOMING" else "")
         else:
             self.motion = None
         self.estop_latched = st.estop_latched
         self.world.estop_open = st.estop_input_open
+        self.estop_level = st.estop_input_open
         self.estop_closed_since_us = None if st.estop_input_open else now - st.estop_closed_ms * 1000
         self.halt_latched = st.halt_latched
-        self.world.stop_btn = st.stop_btn_active
-        self.stop_released_since_us = None if st.stop_btn_active else now - st.stop_btn_released_ms * 1000
         self.faults_mask = sum(int(FA[n]) for n in st.faults)
         self.forced_causes = set(st.fault_causes)
         self.limit_latch = {"start": st.limit_start, "end": st.limit_end}
         self.world.limit_start_forced = st.limit_start
         self.world.limit_end_forced = st.limit_end
+        self.db["start"].level, self.db["end"].level = st.limit_start, st.limit_end
         self.afe_stale = st.afe_stale
         self.afe_saturated = st.afe_saturated
         self.last_raw = st.raw
         self.world.drv_power = st.drv_power
+        self.pwr_filt = st.drv_power
         self.world.alm = st.alm_active
+        self.alm_filt = st.alm_active
         if not st.nvm_record_valid:
             self.nvm.records = [None, None]
         elif self.nvm.newest_valid() is None:
@@ -433,13 +530,14 @@ class SimBoard:
 
     def snapshot(self) -> dict[str, Any]:
         """Complete mutable FW state (no-side-effect check of NACKed vectors)."""
+        m = self.motion
         return {
-            "params": dict(self.params), "motion_state": self.motion_state, "homed": self.homed, "x": self.x_um,
-            "motion": None if self.motion is None else dict(vars(self.motion)), "estop": self.estop_latched,
-            "halt": (self.halt_latched, self.halt_src), "paused": (self.paused, self.pause_src),
-            "faults": self.faults_mask, "valid": list(self.valid_changes), "stream": self.stream_on,
-            "nvm": self.nvm.summary(), "reboot_pending": self.reboot_pending, "limit": dict(self.limit_latch),
-            "events": len(self.events), "enabling": self.enabling_until_us,
+            "params": dict(self.params), "motion_state": self.motion_state, "homed": self.homed, "steps": self.steps,
+            "motion": None if m is None else (m.kind, m.direction, m.end_steps, m.stopping, m.ramp.r, m.v_um_s),
+            "estop": self.estop_latched, "halt": (self.halt_latched, self.halt_src),
+            "paused": (self.paused, self.pause_src), "faults": self.faults_mask, "valid": list(self.valid_changes),
+            "stream": self.stream_on, "nvm": self.nvm.summary(), "reboot_pending": self.reboot_pending,
+            "limit": dict(self.limit_latch), "events": len(self.events), "enabling": self.enabling_until_us,
         }
 
     def _handle(self, fr: Frame) -> None:
@@ -464,7 +562,12 @@ class SimBoard:
         if status != "OK":
             self._respond(fr, P.encode_nack(int(pg.Status[status]), detail))
             return
+        feat = FEATURE_OF_CMD.get(fr.type)
+        if feat is not None and not self.has(feat) and not (fr.type == Cmd.JOG and fr.payload[:4] == b"\0\0\0\0"):
+            self._respond(fr, P.encode_nack(int(pg.Status.E_INTERNAL), int(pg.InternalDetail.NOT_IN_BUILD)))
+            return
         cmd = Cmd(fr.type)
+        self._pos_override = None
         body = getattr(self, f"_cmd_{cmd.name.lower()}")(fr.payload)
         if isinstance(body, tuple):                  # execution error (E_NVM …)
             self._respond(fr, P.encode_nack(*body))
@@ -534,9 +637,17 @@ class SimBoard:
         value = e.value()
         if meta.key in self.store_mismatch:          # test hook: "as stored" differs
             value = self.store_mismatch.pop(meta.key)
+        old_spm = self.spm
         self.params[meta.key] = value
+        if meta.key == "motion.steps_per_mm":
+            # HOMED kept: machine zero is a step count, µm positions rescale (FW-MOT-009); the carriage stays
+            self.true_offset_um += self.steps * 1000.0 / old_spm - self.steps * 1000.0 / self.spm
         if meta.reboot_required:
             self.reboot_pending = True
+        if meta.key == "io.pause_active_level":       # re-arm without generating a press
+            d = self.db["pause"]
+            d.level = self._pause_level()
+            d.armed, d.rel_since = not d.level, None
         if meta.key in ("afe.gain_channel", "afe.rate_sps"):
             self.settle_left = int(self.params["afe.settle_discard"])
             self.afe.rate_sps = 80.0 if int(self.params["afe.rate_sps"]) == 1 else 10.0
@@ -557,7 +668,7 @@ class SimBoard:
 
     def _cmd_load_params(self, _p: bytes) -> bytes | tuple[int, int]:
         img = self.nvm.boot_image(self.params, for_load=True)
-        if not img.ok:
+        if not img.ok:                               # no EVENT on failure (ICD v0.5, OBS-M1-03)
             return int(pg.Status.E_NVM), int(pg.NvmDetail.NO_RECORD)
         self.params = dict(img.values)
         self.nvm_defaulted = img.defaulted
@@ -607,50 +718,80 @@ class SimBoard:
         if self.motion_state == "NOT_ENABLED":
             settle = int(self.p("motion.ena_settle_ms"))
             self.motion_state = "ENABLING"
-            self.enabling_until_us = now + settle * 1000
-            if settle == 0:
+            self.ena_disabled = False
+            # settle counted from the later of ENABLE and the driver power return (FW-MOT-008)
+            self.enabling_until_us = max(now, self.pwr_on_us) + settle * 1000
+            if self.enabling_until_us <= now:
                 self._enabled()
-            return P.encode_u16(settle)
+                return P.encode_u16(0)
+            return P.encode_u16((self.enabling_until_us - now) // 1000)
         if self.motion_state == "ENABLING":
             return P.encode_u16(max(0, (self.enabling_until_us - now) // 1000))
         return P.encode_u16(0)
 
     def _enabled(self) -> None:
         self.motion_state = "IDLE"
+        self.idle_since_us = self.now_us()
         self.emit(EV.DRIVER_ENABLED)
 
-    def _cmd_disable(self, _p: bytes) -> bytes:
+    def _disable(self, cause: int) -> None:
+        """ENA to the disabled level, NOT_ENABLED, HOMED cleared, DRIVER_DISABLED (if not already)."""
+        self.ena_disabled = True
+        self.homed = False
         if self.motion_state != "NOT_ENABLED":
             self.motion_state = "NOT_ENABLED"
-            self.homed = False
-            self.emit(EV.DRIVER_DISABLED, int(pg.DriverDisabledCause.PC_DISABLE))
+            self.emit(EV.DRIVER_DISABLED, cause)
+
+    def _cmd_disable(self, _p: bytes) -> bytes:
+        self._disable(int(pg.DriverDisabledCause.PC_DISABLE))
         return b""
 
     def _a(self, a: int) -> float:
         return float(a or self.p("motion.a_max_um_s2"))
 
-    def _start(self, m: Motion) -> None:
-        m.start_um = self.x_um
-        m.last_refresh_us = self.now_us()
+    def _pw_us(self) -> float:
+        return int(self.p("motion.pulse_high_ns")) / 1000.0
+
+    def _begin(self, kind: str, end_steps: int, v_um_s: float, a_um_s2: float, end_reason: str, *,
+               d_um_s2: float | None = None, t_us: float | None = None, **kw: Any) -> Move | None:
+        """Start a motion leg from the current step count; ``None`` when there is nothing to move."""
+        n = abs(int(end_steps) - self.steps)
+        if n == 0:
+            return None
+        spm = self.spm
+        v = max(1e-3, v_um_s * spm / 1000.0)
+        a = max(1e-3, a_um_s2 * spm / 1000.0)
+        d = max(1e-3, (d_um_s2 if d_um_s2 is not None else a_um_s2) * spm / 1000.0)
+        ramp = Ramp(F_TICK_HZ, v, a, d, n)
+        c = ramp.next() or 0
+        t0 = float(self.now_us() if t_us is None else t_us)
+        setup_ticks = int(self.p("motion.dir_setup_us")) * TICKS_PER_US + self._pw_us() * TICKS_PER_US
+        first = max(float(c), setup_ticks)                   # first edge ≥ dir_setup after the DIR write
+        m = Move(kind, 1 if end_steps > self.steps else -1, int(end_steps), end_reason, float(v_um_s),
+                 float(a_um_s2), ramp, t0 + first / TICKS_PER_US, start_steps=self.steps,
+                 last_refresh_us=int(t0), **kw)
         self.motion = m
-        self.motion_state = m.kind
-        self.target_um = int(round(m.end_um))
+        self.motion_state = kind
+        self.idle_since_us = None
+        self.pend_wait_since_us = None
+        self.target_um = steps_to_um(int(end_steps), spm)
+        return m
 
     def _cmd_move_abs(self, p: bytes) -> bytes:
         target, v, a = struct.unpack("<iII", p)
-        if target == self.pos_um:
+        end = um_to_steps(target, self.spm)
+        if self._begin("MOVE_ABS", end, float(v), self._a(a), "TARGET") is None:
             self.emit(EV.MOVE_DONE, int(pg.MoveDoneReason.TARGET), self.pos_um, self.pos_steps)
-            return b""
-        self._start(Motion("MOVE_ABS", float(target), float(v), self._a(a), 1 if target > self.x_um else -1))
         return b""
 
     def _cmd_move_until_load(self, p: bytes) -> bytes:
         bound, v, a, raw_stop, cmp_ = struct.unpack("<iIIiB", p)
-        if self._beyond(self.last_raw, raw_stop, cmp_):
+        if self._beyond(self.last_raw, raw_stop, cmp_):      # pre-check before the first pulse
             self.emit(EV.MOVE_DONE, int(pg.MoveDoneReason.LOAD_THRESHOLD), self.pos_um, self.pos_steps)
             return b""
-        self._start(Motion("MOVE_UNTIL_LOAD", float(bound), float(v), self._a(a),
-                           1 if bound > self.x_um else -1, end_reason="BOUND", raw_stop=raw_stop, cmp=cmp_))
+        if self._begin("MOVE_UNTIL_LOAD", um_to_steps(bound, self.spm), float(v), self._a(a), "BOUND",
+                       raw_stop=raw_stop, cmp=cmp_) is None:
+            self.emit(EV.MOVE_DONE, int(pg.MoveDoneReason.BOUND), self.pos_um, self.pos_steps)
         return b""
 
     @staticmethod
@@ -659,43 +800,118 @@ class SimBoard:
             return False
         return raw >= raw_stop if cmp_ == pg.MulCmp.GE else raw <= raw_stop
 
+    def _jog_end(self, d: int, bound: int, start_steps: int) -> tuple[int, str]:
+        if bound != pg.JOG_NO_BOUND:
+            return um_to_steps(bound, self.spm), "BOUND"
+        if self.homed:
+            lim = int(self.p("limits.soft_max_um") if d > 0 else self.p("limits.soft_min_um"))
+            return um_to_steps(lim, self.spm), "SOFT_LIMIT"
+        return start_steps + d * um_to_steps(int(self.p("home.max_travel_um")), self.spm), "SOFT_LIMIT"
+
     def _cmd_jog(self, p: bytes) -> bytes:
         v, a, bound = struct.unpack("<iIi", p)
         m = self.motion
+        now = self.now_us()
         if v == 0:
             if m is not None and m.kind == "JOG" and not m.stopping:
                 self._controlled_stop(None, "JOG_ZERO")
             return b""
         d = 1 if v > 0 else -1
-        if bound != pg.JOG_NO_BOUND:
-            end, reason = float(bound), "BOUND"
-        elif self.homed:
-            end = float(self.p("limits.soft_max_um") if d > 0 else self.p("limits.soft_min_um"))
-            reason = "SOFT_LIMIT"
-        else:
-            end, reason = self.x_um + d * float(self.p("home.max_travel_um")), "SOFT_LIMIT"
-        if m is not None and m.kind == "JOG" and not m.stopping:
-            if d != m.direction:                       # reversal: decelerate to zero first (simplified)
-                m.v_cur = 0.0
-            m.direction, m.end_um, m.v_um_s, m.a_um_s2, m.end_reason = d, end, float(abs(v)), self._a(a), reason
-            m.last_refresh_us = self.now_us()
-            self.target_um = int(round(end))
+        if m is not None and m.kind == "JOG":
+            m.last_refresh_us = now                      # dead-man refresh (also during a reversal)
+            if m.stopping and m.reverse is None:
+                return b""                               # a stop in progress is never undone
+            start = m.start_steps if not self.homed else self.steps
+            end, reason = self._jog_end(d, bound, start)
+            if d != m.direction or m.reverse is not None:  # reversal: decelerate to zero first, then restart
+                m.reverse = (d, end, float(abs(v)), self._a(a), reason)   # (motion state stays JOG)
+                if not m.stopping:
+                    m.stopping = True
+                    m.ramp.stop(self._a(a) * self.spm / 1000.0)
+                return b""
+            m.end_steps, m.end_reason, m.v_um_s, m.a_um_s2 = end, reason, float(abs(v)), self._a(a)
+            m.ramp.set_end(max(0, abs(end - self.steps) - 1))
+            m.ramp.set_speed(abs(v) * self.spm / 1000.0)
+            self.target_um = steps_to_um(end, self.spm)
             return b""
-        self._start(Motion("JOG", end, float(abs(v)), self._a(a), d, end_reason=reason))
+        end, reason = self._jog_end(d, bound, self.steps)
+        if self._begin("JOG", end, float(abs(v)), self._a(a), reason) is None:
+            self.emit(EV.MOVE_DONE, int(pg.MoveDoneReason[reason]), self.pos_um, self.pos_steps)
         return b""
 
     def _cmd_home(self, _p: bytes) -> bytes:
-        v = float(self.p("home.v_fast_um_s"))
-        self.home_phase = int(pg.HomePhase.FAST_SEEK)
-        if self.world.limit_start(self._x_true()):
-            self.home_phase = int(pg.HomePhase.RELEASE)
-            self._start(Motion("HOMING", self.x_um + float(pg.HOME_RELEASE_MAX_UM), v,
-                               float(self.p("home.a_um_s2")), 1, home_phase="RELEASE"))
+        self._home_drift = 0
+        if self._input_level("start"):
+            self._home_leg("RELEASE")
         else:
-            self._start(Motion("HOMING", self.x_um - float(self.p("home.max_travel_um")), v,
-                               float(self.p("home.a_um_s2")), -1, home_phase="FAST_SEEK"))
+            self._home_leg("FAST_SEEK")
         self.motion_state = "HOMING"
         return b""
+
+    # ---- homing (FW_design §5.5) --------------------------------------------------------------------
+    def _home_leg(self, phase: str, t_us: float | None = None) -> None:
+        spm = self.spm
+        v_cap = v_limit_um_s(250_000, int(self.p("motion.max_step_rate_hz")), spm)   # homing: step-rate cap only
+        v_fast = min(int(self.p("home.v_fast_um_s")), v_cap)
+        v_slow = min(int(self.p("home.v_slow_um_s")), v_cap)
+        a = float(self.p("home.a_um_s2"))
+        if phase in ("RELEASE", "BACKOFF"):
+            end = self.steps + um_to_steps(int(pg.HOME_RELEASE_MAX_UM), spm)
+            v = v_slow
+        elif phase == "FAST_SEEK":
+            end = self.steps - um_to_steps(int(self.p("home.max_travel_um")), spm)
+            v = v_fast
+        elif phase == "SLOW_APPROACH":
+            end = self.steps - um_to_steps(int(self.p("home.backoff_um")) + int(pg.HOME_SLOW_EXTRA_UM), spm)
+            v = v_slow
+        else:                                                   # MOVE_TO_ZERO
+            end, v = 0, v_fast
+        self.home_phase = int(pg.HomePhase[phase])
+        m = self._begin("HOMING", end, float(v), a, "TARGET", t_us=t_us, phase=phase)
+        if m is None:                                           # already at 0 (MOVE_TO_ZERO)
+            self._home_done()
+        else:
+            self.motion_state = "HOMING"
+
+    def _home_edge(self, m: Move) -> None:
+        """START edge in FAST_SEEK (→ BACKOFF) or SLOW_APPROACH (capture, zero, drift → MOVE_TO_ZERO)."""
+        t = m.t_next_us
+        self.motion = None
+        if m.phase == "FAST_SEEK":
+            self._home_leg("BACKOFF", t_us=t)
+            return
+        edge = self.steps                                       # captured step count at the edge
+        offset = um_to_steps(int(self.p("home.offset_um")), self.spm)
+        if self.homed:                                          # FW-HOM-004: drift vs the expected edge position
+            self._home_drift = steps_to_um(edge, self.spm) + int(self.p("home.offset_um"))
+        else:
+            self._home_drift = 0
+        new = self.steps - edge - offset                        # the edge lies at x = −home.offset_um
+        self.true_offset_um += (self.steps - new) * 1000.0 / self.spm
+        self.steps = new
+        self._home_leg("MOVE_TO_ZERO", t_us=t)
+
+    def _home_done(self) -> None:
+        self.homed = True
+        self.pos_uncertain = False
+        self.home_phase = int(pg.HomePhase.DONE)
+        drift = self._home_drift
+        if abs(drift) > int(self.p("home.drift_tol_um")):
+            self._fault("HOME_DRIFT", drift)
+        self.emit(EV.HOMED, 0, drift)
+        self._finish("TARGET")
+
+    def _home_fail(self, reason: int, fault: str | None) -> None:
+        """Homing failure: CLEAN halt, HOMED cleared, FAULT (not for ABORTED), HOME_FAILED, STOPPED, MOVE_DONE."""
+        self._clean_halt_position()
+        self.homed = False
+        self.home_phase = int(pg.HomePhase.DONE)
+        if fault is not None:
+            self._fault(fault, self.pos_um, self.pos_steps)
+        self.emit(EV.HOME_FAILED, reason, self.pos_um, self.pos_steps)
+        self.emit(EV.STOPPED, int(SC.HOME_FAIL), self.pos_um, self.pos_steps)
+        self._clear_valid(int(SC.HOME_FAIL))
+        self._finish("STOPPED")
 
     # ---- stops / clears ------------------------------------------------------------------------------
     def _cmd_stop(self, p: bytes) -> bytes:
@@ -709,18 +925,15 @@ class SimBoard:
         return b""
 
     def _cmd_halt(self, _p: bytes) -> bytes:
-        self._halt(int(pg.Source.PC))
-        return b""
-
-    def _halt(self, src: int) -> None:
-        cause = SC.PC_HALT if src == pg.Source.PC else SC.STOP_BUTTON
-        if self.motion is not None:
-            self._immediate_stop(int(cause))
+        cause = int(SC.PC_HALT)
         if not self.halt_latched:
             self.halt_latched = True
-            self.halt_src = src
-            self.emit(EV.HALT_SET, src)
-        self._clear_valid(int(cause))
+            self.halt_src = int(pg.Source.PC)           # PC only since ICD v0.5 (D-36)
+            self.emit(EV.HALT_SET, int(pg.Source.PC))
+        if self.motion is not None:
+            self._immediate_stop(cause)
+        self._clear_valid(cause)
+        return b""
 
     def _cmd_pause(self, _p: bytes) -> bytes:
         self._pause(int(pg.Source.PC))
@@ -732,11 +945,11 @@ class SimBoard:
             if src == pg.Source.BUTTON:
                 self.emit(EV.RESUME_REQUEST)
             return
-        if self.motion is not None and not self.motion.stopping:
-            self._controlled_stop(int(cause), "STOPPED")
         self.paused = True
         self.pause_src = src
         self.emit(EV.PAUSED, src)
+        if self.motion is not None and not self.motion.stopping:
+            self._controlled_stop(int(cause), "STOPPED")
         self._clear_valid(int(cause))
 
     def _cmd_resume(self, _p: bytes) -> bytes:
@@ -769,149 +982,144 @@ class SimBoard:
         for i, name in enumerate(pg.FAULTS_BITS):
             if self.faults_mask >> i & 1 and (name not in causes or name == "LOAD_LIMIT"):
                 cleared |= 1 << i
+        if cleared & FA.LOAD_LIMIT and self.last_raw != pg.AFE_NO_DATA and self._load_violation(self.last_raw):
+            self.regrow_ref = self.last_raw            # SAF-FW-011: unload allowed, re-trip on regrow
         self.faults_mask &= ~cleared
+        self.forced_causes = None
         if cleared:
             self.emit(EV.FAULT_CLEARED, cleared)
         return P.encode_u16(cleared)
 
     def _fault_causes(self) -> list[str]:
-        forced = getattr(self, "forced_causes", None)
-        if forced is not None:
-            return sorted(forced)
+        if self.forced_causes is not None:
+            return sorted(self.forced_causes)
         out = []
         if self.afe_stale or self.afe_saturated:
             out.append("AFE_FAULT")
-        if self.world.limit_start(self._x_true()) and self.world.limit_end(self._x_true()):
+        if self._input_level("start") and self._input_level("end"):
             out.append("LIMIT_WIRING")
-        if bool(self.p("drv.pwr_sense_enable")) and self.world.estop_input_open() and self.world.power_present():
+        if bool(self.p("drv.pwr_sense_enable")) and self.has(FE.DRV_SIGNALS) and self.estop_level and self.pwr_filt:
             out.append("K1_WELDED")
         return out
 
     # ============================================================================== motion execution
-    def _x_true(self) -> float:
-        return self.x_um + self.true_offset_um
-
-    def _finish(self, reason: str, cause: int | None = None) -> None:
-        if cause is not None:
-            self.emit(EV.STOPPED, cause, self.pos_um, self.pos_steps)
+    def _finish(self, reason: str) -> None:
+        """End of a motion (position final): IDLE, queue MOVE_DONE (emitted after the events of this handler)."""
         self.motion = None
         if self.motion_state in MOVING:
-            self.motion_state = "IDLE" if self.motion_state != "NOT_ENABLED" else "NOT_ENABLED"
+            self.motion_state = "IDLE"
+            self.idle_since_us = self.now_us()
+            self.pend_wait_since_us = self.now_us()
         self.target_um = self.pos_um
-        self.emit(EV.MOVE_DONE, int(pg.MoveDoneReason[reason]), self.pos_um, self.pos_steps)
+        self._done_pending.append((int(pg.MoveDoneReason[reason]), self.pos_um, self.pos_steps))
 
-    def _immediate_stop(self, cause: int, *, keep_state: str | None = None) -> None:
+    def _emit_done(self) -> None:
+        while self._done_pending:
+            self.emit(EV.MOVE_DONE, *self._done_pending.pop(0))
+
+    def _clean_halt_position(self, t_us: float | None = None, *, truncate: bool = False) -> None:
+        """CLEAN halt: a pulse in flight (its high phase started) completes and is counted. TRUNCATE (E-stop): it is
+        cut and not counted → POS_UNCERTAIN (SAF-FW-004)."""
         m = self.motion
         if m is None:
             return
+        t = float(self.now_us() if t_us is None else t_us)
+        if 0 < m.t_next_us - t < self._pw_us():
+            if truncate:
+                self.pos_uncertain = True
+            else:
+                self.steps += m.direction
+                self.pulses += 1
+
+    def _immediate_stop(self, cause: int, *, truncate: bool = False) -> None:
+        """Immediate stop of the running motion: HOME_FAILED(ABORTED) for homing, STOPPED(cause), MOVE_DONE STOPPED
+        (queued). VALID is cleared by the caller (after STOPPED)."""
+        m = self.motion
+        if m is None:
+            return
+        self._clean_halt_position(truncate=truncate)
         if m.kind == "HOMING":
             self.homed = False
             self.home_phase = int(pg.HomePhase.DONE)
             self.emit(EV.HOME_FAILED, int(pg.HomeFailReason.ABORTED), self.pos_um, self.pos_steps)
-        self.pos_uncertain = True
-        self.x_um = float(self.pos_um)
-        self._finish("STOPPED", cause)
-        if keep_state:
-            self.motion_state = keep_state
+        self.emit(EV.STOPPED, cause, self.pos_um, self.pos_steps)
+        self._finish("STOPPED")
 
     def _controlled_stop(self, cause: int | None, reason: str) -> None:
+        """Controlled stop with ``motion.a_stop_um_s2``; clean halt only when the step period > 2 ms **and** the
+        planned stop distance ≤ 1 step (§6.5, D-30). STOPPED (if a cause) at initiation, MOVE_DONE at standstill.
+        Homing ends immediately (every homing stop is a failure, FW-HOM-002)."""
         m = self.motion
-        if m is None or m.stopping:
+        if m is None or (m.stopping and m.reverse is None):
             return
-        m.stopping = True
-        m.stop_cause = cause
-        m.stop_reason = reason
+        if m.kind == "HOMING":
+            self._immediate_stop(int(cause) if cause is not None else int(SC.PC_STOP_CONTROLLED))
+            return
+        m.reverse = None
+        if cause is not None:
+            self.emit(EV.STOPPED, cause, self.pos_um, self.pos_steps)
+        m.stopping, m.stop_cause, m.stop_reason = True, cause, reason
+        a_stop = float(self.p("motion.a_stop_um_s2")) * self.spm / 1000.0
+        c_last = m.ramp.c_last
+        if c_last is None or ctrl_stop_path(c_last, F_TICK_HZ, a_stop)[0] == "CLEAN":
+            self.motion = m                                    # clean halt: no further pulse is started
+            self._clean_halt_position()
+            self._finish(reason)
+            return
+        m.ramp.stop(a_stop)
         self.motion_state = "STOPPING"
-        if m.v_cur <= 0:
-            self._end_controlled()
 
-    def _end_controlled(self) -> None:
+    def _advance_axis(self, t_us: float) -> None:
+        """Execute every step completed up to ``t_us`` (per-step switch checks, leg ends)."""
         m = self.motion
-        assert m is not None
-        if m.kind == "HOMING":
-            self.homed = False
-            self.home_phase = int(pg.HomePhase.DONE)
-            self.emit(EV.HOME_FAILED, int(pg.HomeFailReason.ABORTED), self.pos_um, self.pos_steps)
-        self.x_um = float(self.pos_um)
-        self._finish(m.stop_reason, m.stop_cause)
-
-    def _motion_tick(self, dt_s: float) -> None:
-        m = self.motion
-        if m is None:
-            return
-        if m.stopping:
-            a_stop = float(self.p("motion.a_stop_um_s2"))
-            m.v_cur = max(0.0, m.v_cur - a_stop * dt_s)
-            self.x_um += m.direction * m.v_cur * dt_s
+        while m is not None and m.t_next_us <= t_us:
+            self.steps += m.direction
             self.pulses += 1
-            if m.v_cur <= 0.0:
-                self._end_controlled()
-            return
-        dist = (m.end_um - self.x_um) * m.direction
-        v_brake = math.sqrt(max(0.0, 2.0 * m.a_um_s2 * dist))
-        v_target = min(m.v_um_s, v_brake)
-        if m.v_cur < v_target:
-            m.v_cur = min(v_target, m.v_cur + m.a_um_s2 * dt_s)
-        else:
-            m.v_cur = max(v_target, m.v_cur - m.a_um_s2 * dt_s)
-        m.v_cur = max(m.v_cur, min(m.v_um_s, 200.0))     # creep so a planned stop always completes
-        step = m.v_cur * dt_s
-        self.pulses += 1
-        if step >= dist - POSITION_FUDGE_UM:
-            self.x_um = m.end_um
-            if m.kind == "HOMING":
-                self._homing_end_of_leg(m)
-                return
-            self._finish(m.end_reason)
-            return
-        self.x_um += m.direction * step
-        if m.kind == "HOMING":
-            self._homing_check(m)
+            if self._step_switches(m):
+                m = self.motion
+                continue
+            c = m.ramp.next()
+            if c is None:
+                self._leg_end(m)
+                m = self.motion
+                continue
+            m.t_next_us += c / TICKS_PER_US
 
-    def _homing_check(self, m: Motion) -> None:
+    def _step_switches(self, m: Move) -> bool:
+        """Limit / homing edges at the position of this step; True when the motion changed."""
+        t = int(m.t_next_us)
         xt = self._x_true()
-        if m.home_phase == "RELEASE" and not self.world.limit_start(xt):
-            m.home_phase = "FAST_SEEK"
-            self.home_phase = int(pg.HomePhase.FAST_SEEK)
-            m.direction, m.end_um, m.v_cur = -1, self.x_um - float(self.p("home.max_travel_um")), 0.0
-        elif m.home_phase == "FAST_SEEK" and self.world.limit_start(xt):
-            # edge captured: set the zero so that this edge lies at −home.offset_um (simplified, no back-off)
-            drift = 0
-            new_x = -float(self.p("home.offset_um"))
-            if self.homed:
-                drift = int(round(self.x_um - new_x))
-            self.true_offset_um = int(round(xt - new_x))
-            self.x_um = new_x
-            m.home_phase = "MOVE_TO_ZERO"
-            self.home_phase = int(pg.HomePhase.MOVE_TO_ZERO)
-            m.direction, m.end_um, m.v_cur = 1, 0.0, 0.0
-            self._home_drift = drift
-        elif self.world.limit_end(xt):
-            self._home_fail(int(pg.HomeFailReason.WIRING), "HOME_WIRING")
+        for name, level in (("start", self.world.limit_start(xt)), ("end", self.world.limit_end(xt))):
+            if self._edge(name, level, t):
+                if self._limit_edge(name, t):
+                    return True
+        return self.motion is not m
 
-    def _homing_end_of_leg(self, m: Motion) -> None:
-        if m.home_phase == "MOVE_TO_ZERO":
-            self.homed = True
-            self.pos_uncertain = False
-            self.home_phase = int(pg.HomePhase.DONE)
-            drift = getattr(self, "_home_drift", 0)
-            if abs(drift) > int(self.p("home.drift_tol_um")):
-                self._fault("HOME_DRIFT", abs(drift))
-            self.emit(EV.HOMED, 0, abs(drift))
-            self._finish("TARGET")
-        elif m.home_phase == "RELEASE":
-            self._home_fail(int(pg.HomeFailReason.WIRING), "HOME_WIRING")
-        else:
-            self._home_fail(int(pg.HomeFailReason.NOT_FOUND), "HOME_NOT_FOUND")
-
-    def _home_fail(self, reason: int, fault: str) -> None:
-        self.homed = False
-        self.home_phase = int(pg.HomePhase.DONE)
-        self._fault(fault, self.pos_um, self.pos_steps)
-        self.emit(EV.HOME_FAILED, reason, self.pos_um, self.pos_steps)
-        self.pos_uncertain = True
-        self._finish("STOPPED", int(SC.HOME_FAIL))
-        self._clear_valid(int(SC.HOME_FAIL))
+    def _leg_end(self, m: Move) -> None:
+        t = m.t_next_us
+        if m.kind == "HOMING":
+            self.motion = None
+            if m.phase in ("RELEASE", "BACKOFF"):
+                if not m.released:
+                    self.motion = m
+                    self._home_fail(int(pg.HomeFailReason.WIRING), "HOME_WIRING")
+                else:
+                    self._home_leg("FAST_SEEK" if m.phase == "RELEASE" else "SLOW_APPROACH", t_us=t)
+            elif m.phase == "MOVE_TO_ZERO":
+                self._home_done()
+            else:                                              # FAST_SEEK / SLOW_APPROACH bound reached
+                self.motion = m
+                self._home_fail(int(pg.HomeFailReason.NOT_FOUND), "HOME_NOT_FOUND")
+            return
+        if m.kind == "JOG" and m.reverse is not None:
+            d, end, v, a, reason = m.reverse
+            self.motion = None
+            if self._begin("JOG", end, v, a, reason, t_us=t) is None:
+                self._finish(reason)
+            elif self.motion is not None:
+                self.motion.last_refresh_us = m.last_refresh_us
+            return
+        self._finish(m.stop_reason if m.stopping else m.end_reason)
 
     def _fault(self, name: str, value: int = 0, value2: int = 0) -> None:
         bit = int(FA[name])
@@ -919,88 +1127,158 @@ class SimBoard:
             self.faults_mask |= bit
             self.emit(EV.FAULT_SET, pg.FAULTS_BITS.index(name), value, value2)
 
-    # ============================================================================== 1 ms FW tick
-    def _inputs(self) -> dict[str, bool]:
-        xt = self._x_true() if hasattr(self, "true_offset_um") else self.x_um
-        return {"estop": self.world.estop_input_open(), "start": self.world.limit_start(xt),
-                "end": self.world.limit_end(xt), "stop": self.world.stop_btn, "pause": self.world.pause_btn,
-                "alm": self.world.alm, "power": self.world.power_present()}
+    # ============================================================================== inputs
+    def _pause_level(self) -> bool:
+        if not self.has(FE.BUTTONS):
+            return False
+        closed = self.world.pause_closed()
+        return closed if int(self.params.get("io.pause_active_level", 1)) == 1 else not closed
+
+    def _alm_level(self) -> bool:
+        return self.has(FE.DRV_SIGNALS) and self.world.alm_active()
+
+    def _input_level(self, name: str) -> bool:
+        xt = self._x_true()
+        if name == "start":
+            return self.world.limit_start(xt)
+        if name == "end":
+            return self.world.limit_end(xt)
+        return self._pause_level()
+
+    def _edge(self, name: str, level: bool, t_us: int) -> bool:
+        """Debounce: True on the first active edge of an armed input (FW-SW-001)."""
+        d = self.db[name]
+        d.level = level
+        if level:
+            d.rel_since = None
+            if d.armed:
+                d.armed = False
+                return True
+            return False
+        if d.rel_since is None:
+            d.rel_since = t_us
+        if not d.armed and t_us - d.rel_since >= int(self.p("io.release_ms")) * 1000:
+            d.armed = True
+            self._released(name)
+        return False
+
+    def _released(self, name: str) -> None:
+        if name in ("start", "end") and self.limit_latch[name]:
+            self.limit_latch[name] = False
+            self.emit(EV.LIMIT_CLEARED, int(pg.LimitId.START if name == "start" else pg.LimitId.END))
+        elif name == "pause":
+            self.emit(EV.PAUSE_BUTTON, 0)
+        m = self.motion
+        if name == "start" and m is not None and m.kind == "HOMING" and m.phase in ("RELEASE", "BACKOFF") \
+                and not m.released:
+            m.released = True                         # released: back-off further, then the next phase
+            m.ramp.set_end(max(0, um_to_steps(int(self.p("home.backoff_um")), self.spm) - 1))
+
+    def _limit_edge(self, name: str, t_us: int) -> bool:
+        """First active edge of a limit input; True when the running motion was stopped/changed."""
+        m = self.motion
+        if m is not None and m.kind == "HOMING":
+            if name == "start" and m.phase in ("FAST_SEEK", "SLOW_APPROACH"):
+                self._home_edge(m)                       # expected edge: no LIMIT_START latch
+                return True
+            if name == "end":                            # END keeps its limit function; homing -> HOME_WIRING
+                if not self.limit_latch["end"]:
+                    self.limit_latch["end"] = True
+                    self.emit(EV.LIMIT_SET, int(pg.LimitId.END), self.pos_um, self.pos_steps)
+                self._home_fail(int(pg.HomeFailReason.WIRING), "HOME_WIRING")
+                return True
+            return False
+        lid = pg.LimitId.START if name == "start" else pg.LimitId.END
+        if not self.limit_latch[name]:
+            self.limit_latch[name] = True
+            self.emit(EV.LIMIT_SET, int(lid), self.pos_um, self.pos_steps)
+        cause = int(SC.LIMIT_START if name == "start" else SC.LIMIT_END)
+        stopped = False
+        if m is not None:
+            self._immediate_stop(cause)
+            self._clear_valid(cause)
+            stopped = True
+        if self.db["start"].level and self.db["end"].level:
+            self._limit_wiring()
+        return stopped
+
+    def _limit_wiring(self) -> None:
+        if self.faults_mask & FA.LIMIT_WIRING:
+            return
+        self._fault("LIMIT_WIRING", self.pos_um, self.pos_steps)
+        if self.motion is not None:
+            self._immediate_stop(int(SC.LIMIT_WIRING))
+        self._clear_valid(int(SC.LIMIT_WIRING))
 
     def _limit_active(self, name: str) -> bool:
-        return self.limit_latch[name] or self.prev_inputs.get(name, False)
+        return self.limit_latch[name] or self.db[name].level
 
+    # ============================================================================== 1 ms FW tick
     def _tick_1ms(self, t_us: int) -> None:
-        inp = self._inputs()
-        prev = self.prev_inputs
-        self.prev_inputs = inp
-        sense = bool(self.p("drv.pwr_sense_enable"))
-        # E-stop sense
-        if inp["estop"] and not prev["estop"]:
-            if self.motion is not None:
-                self._immediate_stop(int(SC.ESTOP))
+        sense = bool(self.p("drv.pwr_sense_enable")) and self.has(FE.DRV_SIGNALS)
+        # E-stop sense (act on the edge; HAL TRUNCATE + ENA disabled)
+        lvl = self.world.estop_input_open()
+        if lvl and not self.estop_level:
+            self.estop_level = True
             self.estop_closed_since_us = None
+            self.k1_since_us = t_us
             if not self.estop_latched:
                 self.estop_latched = True
                 self.emit(EV.ESTOP_SET, 0, self.pos_um, self.pos_steps)
-            if self.motion_state != "NOT_ENABLED":
-                self.motion_state = "NOT_ENABLED"
-                self.emit(EV.DRIVER_DISABLED, int(pg.DriverDisabledCause.ESTOP))
-            self.homed = False
-            self._clear_valid(int(SC.ESTOP))
-        elif not inp["estop"] and prev["estop"]:
-            self.estop_closed_since_us = t_us
-        # driver power (sense enabled)
-        if sense and inp["power"] != prev["power"]:
-            self.emit(EV.DRIVER_POWER, 1 if inp["power"] else 0)
-            if not inp["power"]:
-                if self.motion is not None:
-                    self._immediate_stop(int(SC.DRV_POWER_LOST))
-                if self.motion_state != "NOT_ENABLED":
-                    self.motion_state = "NOT_ENABLED"
-                    self.emit(EV.DRIVER_DISABLED, int(pg.DriverDisabledCause.DRV_POWER_LOST))
-                self.homed = False
-                self._clear_valid(int(SC.DRV_POWER_LOST))
-        # STOP button (D-36: M1 minimum — HALT source BUTTON)
-        if inp["stop"] != prev["stop"]:
-            self.emit(EV.STOP_BUTTON, 1 if inp["stop"] else 0)
-            if inp["stop"]:
-                self.stop_released_since_us = None
-                self._halt(int(pg.Source.BUTTON))
-            else:
-                self.stop_released_since_us = t_us
-        # PAUSE button
-        if inp["pause"] != prev["pause"]:
-            self.emit(EV.PAUSE_BUTTON, 1 if inp["pause"] else 0)
-            if inp["pause"]:
-                self._pause(int(pg.Source.BUTTON))
-        if inp["alm"] != prev["alm"]:
-            self.emit(EV.ALM_CHANGED, 1 if inp["alm"] else 0)
-        # limits
-        for name, lid, cause in (("start", pg.LimitId.START, SC.LIMIT_START), ("end", pg.LimitId.END, SC.LIMIT_END)):
-            if inp[name] and not prev[name]:
-                homing = self.motion is not None and self.motion.kind == "HOMING" and name == "start"
-                if not homing:
-                    m = self.motion
-                    if m is not None and (m.direction < 0) == (name == "start"):
-                        self._immediate_stop(int(cause))
-                        self._clear_valid(int(cause))
-                    if not self.limit_latch[name]:
-                        self.limit_latch[name] = True
-                        self.emit(EV.LIMIT_SET, int(lid), self.pos_um, self.pos_steps)
-                self.limit_release_since[name] = None
-            elif not inp[name] and self.limit_latch[name]:
-                since = self.limit_release_since[name]
-                if since is None:
-                    self.limit_release_since[name] = t_us
-                elif t_us - since >= int(self.p("io.release_ms")) * 1000:
-                    self.limit_latch[name] = False
-                    self.limit_release_since[name] = None
-                    self.emit(EV.LIMIT_CLEARED, int(lid))
-        if inp["start"] and inp["end"] and not (self.faults_mask & FA.LIMIT_WIRING):
             if self.motion is not None:
-                self._immediate_stop(int(SC.LIMIT_WIRING))
-            self._fault("LIMIT_WIRING", self.pos_um, self.pos_steps)
-            self._clear_valid(int(SC.LIMIT_WIRING))
+                self._immediate_stop(int(SC.ESTOP), truncate=True)
+            self._clear_valid(int(SC.ESTOP))
+            self._disable(int(pg.DriverDisabledCause.ESTOP))
+        elif not lvl and self.estop_level:
+            self.estop_level = False
+            self.estop_closed_since_us = t_us
+        # driver power (20 ms filter, SAF-FW-024)
+        if sense:
+            raw = self.world.power_present()
+            if raw != self.pwr_filt:
+                if self.pwr_change_since is None:
+                    self.pwr_change_since = t_us
+                elif t_us - self.pwr_change_since >= DRV_PWR_FILTER_MS * 1000:
+                    self.pwr_change_since = None
+                    self._power_change(raw, t_us)
+            else:
+                self.pwr_change_since = None
+        else:
+            self.pwr_filt = True
+        # K1 weld (SAF-FW-025)
+        if sense and self.estop_level and self.pwr_filt:
+            if self.k1_since_us is None:
+                self.k1_since_us = t_us
+            elif t_us - self.k1_since_us >= int(self.p("drv.k1_weld_ms")) * 1000 and \
+                    not self.faults_mask & FA.K1_WELDED:
+                self._fault("K1_WELDED", (t_us - self.k1_since_us) // 1000)
+        else:
+            self.k1_since_us = None
+        # limits (forced levels; position edges are checked per step) + wiring
+        for name in ("start", "end"):
+            if self._edge(name, self._input_level(name), t_us):
+                self._limit_edge(name, t_us)
+        if self.db["start"].level and self.db["end"].level:
+            self._limit_wiring()
+        # PAUSE button
+        if self._edge("pause", self._pause_level(), t_us):
+            self.emit(EV.PAUSE_BUTTON, 1)
+            self._pause(int(pg.Source.BUTTON))
+        # ALM (active on the first sample, inactive after a stable io.release_ms)
+        alm = self._alm_level()
+        if alm and not self.alm_filt:
+            self.alm_filt = True
+            self.alm_rel_since = None
+            self.emit(EV.ALM_CHANGED, 1)
+        elif not alm and self.alm_filt:
+            if self.alm_rel_since is None:
+                self.alm_rel_since = t_us
+            elif t_us - self.alm_rel_since >= int(self.p("io.release_ms")) * 1000:
+                self.alm_filt = False
+                self.alm_rel_since = None
+                self.emit(EV.ALM_CHANGED, 0)
+        elif alm:
+            self.alm_rel_since = None
         # enable settle
         if self.motion_state == "ENABLING" and t_us >= self.enabling_until_us:
             self._enabled()
@@ -1009,30 +1287,78 @@ class SimBoard:
             self.afe_stale = True
             self.emit(EV.AFE_STALE, 1)
             if self.motion is not None:
-                self._immediate_stop(int(SC.AFE_FAULT))
                 self._fault("AFE_FAULT", self.pos_um, self.pos_steps)
+                self._immediate_stop(int(SC.AFE_FAULT))
                 self._clear_valid(int(SC.AFE_FAULT))
             self.next_fallback_us = t_us
         if self.afe_stale and self.stream_on and t_us >= self.next_fallback_us:
             self.next_fallback_us = t_us + 1_000_000 // max(1, int(self.p("stream.fallback_hz")))
             self._data_frame(t_us, pg.AFE_NO_DATA, fallback=True)
-        # link watchdog (moving only)
+        # link watchdog (moving only, controlled stop)
         if self.motion is not None and not self.link_wdg and \
-                t_us - self.last_cmd_us > int(self.p("safety.link_timeout_ms")) * 1000:
+                t_us - self.last_cmd_us >= int(self.p("safety.link_timeout_ms")) * 1000:
             self.link_wdg = True
             self.emit(EV.LINK_WDG)
             self._controlled_stop(int(SC.LINK_WDG), "STOPPED")
             self._clear_valid(int(SC.LINK_WDG))
-        # jog dead-man
+        # jog dead-man (VALID unchanged)
         m = self.motion
-        if m is not None and m.kind == "JOG" and not m.stopping and \
+        if m is not None and m.kind == "JOG" and (not m.stopping or m.reverse is not None) and \
                 t_us - m.last_refresh_us > int(self.p("motion.jog_timeout_ms")) * 1000:
-            self._controlled_stop(int(SC.JOG_DEADMAN), "STOPPED")   # VALID unchanged
-        self._motion_tick(0.001)
+            self._controlled_stop(int(SC.JOG_DEADMAN), "STOPPED")
+        # idle disable (SAF-FW-017: unloaded, AFE fresh, continuously idle)
+        self._idle_disable(t_us)
+        # PEND / NOT_SETTLED (warning only)
+        to = int(self.p("drv.pend_timeout_ms"))
+        if self.pend_wait_since_us is not None:
+            if not self.has(FE.DRV_SIGNALS) or to == 0 or self.alm_filt or not self.pwr_filt or self._pend_level():
+                self.pend_wait_since_us = None
+            elif t_us - self.pend_wait_since_us >= to * 1000:
+                self.emit(EV.NOT_SETTLED, 0, (t_us - self.pend_wait_since_us) // 1000)
+                self.pend_wait_since_us = None
+
+    def _pend_level(self) -> bool:
+        return self.has(FE.DRV_SIGNALS) and self.world.pend_active() and self.motion is None
+
+    def _power_change(self, on: bool, t_us: int) -> None:
+        self.pwr_filt = on
+        self.emit(EV.DRIVER_POWER, 1 if on else 0)
+        if on:
+            self.pwr_on_us = t_us
+            return
+        if self.motion is not None:
+            self._immediate_stop(int(SC.DRV_POWER_LOST))
+        self._clear_valid(int(SC.DRV_POWER_LOST))
+        self._disable(int(pg.DriverDisabledCause.DRV_POWER_LOST))
+
+    def _unloaded(self) -> bool:
+        return self.last_raw != pg.AFE_NO_DATA and abs(self.last_raw - int(self.p("safety.zero_raw"))) < \
+            int(self.p("safety.release_band_raw"))
+
+    def _idle_disable(self, t_us: int) -> None:
+        lim = int(self.p("safety.idle_disable_s"))
+        if lim == 0 or self.motion_state != "IDLE" or self.afe_stale or not self._unloaded():
+            self.idle_since_us = None             # the counter restarts when moving, loaded or stale (D-33 g)
+            return
+        if self.idle_since_us is None:
+            self.idle_since_us = t_us
+        elif t_us - self.idle_since_us >= lim * 1_000_000:
+            self.idle_since_us = None
+            self._disable(int(pg.DriverDisabledCause.IDLE))
+
+    def idle_left_s(self) -> int:
+        lim = int(self.p("safety.idle_disable_s"))
+        if lim == 0 or self.motion_state != "IDLE" or self.idle_since_us is None:
+            return 0xFFFF
+        return max(0, lim - (self.now_us() - self.idle_since_us) // 1_000_000)
 
     # ============================================================================== samples / DATA
-    def _force_n(self) -> float:
-        return self.world.specimen.force_n(self.x_um)
+    def _force_n(self, t_us: int | None = None) -> float:
+        return self.world.specimen.force_n(self._x_true(), t_us)
+
+    def _load_violation(self, raw: int) -> bool:
+        lo, hi = int(self.p("safety.load_raw_min")), int(self.p("safety.load_raw_max"))
+        return raw > hi or raw < lo or raw in (pg.RAW_MIN, pg.RAW_MAX)
 
     def _on_sample(self, t_us: int, raw: int) -> None:
         if self.afe_stale:
@@ -1044,21 +1370,29 @@ class SimBoard:
         self.last_raw = raw
         self.afe_saturated = raw in (pg.RAW_MIN, pg.RAW_MAX)
         self._rate_check()
-        # FW load limit on every sample (D-12); rails always trip
-        lo, hi = int(self.p("safety.load_raw_min")), int(self.p("safety.load_raw_max"))
-        if raw > hi or raw < lo or self.afe_saturated:
-            self.load_trip_count += 1
-            if (self.load_trip_count >= int(self.p("safety.load_trip_samples")) or self.afe_saturated) and \
-                    not self.faults_mask & FA.LOAD_LIMIT:
-                if self.motion is not None:
-                    self._immediate_stop(int(SC.LOAD_LIMIT))
-                self._fault("LOAD_LIMIT", raw, self.pos_steps)
-                self._clear_valid(int(SC.LOAD_LIMIT))
+        # FW load limit on every sample (D-12); rails always trip; regrow rule after FAULT_CLEAR (SAF-FW-011)
+        trip = False
+        if self._load_violation(raw):
+            ref = self.regrow_ref
+            if ref is not None and not self.afe_saturated:
+                grow = int(self.p("safety.load_regrow_raw"))
+                hi = int(self.p("safety.load_raw_max"))
+                trip = (raw - ref > grow) if ref > hi else (ref - raw > grow)
+            else:
+                self.load_trip_count += 1
+                trip = self.load_trip_count >= int(self.p("safety.load_trip_samples")) or self.afe_saturated
         else:
             self.load_trip_count = 0
+            self.regrow_ref = None
+        if trip and not self.faults_mask & FA.LOAD_LIMIT:
+            self.regrow_ref = None
+            self._fault("LOAD_LIMIT", raw, self.pos_steps)
+            if self.motion is not None:
+                self._immediate_stop(int(SC.LOAD_LIMIT))
+            self._clear_valid(int(SC.LOAD_LIMIT))
         m = self.motion
         if m is not None and m.kind == "MOVE_UNTIL_LOAD" and not m.stopping and self._beyond(raw, m.raw_stop, m.cmp):
-            self.x_um = float(self.pos_um)
+            self._clean_halt_position(t_us)
             self._finish("LOAD_THRESHOLD")
         settling = self.settle_left > 0
         if settling:
@@ -1097,7 +1431,6 @@ class SimBoard:
 
     def status_now(self, *, saturated: bool = False, settling: bool = False, fallback: bool = False) -> int:
         s = 0
-        inp = self.prev_inputs
         if self.paused:
             s |= DS.PAUSED
         if self._limit_active("start"):
@@ -1116,20 +1449,19 @@ class SimBoard:
             s |= DS.AFE_RATE_MISMATCH
         if self.link_wdg:
             s |= DS.LINK_WDG
-        if inp.get("stop"):
-            s |= DS.STOP_BTN
-        if inp.get("pause"):
+        if self.db["pause"].level:
             s |= DS.PAUSE_BTN
-        if self.world.alm:
-            s |= DS.ALM
-        if self.world.pend and self.motion is None:
-            s |= DS.PEND
+        if self.has(FE.DRV_SIGNALS):             # feature-dependent bits are sent as 0 otherwise (D-37 b)
+            if self.alm_filt:
+                s |= DS.ALM
+            if self._pend_level():
+                s |= DS.PEND
+            if self.pwr_filt:
+                s |= DS.DRV_PWR
         if self.pos_uncertain:
             s |= DS.POS_UNCERTAIN
         if fallback:
             s |= DS.NO_AFE_DATA
-        if self.world.power_present() or not bool(self.p("drv.pwr_sense_enable")):
-            s |= DS.DRV_PWR
         ov = self.status_override
         if ov is not None:
             if self.now_us() < ov[2]:
@@ -1154,16 +1486,23 @@ class SimBoard:
     # ============================================================================== STATUS
     def board_status(self) -> BoardStatus:
         now = self.now_us()
-        inp = self.prev_inputs
         io = 0
-        for name, bit in (("estop", pg.IoBits.ESTOP_OPEN), ("start", pg.IoBits.LIMIT_START),
-                          ("end", pg.IoBits.LIMIT_END), ("stop", pg.IoBits.STOP_BTN), ("pause", pg.IoBits.PAUSE_BTN),
-                          ("alm", pg.IoBits.ALM), ("power", pg.IoBits.DRV_PWR)):
-            if inp.get(name):
-                io |= bit
-        if self.world.pend:
-            io |= pg.IoBits.PEND
-        if self.motion_state == "NOT_ENABLED":
+        if self.world.estop_input_open():
+            io |= pg.IoBits.ESTOP_OPEN
+        if self.db["start"].level:
+            io |= pg.IoBits.LIMIT_START
+        if self.db["end"].level:
+            io |= pg.IoBits.LIMIT_END
+        if self.db["pause"].level:
+            io |= pg.IoBits.PAUSE_BTN
+        if self.has(FE.DRV_SIGNALS):                 # D-37 b: invalid → sent as 0
+            if self.world.alm_active():
+                io |= pg.IoBits.ALM
+            if self.world.pend_active():
+                io |= pg.IoBits.PEND
+            if self.world.power_present():
+                io |= pg.IoBits.DRV_PWR
+        if self.motion_state == "NOT_ENABLED" and self.ena_disabled:
             io |= pg.IoBits.ENA_DISABLED
         if int(self.p("afe.rate_sps")) == 1:
             io |= pg.IoBits.RATE_80
@@ -1179,7 +1518,6 @@ class SimBoard:
         med = sorted(self.periods)[len(self.periods) // 2] if self.periods else 0
         loaded = self.afe_stale or (self.last_raw != pg.AFE_NO_DATA and abs(
             self.last_raw - int(self.p("safety.zero_raw"))) >= int(self.p("safety.release_band_raw")))
-        from bend_stand.calc.motion import v_limit_um_s  # noqa: PLC0415
         vlim = v_limit_um_s(int(self.p("motion.v_max_load_um_s" if loaded else "motion.v_max_travel_um_s")),
                             int(self.p("motion.max_step_rate_hz")), self.spm)
         return BoardStatus(
@@ -1195,7 +1533,7 @@ class SimBoard:
             rx_overruns=0, tx_drops=self.counters["tx_drops"],
             event_overflows=self.counters["event_overflows"] & 0xFFFF, loop_max_us=150,
             link_age_ms=min(0xFFFF, (now - self.last_cmd_us) // 1000), stack_free_min=2048,
-            nvm_save_ms=self.nvm_save_ms, idle_disable_left_s=0xFFFF, nvm_record_seq=self.record_seq,
+            nvm_save_ms=self.nvm_save_ms, idle_disable_left_s=self.idle_left_s(), nvm_record_seq=self.record_seq,
             nvm_save_uptime_ms=self.nvm_save_uptime_ms, v_limit_um_s=vlim, pause_src=self.pause_src)
 
     # ============================================================================== test hooks
@@ -1203,3 +1541,18 @@ class SimBoard:
                   status: int = 0, detail: int = 0) -> None:
         with self._lock:
             self.faults.append(_Fault(kind, cmd, what, n, ms, status, detail))
+
+    def inject_step_fault(self) -> None:
+        """Step overrun / count fault (vocabulary ``inject step_fault``): CLEAN halt, STEP_FAULT, HOMED cleared,
+        POS_UNCERTAIN, VALID cleared."""
+        with self._lock:
+            self._fault("STEP_FAULT", self.pos_um, self.pos_steps)
+            if self.motion is not None:
+                self._immediate_stop(int(SC.STEP_FAULT))
+            self.homed = False
+            self.pos_uncertain = True
+            self._clear_valid(int(SC.STEP_FAULT))
+            self._emit_done()
+
+
+__all__ = ["SimBoard", "SimConfig", "Move", "DEFAULT_FEATURES", "FEATURE_OF_CMD"]

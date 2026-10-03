@@ -5,13 +5,17 @@
 * ``available = False`` → item disabled (grey) with ``reason`` as tooltip; a ticked channel that becomes
   unavailable stays ticked and reads "(n/a)".
 * Status-bit channels show the generated ``*_DESC`` text as tooltip (P8).
-* ``batch()`` reports a group tick as one ``checkedChanged``.
+* ``batch()`` reports a group tick as one ``checkedChanged``; a group tick ticks only the **available** children
+  (D-38 / TS D-63 rule 5).
+* Column "Pane" shows the plot pane that draws a checked channel ("P2"); a right click on a channel emits
+  ``channelContextMenu(key, global_pos)`` (the plot dock offers "Plot in / move to pane N", SW-RT-006).
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/gui/widgets/channel_tree.py @37c87471 (adapted: ChannelSpec
-fields, no feature gating / pane column / context menu, colour swatches, "(n/a)" label, generated bit tooltips).
+fields, no feature gating, colour swatches, "(n/a)" label, generated bit tooltips; pane column and channel context
+menu kept for SW-RT-006).
 
 Implements: SW-RT-002 (every registry channel switchable, greyed prerequisites), SW-RT-004 (derived channels
-listed from the registry)
+listed from the registry), SW-RT-006 (pane column, channel menu, group tick of available children)
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem, QWidget
 
@@ -69,11 +73,14 @@ class _GroupItem(QTreeWidgetItem):
 
 class ChannelTree(QTreeWidget):
     checkedChanged = Signal(list)       # checked keys in tree order
+    channelContextMenu = Signal(str, QPoint)    # key, global position (right click on a channel row)
+
+    PANE_COLUMN = 2
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setHeaderLabels(["Channel", "Unit"])
-        self.setColumnCount(2)
+        self.setHeaderLabels(["Channel", "Unit", "Pane"])
+        self.setColumnCount(3)
         self.setUniformRowHeights(True)
         self._items: dict[str, QTreeWidgetItem] = {}
         self._groups: dict[str, QTreeWidgetItem] = {}
@@ -166,6 +173,43 @@ class ChannelTree(QTreeWidget):
             after = self.checked_keys()
             if after != before:
                 self.checkedChanged.emit(after)
+
+    def set_checked_many(self, keys: list[str] | tuple[str, ...], checked: bool = True) -> None:
+        """Tick / untick several channels: one ``checkedChanged`` at the end."""
+        with self.batch():
+            for k in keys:
+                if k in self._items:
+                    self.set_checked(k, checked)
+
+    # ---------------------------------------------------------------- pane column / context menu (SW-RT-006)
+    def set_pane_labels(self, labels: dict[str, str]) -> None:
+        """Show the pane of every checked channel ("P1", "P2", …); other rows are blank."""
+        self._emitting, outer = False, self._emitting
+        try:
+            for key, item in self._items.items():
+                text = labels.get(key, "")
+                if item.text(self.PANE_COLUMN) != text:
+                    item.setText(self.PANE_COLUMN, text)
+        finally:
+            self._emitting = outer
+
+    def pane_label(self, key: str) -> str:
+        return self._items[key].text(self.PANE_COLUMN)
+
+    def key_at(self, pos: QPoint) -> str | None:
+        item = self.itemAt(pos)
+        if item is None:
+            return None
+        key = item.data(0, KEY_ROLE)
+        return str(key) if key else None
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt override
+        key = self.key_at(event.pos())
+        if key is None:
+            super().contextMenuEvent(event)
+            return
+        self.channelContextMenu.emit(key, event.globalPos())
+        event.accept()
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         if column == 0 and self._emitting and item.data(0, KEY_ROLE):

@@ -1,7 +1,7 @@
 /* System seam on the F446 (FW_design §5.1): reset cause (RCC->CSR via pure resetcause, flags
  * cleared), software reset, 96-bit UID, clock fallback flag, stack painting / high-water mark,
  * critical sections (PRIMASK / BASEPRI), HardFault and NMI (CSS) handlers with a .noinit fault
- * record (M1: recorded; the BOOT EVENT report needs a seam accessor -> M2 open item).
+ * record reported once through hal_fault_record() (seam v1.2) in the BOOT EVENT.
  * Origin: Thrust_Stand_HAW/02_FW/src/sys/{reset_cause,stack,faults}.cpp @37c8747 (adapted, C).
  * Implements: SAF-FW-018, SAF-FW-019 (IWDG cause), NFR-005 (stack_free_min), NFR-007 (critical
  *             sections), FW-CFG-004 (UID)
@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "f446.h"
+#include "hal_step.h"
 #include "hal_sys.h"
 #include "irq_prio.h"
 #include "resetcause.h"
@@ -112,9 +113,22 @@ void hal_crit_exit(hal_crit_t saved)
     }
 }
 
-/* ---- faults (M1: no step generator to abort; M2 adds hal_step_abort() first) ---- */
+/* seam v1.2 (OI-FW-32): the record of the previous run, once */
+bool hal_fault_record(uint32_t *pc, uint32_t *cfsr)
+{
+    if (s_fault.magic != FAULT_MAGIC) {
+        return false;
+    }
+    *pc = s_fault.pc;
+    *cfsr = s_fault.cfsr;
+    s_fault.magic = 0u;
+    return true;
+}
+
+/* ---- faults: pulses cut first (TRUNCATE), record, reset ---- */
 __attribute__((used)) void hardfault_record(const uint32_t *sp)
 {
+    (void)hal_step_abort();
     s_fault.magic = FAULT_MAGIC;
     s_fault.pc = sp[6];
     s_fault.cfsr = SCB->CFSR;
@@ -133,6 +147,7 @@ __attribute__((naked)) void HardFault_Handler(void)
 
 void NMI_Handler(void)
 {
+    (void)hal_step_abort();
     if ((RCC->CIR & RCC_CIR_CSSF) != 0u) {
         RCC->CIR |= RCC_CIR_CSSC;                     /* HSE lost (CSS) */
     }

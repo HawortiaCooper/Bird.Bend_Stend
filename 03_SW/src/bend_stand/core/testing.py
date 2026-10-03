@@ -78,6 +78,17 @@ class TestHooks:
             raise TimeoutError(f"future not done after {timeout_ms} ms of virtual time")
         return fut.result()
 
+    # GRQ-F-M2-01: fake Pause/Break press through the same callback as the hotkey thread
+    def hotkey_press(self) -> None:
+        hk = self._be.hotkey
+        if hk is not None:
+            if self._be.lockstep or hk.backend is None or not hasattr(hk.backend, "press"):
+                hk.on_press("test")
+            else:
+                hk.backend.press()
+        else:
+            self._be.halt("hotkey")
+
     # (b), (c)
     def wire_log(self) -> list[Any]:
         tr = self._be.device.transport

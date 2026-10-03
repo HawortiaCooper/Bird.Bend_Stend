@@ -134,7 +134,9 @@ static void test_layout_fw_encoder_equals_validator_writer(void)
             }
         }
     }
-    TEST_ASSERT_EQUAL_UINT16(45u, n);                              /* 48 - 3 session values */
+    /* dict_version 4 (ICD v0.5, CR-01: io.stop_active_level retired): 47 parameters - 3 session values */
+    TEST_ASSERT_EQUAL_UINT16(47u, (uint16_t)PARAM_COUNT);
+    TEST_ASSERT_EQUAL_UINT16(44u, n);
     TEST_ASSERT_TRUE(32u + 8u * n <= SLOT);
 }
 

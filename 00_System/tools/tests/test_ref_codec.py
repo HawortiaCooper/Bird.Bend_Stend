@@ -232,7 +232,8 @@ SRS_ANCHORS = {
     "spm_change_moving": ("E_BUSY", 1),                      # FW-MOT-009
     "move_speed_steprate_cap": ("E_RANGE", 4),               # FW-MOT-009 (spm 10 000)
     "disable_moving": ("E_BUSY", 1),                         # FW-MOT-008
-    "halt_clear_pressed": ("E_CAUSE_ACTIVE", 0xFFFF),        # SAF-FW-022
+    "halt_clear_ok": ("OK", 0),                              # D-36: HALT_CLEAR never refused
+    "estop_clear_input_open_unlatched": ("E_CAUSE_ACTIVE", 0xFFFF),   # SAF-FW-006
     "move_alarm_powered": ("E_STATE", 512),                  # D-28
     "move_identical_while_moving": ("E_BUSY", 1),            # IF-005: no retry, no dup-ack
     "jog_bound_behind": ("E_RANGE", 8),                     # F-B-15 bound ahead of the axis

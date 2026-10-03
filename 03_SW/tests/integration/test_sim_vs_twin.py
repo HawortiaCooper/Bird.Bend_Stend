@@ -43,13 +43,25 @@ if SIM_VS == "server":
     pytestmark.append(pytest.mark.needs_b("bend_stand.io.sim.server"))
 if SIM_VS == "inproc":
     pytestmark.append(pytest.mark.needs_b("bend_stand.io.sim.control", "SimControl"))
-M1_FEATURES = int(pg.Features.AFE_SYNTHETIC | pg.Features.NVM)      # the simulator mimics the M1 FW (§12.1)
+M1_FEATURES = int(pg.Features.AFE_SYNTHETIC | pg.Features.NVM)      # fallback: the M1 FW feature mask (§12.1)
+
+
+def twin_features(twin_exe) -> int:
+    """Feature mask of A's current build (without TWIN): the simulator mirrors it (ICD v0.5 §7.6, D-37 b)."""
+    import tempfile  # noqa: PLC0415
+
+    from twin import Twin, TwinLink  # noqa: PLC0415
+
+    with Twin("lockstep", exe=twin_exe, run_dir=Path(tempfile.mkdtemp())) as t:
+        t.advance_ms(5)
+        names = TwinLink(t).cmd("GET_INFO")["info"]["features"]
+    return sum(int(pg.Features[n]) for n in names if n != "TWIN")
 
 
 class InprocSim:
     """B's SimBoard (real clock) behind tcp:// + a JSON-lines control port mapped to SimControl.act."""
 
-    def __init__(self) -> None:
+    def __init__(self, features: int = M1_FEATURES) -> None:
         import threading  # noqa: PLC0415
 
         from bend_stand.core.clock import MONOTONIC  # noqa: PLC0415
@@ -59,7 +71,7 @@ class InprocSim:
 
         self.pair = VirtualTransportPair(MONOTONIC, bytes_per_s=None)
         self.pair.pc.open()
-        self.board = SimBoard(MONOTONIC, self.pair.board, config=SimConfig(features=M1_FEATURES))
+        self.board = SimBoard(MONOTONIC, self.pair.board, config=SimConfig(features=features))
         self.ctl = SimControl(self.board)
         self.board.start()
         self.stop = threading.Event()
@@ -143,10 +155,10 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def sim_host(twin_exe, tmp_path):
+def sim_host(twin_exe, tmp_path, features: int = M1_FEATURES):
     """(endpoint, ctl_port) of the simulator side."""
     if SIM_VS == "inproc":
-        h = InprocSim()
+        h = InprocSim(features)
         yield f"tcp://127.0.0.1:{h.port}", h.ctl_port
         h.close()
         return
@@ -256,9 +268,10 @@ def run_script(endpoint: str, ctl_port: int) -> dict:
     return T
 
 
-# Bits whose M1 meaning is not fixed by ICD v0.4.1 while FEAT_DRV_SIGNALS = 0 (finding IF-C-M1-02): A's M1 FW
-# does not sample ALM/PEND/DRV_PWR (reports 0, "not confirmed"), B's simulator reports the world (PEND = 1,
-# DRV_PWR = 1). The subset compares everything else; test_sim_vs_twin_drv_signal_bits tracks the divergence.
+# ICD v0.5 §7.6 (D-37 b, IF-C-M1-02 closed): while FEAT_DRV_SIGNALS = 0, ALM/PEND/DRV_PWR are sent as 0 and are
+# invalid. A's M1 FW sends 0; B's simulator still reports the world (PEND = 1, DRV_PWR = 1) -> follow-up for B
+# (mask by protocol_gen.DATA_STATUS_FEATURE / IO_FEATURE) - aligned by B in M2; the subset still masks the
+# bits, test_sim_vs_twin_drv_signal_bits compares them in full (xfail removed at ICD v0.5).
 UNDEFINED_M1_BITS = {"ALM", "PEND", "DRV_PWR"}
 
 
@@ -289,7 +302,7 @@ def transcripts(tmp_path_factory):
         twin_t = run_script(f"tcp://127.0.0.1:{p}", c)
     finally:
         tw.close()
-    with sim_host(exe, tmp_path_factory.mktemp("sim")) as (ep, ctl):
+    with sim_host(exe, tmp_path_factory.mktemp("sim"), twin_features(exe)) as (ep, ctl):
         sim_t = run_script(ep, ctl)
     out = os.environ.get("BEND_DIFF_OUT")
     if out:
@@ -307,8 +320,6 @@ def test_sim_vs_twin_m1_subset(transcripts):
 
 
 @pytest.mark.req("SYS-008", "FW-SW-004", "FW-SW-005")
-@pytest.mark.xfail(SIM_VS != "twin", strict=True, reason="IF-C-M1-02: ALM/PEND/DRV_PWR bits undefined while FEAT_DRV_SIGNALS = 0 "
-                                       "(A: 0, simulator: world value) - ICD v0.5 to fix, then A or B aligns")
 def test_sim_vs_twin_drv_signal_bits(transcripts):
     twin_t, sim_t = transcripts
     assert not _diffs(twin_t, sim_t)

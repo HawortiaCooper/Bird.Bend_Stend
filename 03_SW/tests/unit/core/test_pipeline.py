@@ -211,7 +211,10 @@ def test_channel_registry_generated_bits() -> None:
     reg.set_available("F_N", True)
     reg.set_available("F_N", True)
     assert hits == [1] and reg.get("F_N").available
-    assert set(RING_KEYS) <= set(reg.keys()) and len(BIT_CHANNELS) == 24
+    n_bits = sum(1 for n in (*pg.DATA_FLAGS_BITS, *pg.DATA_STATUS_BITS) if n)      # retired bits excluded (v0.5)
+    assert set(RING_KEYS) <= set(reg.keys()) and len(BIT_CHANNELS) == n_bits == 23
+    assert reg.get("raw").dimension == "counts" and reg.get(bit_key("PAUSED")).dimension == "bits"   # GRQ-B-21
+    assert reg.get("F_N").dimension == "force"
 
 
 @pytest.mark.req("NFR-001")

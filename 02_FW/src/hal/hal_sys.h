@@ -7,6 +7,7 @@
  *   hal_crit_t hal_crit_enter(hal_crit_level_t level);  void hal_crit_exit(hal_crit_t saved);
  * Levels (pinout §4): HALT = PRIMASK, AFE / MOTION = BASEPRI 0x20, DATA = 0x30, TICK = 0x40.
  * Usage: CRIT_BEGIN(HAL_CRIT_DATA); ... CRIT_END();   (at most one per block scope)
+ * Seam v1.2 (tools/README, ICD v0.5): hal_fault_record() added (BOOT EVENT value / value2).
  * Implements: SAF-FW-018/019, FW-CFG-004, NFR-005, NFR-007, SYS-008
  */
 #ifndef HAL_SYS_H
@@ -23,6 +24,9 @@ void hal_wdg_kick(void);  void hal_wdg_set_timeout(uint32_t ms);
 uint8_t hal_reset_cause(void);            /* RST_* (proto_gen.h) */
 void hal_reset(void);  void hal_uid(uint8_t uid[12]);  bool hal_clk_fallback(void);
 uint16_t hal_stack_free_min(void);
+bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);   /* seam v1.2 (OI-FW-32): HardFault record of the
+                                                          previous run (.noinit): true once after boot
+                                                          if present, then cleared */
 
 typedef enum {
     HAL_CRIT_HALT = 0,     /* PRIMASK: everything, <= 0.2 us */
