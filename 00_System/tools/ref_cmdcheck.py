@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference command-acceptance model (test oracle) for ICD_protocol.md v0.1 §4-§6.
+"""Reference command-acceptance model (test oracle) for ICD_protocol.md v0.4.1 §4-§6.
 
 Implements: FW-CMD-001 (check order), FW-CFG-003 (SET_PARAM checks), SAF-FW-020 (motion
 gating), SAF-FW-006/-021/-022, FW-CMD-003, FW-MOT-004/-005/-008/-009 (acceptance only).
@@ -22,6 +22,8 @@ import ref_codec as rc
 
 MOVING_STATES = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOMING", "STOPPING")
 MOTION_CMDS = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOME")
+STATE_SCHEMA = 2        # check_vectors.json state_schema: FwState keys (F-B-25); bump on any key change
+SPS = {0: 10, 1: 80}    # afe.rate_sps enum code -> conversions per second (H5)
 
 
 @dataclass
@@ -50,6 +52,7 @@ class FwState:
     drv_power: bool = True          # DRV_PWR sense input (evaluated if drv.pwr_sense_enable)
     alm_active: bool = False
     nvm_record_valid: bool = True
+    paused: bool = False            # PAUSED latch: blocks new motion (BLOCK PAUSED, D-30)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FwState":
@@ -110,14 +113,20 @@ class Model:
             b.append("AFE_SATURATED")
         if unpowered:
             b.append("DRV_UNPOWERED")
-        # D-28: new motion refused while ALM is active and driver power is present
-        # (sense disabled -> power assumed present)
-        if st.alm_active and not unpowered:
+        # D-28 / SAF-FW-026 ALM start-block: NEW motion refused while ALM is active and driver
+        # power is present (sense disabled -> power assumed present); a speed refresh of a
+        # running jog is not a new motion start and is not blocked by ALM
+        jog_refresh = cmd == "JOG" and st.motion_state == "JOG"
+        if st.alm_active and not unpowered and not jog_refresh:
             b.append("DRIVER_ALARM")
+        # D-30: PAUSED refuses MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG != 0 incl. jog refreshes
+        # (JOG 0 never reaches this point)
+        if st.paused:
+            b.append("PAUSED")
         return rc.names_to_bits(b, rc.BLOCK)
 
     def hard_rule(self, st: FwState, key: str, value: Any) -> str | None:
-        """ICD §11.4 hard rules H1..H4 with `key` := value; returns the OTHER key or None."""
+        """ICD §11.4 hard rules H1..H5 with `key` := value; returns the OTHER key or None."""
         def v(k: str) -> Any:
             return value if k == key else self.value(st, k)
         if key in ("limits.soft_min_um", "limits.soft_max_um"):
@@ -135,6 +144,10 @@ class Model:
             if not v("motion.v_max_load_um_s") <= v("motion.v_max_travel_um_s"):
                 return ("motion.v_max_travel_um_s" if key == "motion.v_max_load_um_s"
                         else "motion.v_max_load_um_s")
+        if key in ("afe.timeout_ms", "afe.rate_sps"):
+            # H5 (D-33a): timeout >= 2 x conversion period, integer form timeout_ms * sps >= 2000
+            if v("afe.timeout_ms") * SPS[int(v("afe.rate_sps"))] < 2000:
+                return "afe.rate_sps" if key == "afe.timeout_ms" else "afe.timeout_ms"
         return None
 
     def validate_set(self, p: Any, tcode: int, wire: bytes) -> tuple[str, Any]:
@@ -153,6 +166,21 @@ class Model:
         if p.type == "enum":
             return ("OK", val) if val in {e.value for e in p.enum} else ("E_RANGE", None)
         return ("OK", val) if p.min <= val <= p.max else ("E_RANGE", None)
+
+    @staticmethod
+    def paused_after(st: FwState, ftype: int, payload: bytes, verdict: str) -> bool:
+        """PAUSED after the command (ICD §5.5, D-30, D-31): set by an accepted PAUSE; cleared ONLY
+        by an accepted RESUME or HALT_CLEAR; a NACK or any other command leaves it unchanged (motion
+        commands are refused while PAUSED). Execution effect; PAUSE while moving also stops."""
+        del payload
+        if verdict != "OK" or ftype not in rc.CMD_NAME:
+            return st.paused
+        name = rc.CMD_NAME[ftype]
+        if name == "PAUSE":
+            return True
+        if name in ("HALT_CLEAR", "RESUME"):
+            return False
+        return st.paused
 
     # ---- main -------------------------------------------------------------------------
     def check(self, st: FwState, ftype: int, payload: bytes) -> tuple[str, int]:
@@ -219,6 +247,18 @@ class Model:
                 if st.stop_btn_released_ms < need:
                     return "E_CAUSE_ACTIVE", need - st.stop_btn_released_ms
             return "OK", 0
+        if name == "RESUME":
+            # D-31: clears only PAUSED; refused while ESTOP (latched or input open), HALT or any
+            # FAULT is latched; no other BLOCK bit is evaluated; never E_BUSY (no motion start)
+            b = []
+            if st.estop_latched or st.estop_input_open:
+                b.append("ESTOP")
+            if st.halt_latched:
+                b.append("HALT")
+            if st.faults:
+                b.append("FAULT")
+            mask = rc.names_to_bits(b, rc.BLOCK)
+            return ("E_STATE", mask) if mask else ("OK", 0)
         if name == "FAULT_CLEAR":
             remaining = [f for f in st.faults if f in st.fault_causes and f != "LOAD_LIMIT"]
             if remaining:
@@ -243,8 +283,8 @@ class Model:
                 return "E_RANGE", 8
             direction = (req["target_um"] > st.pos_um) - (req["target_um"] < st.pos_um)
         elif name == "MOVE_UNTIL_LOAD":
-            if not lo <= req["bound_um"] <= hi:
-                return "E_RANGE", 0
+            if not lo <= req["bound_um"] <= hi or req["bound_um"] == st.pos_um:
+                return "E_RANGE", 0                 # outside soft limits, or = current position (F-B-28)
             if not 1 <= req["v_um_s"] <= self.v_limit(st, True):
                 return "E_RANGE", 4
             if req["a_um_s2"] > a_max:

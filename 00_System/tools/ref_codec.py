@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reference codec (test oracle) for the Bird Bend Stand PC <-> FW protocol.
 
-Implements: ICD_protocol.md v0.1 (PROTO_VERSION 1.0, PAYLOAD_VERSION 1);
+Implements: ICD_protocol.md v0.4.1 (PROTO_VERSION 1.0, PAYLOAD_VERSION 1);
             IF-002, IF-003, IF-004, IF-006, IF-009, FW-STR-003
 Origin: framing, CRC and parser follow Thrust_Stand_HAW/00_System/tools/ref_codec.py @9473c68
         (copied and trimmed, D-02); message set and payloads are bend-stand specific.
@@ -9,6 +9,9 @@ Origin: framing, CRC and parser follow Thrust_Stand_HAW/00_System/tools/ref_code
 Pure Python >= 3.11, standard library only. It is deliberately minimal and literal: FW host
 tests and SW pytest consume the vectors produced by gen_vectors.py and may import this module
 as an oracle. It is NOT the production codec of either side.
+
+The name tables below are hand-written on purpose (independent oracle); the normative names and
+codes live in 00_System/specs/protocol.yaml and tests/test_ref_codec.py proves both agree.
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any
 
-ICD_VERSION = "0.1"
+ICD_VERSION = "0.4.1"
 
 # ======================================================================================
 # constants (ICD §2, §3)
@@ -43,7 +46,7 @@ CMD: dict[str, int] = {
     "STREAM_START": 0x20, "STREAM_STOP": 0x21, "SET_VALID": 0x22,
     "ENABLE": 0x30, "DISABLE": 0x31, "HOME": 0x32, "MOVE_ABS": 0x33, "JOG": 0x34,
     "MOVE_UNTIL_LOAD": 0x35, "STOP": 0x36, "HALT": 0x37, "HALT_CLEAR": 0x38,
-    "ESTOP_CLEAR": 0x39, "FAULT_CLEAR": 0x3A, "PAUSE": 0x3B,
+    "ESTOP_CLEAR": 0x39, "FAULT_CLEAR": 0x3A, "PAUSE": 0x3B, "RESUME": 0x3C,
 }
 CMD_NAME = {v: k for k, v in CMD.items()}
 ASYNC = {"DATA": 0xC0, "EVENT": 0xC1}
@@ -57,7 +60,7 @@ REQ_FMT: dict[str, str] = {
     "STREAM_START": "<", "STREAM_STOP": "<", "SET_VALID": "<B",
     "ENABLE": "<", "DISABLE": "<", "HOME": "<B", "MOVE_ABS": "<iII", "JOG": "<iIi",
     "MOVE_UNTIL_LOAD": "<iIIiB", "STOP": "<B", "HALT": "<", "HALT_CLEAR": "<",
-    "ESTOP_CLEAR": "<", "FAULT_CLEAR": "<", "PAUSE": "<",
+    "ESTOP_CLEAR": "<", "FAULT_CLEAR": "<", "PAUSE": "<", "RESUME": "<",
 }
 REQ_FIELDS: dict[str, tuple[str, ...]] = {
     "REBOOT": ("magic",), "GET_ALL_PARAMS": ("page",), "GET_PARAM": ("id",),
@@ -84,7 +87,7 @@ DATA_STATUS = ["PAUSED", "LIMIT_START", "LIMIT_END", "LOAD_LIMIT", "AFE_STALE", 
 FAULTS = ["LOAD_LIMIT", "AFE_FAULT", "STEP_FAULT", "LIMIT_WIRING", "HOME_NOT_FOUND",
           "HOME_WIRING", "K1_WELDED", "HOME_DRIFT"]
 BLOCK = ["ESTOP", "HALT", "FAULT", "NOT_ENABLED", "NOT_HOMED", "LIMIT", "AFE_STALE",
-         "AFE_SATURATED", "DRV_UNPOWERED", "DRIVER_ALARM"]
+         "AFE_SATURATED", "DRV_UNPOWERED", "DRIVER_ALARM", "PAUSED"]
 IO = ["ESTOP_OPEN", "LIMIT_START", "LIMIT_END", "STOP_BTN", "PAUSE_BTN", "ALM", "PEND",
       "DRV_PWR", "ENA_DISABLED", "RATE_80"]
 SYS_FLAGS = ["CLK_FALLBACK", "CFG_DIRTY", "STREAM_ON", "REBOOT_PENDING", "NVM_DEFAULTED"]
@@ -95,7 +98,8 @@ MOTION_STATE = ["NOT_ENABLED", "ENABLING", "IDLE", "MOVE_ABS", "JOG", "MOVE_UNTI
                 "HOMING", "STOPPING"]
 HOME_PHASE = ["NONE", "PRECHECK", "RELEASE", "FAST_SEEK", "BACKOFF", "SLOW_APPROACH",
               "MOVE_TO_ZERO", "DONE"]
-HALT_SRC = ["NONE", "PC", "BUTTON"]
+SOURCE = ["NONE", "PC", "BUTTON"]          # halt_src, pause_src, HALT_SET / PAUSED arg
+HALT_SRC = SOURCE
 RESET_CAUSE = ["UNKNOWN", "POWER_ON", "PIN", "SOFTWARE", "IWDG", "WWDG", "LOW_POWER", "BROWN_OUT"]
 
 EVENT: dict[str, int] = {
@@ -261,7 +265,7 @@ def _enum_code(table: list[str], v: str | int) -> int:
 # structures (ICD §7)
 # ======================================================================================
 INFO_FMT = "<3B3BI12s16sHI"            # 44 B
-STATUS_FMT = "<IIBBHHHBBBBiiiiHH5I6H3I"  # 84 B
+STATUS_FMT = "<IIBBHHHBBBBiiiiHH5I6H3IBx"  # 86 B (v0.2: + u8 pause_src, u8 reserved = 0)
 DATA_FMT = "<IBBiiHH"                  # 18 B
 EVENT_FMT = "<IHHii"                   # 16 B
 PARAM_ENTRY_FMT = "<HB4s"              # 7 B
@@ -269,7 +273,7 @@ INFO_LEN = struct.calcsize(INFO_FMT)
 STATUS_LEN = struct.calcsize(STATUS_FMT)
 DATA_LEN = struct.calcsize(DATA_FMT)
 EVENT_LEN = struct.calcsize(EVENT_FMT)
-assert (INFO_LEN, STATUS_LEN, DATA_LEN, EVENT_LEN) == (44, 84, 18, 16)
+assert (INFO_LEN, STATUS_LEN, DATA_LEN, EVENT_LEN) == (44, 86, 18, 16)
 
 STATUS_FIELDS = ["uptime_ms", "t_us", "flags", "motion_state", "status", "faults", "io",
                  "home_phase", "halt_src", "reset_cause", "sys_flags", "pos_um", "target_um",
@@ -277,11 +281,11 @@ STATUS_FIELDS = ["uptime_ms", "t_us", "flags", "motion_state", "status", "faults
                  "rx_frames_ok", "rx_crc_errors", "rx_frame_errors", "rx_overruns", "tx_drops",
                  "event_overflows", "loop_max_us", "link_age_ms", "stack_free_min",
                  "nvm_save_ms", "idle_disable_left_s", "nvm_record_seq", "nvm_save_uptime_ms",
-                 "v_limit_um_s"]
+                 "v_limit_um_s", "pause_src"]
 _STATUS_BITS = {"flags": DATA_FLAGS, "status": DATA_STATUS, "faults": FAULTS, "io": IO,
                 "sys_flags": SYS_FLAGS}
-_STATUS_ENUMS = {"motion_state": MOTION_STATE, "home_phase": HOME_PHASE, "halt_src": HALT_SRC,
-                 "reset_cause": RESET_CAUSE}
+_STATUS_ENUMS = {"motion_state": MOTION_STATE, "home_phase": HOME_PHASE, "halt_src": SOURCE,
+                 "reset_cause": RESET_CAUSE, "pause_src": SOURCE}
 
 
 def encode_info(d: dict[str, Any]) -> bytes:

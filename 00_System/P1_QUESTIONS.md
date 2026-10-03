@@ -51,3 +51,15 @@ Answer inline (edit this file) or in chat, e.g. "Q3: pause/resume; Q7: Leadshine
 | Q22 | **Motor label**: exact type and encoder line count. [Q-R2-04] | 86HS2140-class, 8.2 N·m, 1000-line encoder (4000 counts/rev). |
 | Q23 | **Did Stefan's stand ever run on hardware?** If yes, with which step/dir/enable polarity and pulse settings? [Q-R1-09] | No; nothing is taken over from it as proven. |
 | Q24 | **Git commits**: commit the skeleton + R1–R4 now, or only at the P1 gate? | Commit at each gate (as in Thrust_Stand). |
+
+## E. Open after wave 2 (2026-10-03)
+
+| # | Question | Default |
+|---|---|---|
+| Q25 | **D-27 driver**: motor label / body length; switch to closed loop (SW7/SW8 per motor); 800 or 4000 pulses/rev; SW6 acceleration assist | closed loop per motor length, 4000 p/rev, SW6 compared at HW gate |
+| Q26 | **F-B-14** load-target step cannot reach the target load within tolerance after the trim iterations | stop the sequence and report |
+| Q27 | **GUI preferences** (SW_design_GUI GQ-01…20) | tab order Connection&Config · Safety limits · Test marks · Manual · Calibration&Tare · Sequence · Report; force unit N (kgf selectable); travel shown as test travel; Plot 1 docked (time + X-Y), Plot 2 tabbed, max 4 plot windows; English; light theme; keyboard jog off; sequence start allowed without the Pause/Break hotkey only after confirmation; wizards non-modal; TARE indicator turns amber after 30 min; missing specimen marks at record start = warning only; HTML report opens in the system browser; closing the app while the driver holds load = STOP and keep holding (no disable); tare large-offset warning with Undo; Enter in "Go to" only commits the value (Go needs a click); lab screen 1600×900 (usable at 1366×768); button label "STOP"; no extra in-app STOP key; STOP fires on press |
+| Q28 | **Known limitation (GF-03)**: the Pause/Break hotkey does not reach windows running as Administrator; the on-screen STOP and the physical STOP button always work | accept as documented limitation |
+
+> **Q25–Q28 answered 2026-10-03 → D-32.** Remaining: D-27 DIP change (closed loop 86-80/118 profile + 4000 p/rev?) — PO confirmation.
+> **D-27 closed 2026-10-03:** PO approved the DIP change (4000 p/rev, closed loop SW7 off / SW8 on) → nominal 800 steps/mm.

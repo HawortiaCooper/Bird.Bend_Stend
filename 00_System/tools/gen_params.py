@@ -5,11 +5,15 @@ Implements: FW-CFG-001, IF-010
 Origin: Thrust_Stand_HAW/00_System/tools/gen_params.py @9473c68 (copied, then trimmed:
         no repeated groups, no fw_owned flag, armed_ok -> moving_ok, bend-stand paths; D-02).
 
-Reads   00_System/specs/params.yaml   (single source of truth)
+Reads   00_System/specs/params.yaml   (single source of truth: parameters)
+        00_System/specs/protocol.yaml (single source of truth: protocol names, via gen_protocol.py)
 Writes  02_FW/src/gen/params_gen.h
         02_FW/src/gen/params_gen.c
+        02_FW/src/gen/proto_gen.h                     (gen_protocol.py)
         03_SW/src/bend_stand/core/params_gen.py
-        00_System/specs/ICD_protocol.md  (Appendix A, between the GENERATED markers)
+        03_SW/src/bend_stand/core/protocol_gen.py     (gen_protocol.py)
+        00_System/specs/ICD_protocol.md  (Appendix A and the "protocol:<id>" tables, between the
+                                          GENERATED markers)
 
 Usage:
     python gen_params.py              # (re)generate all outputs
@@ -35,6 +39,9 @@ try:
     import yaml
 except ImportError:  # pragma: no cover
     sys.exit("gen_params.py needs PyYAML:  python -m pip install pyyaml")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gen_protocol  # noqa: E402
 
 TOOLS_DIR = Path(__file__).resolve().parent
 ROOT = TOOLS_DIR.parents[1]
@@ -857,14 +864,17 @@ def update_icd(text: str, d: Dictionary) -> str:
 # --------------------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------------------
-def outputs(d: Dictionary) -> dict[Path, str]:
+def outputs(d: Dictionary, proto: "gen_protocol.Protocol | None" = None) -> dict[Path, str]:
+    proto = gen_protocol.load() if proto is None else proto
     res = {
         FW_H_PATH: gen_c_header(d),
         FW_C_PATH: gen_c_source(d),
         SW_PY_PATH: gen_python(d),
+        **gen_protocol.outputs(proto),
     }
     if ICD_PATH.exists():
-        res[ICD_PATH] = update_icd(ICD_PATH.read_text(encoding="utf-8"), d)
+        text = update_icd(ICD_PATH.read_text(encoding="utf-8"), d)
+        res[ICD_PATH] = gen_protocol.update_icd(text, proto)
     return res
 
 
@@ -879,6 +889,11 @@ def main(argv: list[str] | None = None) -> int:
     except DictError as e:
         print(f"params.yaml: {e}", file=sys.stderr)
         return 2
+    try:
+        proto = gen_protocol.load()
+    except gen_protocol.ProtoError as e:
+        print(f"protocol.yaml: {e}", file=sys.stderr)
+        return 2
     if args.canonical:
         sys.stdout.write(canonical(d))
         return 0
@@ -886,7 +901,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"0x{d.hash:08X}")
         return 0
     stale = []
-    for path, content in outputs(d).items():
+    for path, content in outputs(d, proto).items():
         old = path.read_text(encoding="utf-8") if path.exists() else None
         if old == content:
             continue
@@ -901,7 +916,8 @@ def main(argv: list[str] | None = None) -> int:
         for p in stale:
             print(f"out of date: {p.relative_to(ROOT)}", file=sys.stderr)
         return 1
-    print(f"{len(d.params)} params, PARAM_DICT_HASH = 0x{d.hash:08X}")
+    print(f"{len(d.params)} params, PARAM_DICT_HASH = 0x{d.hash:08X}; protocol.yaml ICD "
+          f"v{proto.icd_version}: {len(proto.commands)} commands, {len(proto.tables)} tables")
     return 0
 
 

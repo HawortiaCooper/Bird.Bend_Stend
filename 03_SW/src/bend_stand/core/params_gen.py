@@ -1,8 +1,8 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/params.yaml (dict_version 1, schema 1)
+Source : 00_System/specs/params.yaml (dict_version 3, schema 1)
 Tool   : 00_System/tools/gen_params.py
-Hash   : PARAM_DICT_HASH = 0x13961802
+Hash   : PARAM_DICT_HASH = 0xF0376293
 
 Parameter metadata for the GUI (typed config fields) and the protocol codec.
 f32 min/max/default are stored already rounded to binary32, so read-back values
@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from types import MappingProxyType
 
-PARAM_DICT_HASH = 0x13961802
-PARAM_DICT_VERSION = 1
+PARAM_DICT_HASH = 0xF0376293
+PARAM_DICT_VERSION = 3
 PARAM_SCHEMA_VERSION = 1
 PARAM_COUNT = 48
 
@@ -139,12 +139,12 @@ PARAMS: tuple[ParamMeta, ...] = (
     ParamMeta(
         id=0x0102, key='afe.rate_sps', type=ParamType.ENUM, unit='',
         min=0, max=1, default=1,
-        description='HX711 RATE pin level driven by the MCU GPIO (D-21). Applied without reboot; the following afe.settle_discard samples are flagged AFE_SETTLING. The measured rate is compared with this setting (afe.rate_tol_pct).',
+        description='HX711 RATE pin level driven by the MCU GPIO (D-21). Applied without reboot; the following afe.settle_discard samples are flagged AFE_SETTLING. The measured rate is compared with this setting (afe.rate_tol_pct). Hard rule H5 with afe.timeout_ms (SPS10 needs afe.timeout_ms >= 200 ms).',
         enum=_M({0: 'SPS10', 1: 'SPS80'}),
         group='afe', group_label='HX711 load-cell AFE', label='Output data rate', name='rate_sps',
         moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
         enum_labels=_M({0: '10 SPS (RATE pin low)', 1: '80 SPS (RATE pin high)'}),
-        srs=('FW-AFE-002', 'FW-AFE-004', 'FW-PAR-001', 'D-04', 'D-21')),
+        srs=('FW-AFE-002', 'FW-AFE-004', 'FW-PAR-001', 'D-04', 'D-21', 'D-33')),
     ParamMeta(
         id=0x0103, key='afe.rate_tol_pct', type=ParamType.U8, unit='%',
         min=5, max=50, default=20,
@@ -165,17 +165,17 @@ PARAMS: tuple[ParamMeta, ...] = (
         srs=('FW-AFE-003', 'FW-PAR-001')),
     ParamMeta(
         id=0x0105, key='afe.timeout_ms', type=ParamType.U16, unit='ms',
-        min=20, max=1000, default=100,
-        description='No HX711 sample for this time sets AFE_STALE; while moving this is an immediate stop and latches AFE_FAULT. Motion commands are refused while stale.',
+        min=25, max=1000, default=250,
+        description='No HX711 sample for this time sets AFE_STALE; while moving this is an immediate stop and latches AFE_FAULT. Motion commands are refused while stale; idle disable is not applied while stale (D-33g). Hard rule H5: >= 2 x the conversion period of afe.rate_sps (SPS10: >= 200 ms, SPS80: >= 25 ms; D-33a, DEF-P1-01). Default 250 ms is valid for both rates.',
         enum=None,
         group='afe', group_label='HX711 load-cell AFE', label='Stale timeout', name='timeout_ms',
         moving_ok=True, nvm=True, reboot_required=False, decimals=None, advanced=False,
         enum_labels=None,
-        srs=('SAF-FW-012', 'FW-STR-005', 'FW-PAR-001')),
+        srs=('SAF-FW-012', 'FW-STR-005', 'FW-PAR-001', 'D-33')),
     ParamMeta(
         id=0x0201, key='motion.steps_per_mm', type=ParamType.F32, unit='steps/mm',
-        min=100.0, max=100000.0, default=160.0,
-        description='Calibrated drive-train ratio (PO-FW-4). Default 160 = DIP 800 pulses/rev on the 5 mm lead (ASSUMED, D-27; candidates 160 / 1280 / 800). Changeable only while idle; HOMED is kept (machine zero is a step count) and every um position rescales: um = round_half_away(steps * 1000 / steps_per_mm). Minimum 100 (FW timer/ramp resolution, FW_design OI-FW-05; SRS proposed 1).',
+        min=100.0, max=100000.0, default=800.0,
+        description='Calibrated drive-train ratio (PO-FW-4). Default 800 = DIP 4000 pulses/rev, closed loop, on the 5 mm lead (D-27 closed: PO approved the DIP change; direct coupling ASSUMED until the first travel calibration). Changeable only while idle; HOMED is kept (machine zero is a step count) and every um position rescales: um = round_half_away(steps * 1000 / steps_per_mm). Minimum 100 (FW timer/ramp resolution, FW_design OI-FW-05; SRS proposed 1).',
         enum=None,
         group='motion', group_label='Motion / step generation', label='Steps per mm', name='steps_per_mm',
         moving_ok=False, nvm=True, reboot_required=False, decimals=4, advanced=False,
@@ -309,8 +309,8 @@ PARAMS: tuple[ParamMeta, ...] = (
         srs=('SAF-FW-016', 'FW-PAR-003', 'R1 §10.3')),
     ParamMeta(
         id=0x0301, key='limits.soft_min_um', type=ParamType.I32, unit='um',
-        min=-10000, max=400000, default=500,
-        description='Lower FW travel limit (machine coordinate), active when homed. MOVE_ABS / MOVE_UNTIL_LOAD targets below -> E_RANGE; JOG stops here. Hard rule H1.',
+        min=-10000, max=399999, default=500,
+        description='Lower FW travel limit (machine coordinate), active when homed. MOVE_ABS / MOVE_UNTIL_LOAD targets below -> E_RANGE; JOG stops here. Hard rule H1 (max is one below the soft_max_um max so that every range end is reachable).',
         enum=None,
         group='limits', group_label='Soft travel limits', label='Soft limit min', name='soft_min_um',
         moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
@@ -326,18 +326,9 @@ PARAMS: tuple[ParamMeta, ...] = (
         enum_labels=None,
         srs=('SAF-FW-020', 'FW-PAR-004', 'D-19')),
     ParamMeta(
-        id=0x0401, key='home.ref_switch', type=ParamType.ENUM, unit='',
-        min=0, max=1, default=0,
-        description='Limit switch used as the home reference (D-08, D-18).',
-        enum=_M({0: 'START', 1: 'END'}),
-        group='home', group_label='Homing / zeroing', label='Home switch', name='ref_switch',
-        moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
-        enum_labels=_M({0: 'START switch (x = 0 end)', 1: 'END switch'}),
-        srs=('FW-HOM-001', 'FW-PAR-004', 'D-18')),
-    ParamMeta(
         id=0x0402, key='home.v_fast_um_s', type=ParamType.U32, unit='um/s',
         min=10, max=20000, default=5000,
-        description='Fast seek speed toward the home switch.',
+        description='Fast seek speed toward the START (home) switch (-x).',
         enum=None,
         group='home', group_label='Homing / zeroing', label='Homing fast speed', name='v_fast_um_s',
         moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
@@ -373,7 +364,7 @@ PARAMS: tuple[ParamMeta, ...] = (
     ParamMeta(
         id=0x0406, key='home.offset_um', type=ParamType.U32, unit='um',
         min=0, max=20000, default=1000,
-        description='Machine zero lies this far from the captured switch edge on the travel side (edge = -offset_um).',
+        description='Machine zero lies this far from the captured START switch edge on the travel side (START edge at x = -offset_um).',
         enum=None,
         group='home', group_label='Homing / zeroing', label='Home offset', name='offset_um',
         moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
@@ -408,8 +399,8 @@ PARAMS: tuple[ParamMeta, ...] = (
         srs=('FW-HOM-001', 'R5 §8')),
     ParamMeta(
         id=0x0501, key='safety.load_raw_max', type=ParamType.I32, unit='counts',
-        min=-7151121, max=7151121, default=7022271,
-        description='Every HX711 sample above this value counts as a load-limit violation (D-12). Session value written by the PC after calibration/tare (SAF-SW-002); default +110 % FS minus the 1 % FS zero-balance allowance. Range cap +-(110 % FS + 1 % FS); outside -> E_RANGE, never clamped. Effective from the next sample. Hard rule H2.',
+        min=-7151120, max=7151121, default=7022271,
+        description='Every HX711 sample above this value counts as a load-limit violation (D-12). Session value written by the PC after calibration/tare (SAF-SW-002); default +110 % FS minus the 1 % FS zero-balance allowance. Range cap +-(110 % FS + 1 % FS); outside -> E_RANGE, never clamped. Effective from the next sample. Hard rule H2 (min is one above the load_raw_min min so that every range end is reachable).',
         enum=None,
         group='safety', group_label='FW safety', label='FW load limit max (raw)', name='load_raw_max',
         moving_ok=True, nvm=False, reboot_required=False, decimals=None, advanced=False,
@@ -417,8 +408,8 @@ PARAMS: tuple[ParamMeta, ...] = (
         srs=('SAF-FW-008', 'SAF-FW-010', 'FW-PAR-005', 'D-12')),
     ParamMeta(
         id=0x0502, key='safety.load_raw_min', type=ParamType.I32, unit='counts',
-        min=-7151121, max=7151121, default=-7022271,
-        description='Every HX711 sample below this value counts as a load-limit violation. Session value (see load_raw_max). Hard rule H2.',
+        min=-7151121, max=7151120, default=-7022271,
+        description='Every HX711 sample below this value counts as a load-limit violation. Session value (see load_raw_max). Hard rule H2 (max is one below the load_raw_max max).',
         enum=None,
         group='safety', group_label='FW safety', label='FW load limit min (raw)', name='load_raw_min',
         moving_ok=True, nvm=False, reboot_required=False, decimals=None, advanced=False,
@@ -544,12 +535,21 @@ PARAMS: tuple[ParamMeta, ...] = (
     ParamMeta(
         id=0x0704, key='drv.pwr_sense_enable', type=ParamType.BOOL, unit='',
         min=0, max=1, default=True,
-        description='true = the DRV_POWER input (PA7, E-stop contactor aux contact, closed = powered, fixed fail-safe polarity, D-28) is evaluated: power off -> immediate stop, not enabled, not homed, motion refused (E_STATE DRV_UNPOWERED); after power returns ENABLE waits motion.ena_settle_ms; E-stop sense open while power stays on for 100 ms -> fault K1_WELDED. false = bring-up without the contactor wiring only: the input is ignored and status DRV_PWR reads 1 (power assumed present).',
+        description='true = the DRV_POWER input (PA7, E-stop contactor aux contact, closed = powered, fixed fail-safe polarity, D-28) is evaluated: power off -> immediate stop, not enabled, not homed, motion refused (E_STATE DRV_UNPOWERED); after power returns ENABLE waits motion.ena_settle_ms; E-stop sense open while power stays on for drv.k1_weld_ms -> fault K1_WELDED (D-29c). false = bring-up without the contactor wiring only: the input is ignored, status DRV_PWR reads 1 (power assumed present) and K1_WELDED is never detected.',
         enum=None,
         group='drv', group_label='Driver signals (ALM / PEND / power)', label='Driver power sense', name='pwr_sense_enable',
         moving_ok=False, nvm=True, reboot_required=True, decimals=None, advanced=False,
         enum_labels=None,
-        srs=('SAF-FW-005', 'D-28', 'R5 §1.5')),
+        srs=('SAF-FW-005', 'D-28', 'D-29', 'R5 §1.5')),
+    ParamMeta(
+        id=0x0705, key='drv.k1_weld_ms', type=ParamType.U16, unit='ms',
+        min=100, max=2000, default=200,
+        description='With drv.pwr_sense_enable, the E-stop sense input open while the DRV_POWER input still reports power continuously for longer than this time latches fault K1_WELDED (contactor K1 welded or aux contact miswired; D-29c, R5 §1.5). Must exceed the contactor drop-out time incl. the aux-contact delay. Minimum 100 ms (DILM7-class drop-out plus margin).',
+        enum=None,
+        group='drv', group_label='Driver signals (ALM / PEND / power)', label='K1 weld detection time', name='k1_weld_ms',
+        moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
+        enum_labels=None,
+        srs=('SAF-FW-005', 'D-29', 'R5 §1.5')),
     ParamMeta(
         id=0x0801, key='stream.fallback_hz', type=ParamType.U8, unit='Hz',
         min=1, max=80, default=10,
@@ -573,13 +573,13 @@ GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ('limits', 'Soft travel limits',
      ('limits.soft_min_um', 'limits.soft_max_um')),
     ('home', 'Homing / zeroing',
-     ('home.ref_switch', 'home.v_fast_um_s', 'home.v_slow_um_s', 'home.a_um_s2', 'home.backoff_um', 'home.offset_um', 'home.max_travel_um', 'home.max_load_raw', 'home.drift_tol_um')),
+     ('home.v_fast_um_s', 'home.v_slow_um_s', 'home.a_um_s2', 'home.backoff_um', 'home.offset_um', 'home.max_travel_um', 'home.max_load_raw', 'home.drift_tol_um')),
     ('safety', 'FW safety',
      ('safety.load_raw_max', 'safety.load_raw_min', 'safety.load_trip_samples', 'safety.load_regrow_raw', 'safety.zero_raw', 'safety.release_band_raw', 'safety.idle_disable_s', 'safety.link_timeout_ms')),
     ('io', 'Inputs (switches / buttons)',
      ('io.release_ms', 'io.estop_release_ms', 'io.stop_active_level', 'io.pause_active_level')),
     ('drv', 'Driver signals (ALM / PEND / power)',
-     ('drv.alm_active_level', 'drv.pend_active_level', 'drv.pend_timeout_ms', 'drv.pwr_sense_enable')),
+     ('drv.alm_active_level', 'drv.pend_active_level', 'drv.pend_timeout_ms', 'drv.pwr_sense_enable', 'drv.k1_weld_ms')),
     ('stream', 'Data stream',
      ('stream.fallback_hz',)),
 )

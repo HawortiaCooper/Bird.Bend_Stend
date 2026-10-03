@@ -66,7 +66,7 @@ def test_generated_python_module_consistent() -> None:
     spec.loader.exec_module(mod)
     assert mod.PARAM_DICT_HASH == PD.hash and mod.PARAM_COUNT == len(PD.params)
     spm = mod.BY_KEY["motion.steps_per_mm"]
-    assert spm.default == 160.0 and spm.pack(160.0) == bytes.fromhex("00002043")
+    assert spm.default == 800.0 and spm.pack(800.0) == bytes.fromhex("00004844")   # D-27 closed
     assert not mod.BY_KEY["safety.zero_raw"].nvm
 
 
@@ -236,6 +236,10 @@ SRS_ANCHORS = {
     "move_alarm_powered": ("E_STATE", 512),                  # D-28
     "move_identical_while_moving": ("E_BUSY", 1),            # IF-005: no retry, no dup-ack
     "jog_bound_behind": ("E_RANGE", 8),                     # F-B-15 bound ahead of the axis
+    "jog_refresh_alarm": ("OK", 0),                          # SAF-FW-026: refresh not blocked
+    "jog_alarm_powered": ("E_STATE", 512),                   # SAF-FW-026: new jog blocked
+    "home_alarm_powered": ("E_STATE", 512),                  # SAF-FW-026
+    "enable_alarm_powered": ("OK", 0),                       # SAF-FW-026: ENABLE not blocked
 }
 
 

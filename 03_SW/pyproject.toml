@@ -10,7 +10,7 @@ name = "bend_stand"
 version = "0.1.0"
 description = "Bird Bend Stand — PC application (PySide6 GUI, backend, FW simulator)"
 readme = "docs/SW_design.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11"  # SW-PLT-001 floor; supported and verified runtime: Python 3.14 (D-33 i)
 license = { text = "Proprietary" }
 authors = [{ name = "Bird Bend Stand project" }]
 dependencies = [
@@ -21,15 +21,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Verified set (D-33 i: Python 3.14): 03_SW/requirements.txt / requirements-dev.txt (exact pins)
 test = [
     "pytest>=8.3",
     "pytest-qt>=4.4",
     "pytest-cov>=5.0",
     "pytest-randomly>=3.15",
+    "PyYAML>=6.0",
 ]
 
 [project.scripts]
-bend-stand = "bend_stand.gui.app:main"
+# owner of __main__ = Implementer B (D-29 n); it hands over to bend_stand.gui.app.run (owner D)
+bend-stand = "bend_stand.__main__:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -40,13 +43,16 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra -p no:cacheprovider"
+addopts = "-ra -p no:cacheprovider --strict-markers"
 markers = [
     "req(*ids): requirement IDs verified by the test (SRS IDs, e.g. SW-CAL-003)",
     "unit: unit test (pure functions, single classes)",
     "component: backend component test (Backend + simulator, no Qt)",
     "integration: integration test against the FW host twin (Integrator)",
+    "validation: Validator F test against the public API (03_SW/tests/validation, SW_test_plan)",
     "gui: GUI test (pytest-qt, offscreen)",
+    "winint: needs an interactive Windows session (real display / keyboard, global hotkey); skipped unless --run-winint",
+    "rt: runs on the real-time clock (not lockstep); timing-sensitive",
     "perf: performance test (NFR-001..003)",
     "soak: soak / endurance test (NFR-004)",
     "hil: hardware-in-the-loop (only at a PO-approved hardware gate, D-06)",
@@ -56,4 +62,4 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["bend_stand"]
-omit = ["*/params_gen.py", "*/gui/*"]
+omit = ["*/params_gen.py", "*/protocol_gen.py", "*/gui/*"]

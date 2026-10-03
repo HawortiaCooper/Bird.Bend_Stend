@@ -1,0 +1,10 @@
+# Bird Bend Stand — development and test dependencies (SW_design §1, §19; SW_test_plan §2).
+# Owner: Implementer B (D-31). Supported runtime: Python 3.14 (D-33 i).
+# Install: .venv\Scripts\python -m pip install -r 03_SW\requirements-dev.txt
+-r requirements.txt
+pytest==9.1.1
+pytest-qt==4.5.0
+pytest-cov==7.1.0
+pytest-randomly==5.0.0
+# Integrator generators (00_System/tools/gen_params.py, gen_vectors.py)
+PyYAML==6.0.3

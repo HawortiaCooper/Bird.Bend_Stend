@@ -1,7 +1,7 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/params.yaml (dict_version 1, schema 1)
+ * Source : 00_System/specs/params.yaml (dict_version 3, schema 1)
  * Tool   : 00_System/tools/gen_params.py
- * Hash   : PARAM_DICT_HASH = 0x13961802
+ * Hash   : PARAM_DICT_HASH = 0xF0376293
  * Implements: FW-CFG-001, IF-010
  */
 #include "params_gen.h"
@@ -28,10 +28,10 @@ const param_meta_t PARAM_TABLE[PARAM_COUNT] = {
     PM(PID_AFE_RATE_TOL_PCT, PARAM_T_U8, PARAM_F_MOVING_OK|PARAM_F_NVM, afe.rate_tol_pct, 1, 0x00000005u, 0x00000032u, 0x00000014u, "afe.rate_tol_pct"),
     /* afe.settle_discard: min 0, max 20, default 4 samples */
     PM(PID_AFE_SETTLE_DISCARD, PARAM_T_U8, PARAM_F_MOVING_OK|PARAM_F_NVM, afe.settle_discard, 1, 0x00000000u, 0x00000014u, 0x00000004u, "afe.settle_discard"),
-    /* afe.timeout_ms: min 20, max 1000, default 100 ms */
-    PM(PID_AFE_TIMEOUT_MS, PARAM_T_U16, PARAM_F_MOVING_OK|PARAM_F_NVM, afe.timeout_ms, 2, 0x00000014u, 0x000003E8u, 0x00000064u, "afe.timeout_ms"),
-    /* motion.steps_per_mm: min 100, max 100000, default 160 steps/mm */
-    PM(PID_MOTION_STEPS_PER_MM, PARAM_T_F32, PARAM_F_NVM, motion.steps_per_mm, 4, 0x42C80000u, 0x47C35000u, 0x43200000u, "motion.steps_per_mm"),
+    /* afe.timeout_ms: min 25, max 1000, default 250 ms */
+    PM(PID_AFE_TIMEOUT_MS, PARAM_T_U16, PARAM_F_MOVING_OK|PARAM_F_NVM, afe.timeout_ms, 2, 0x00000019u, 0x000003E8u, 0x000000FAu, "afe.timeout_ms"),
+    /* motion.steps_per_mm: min 100, max 100000, default 800 steps/mm */
+    PM(PID_MOTION_STEPS_PER_MM, PARAM_T_F32, PARAM_F_NVM, motion.steps_per_mm, 4, 0x42C80000u, 0x47C35000u, 0x44480000u, "motion.steps_per_mm"),
     /* motion.pul_invert: min false, max true, default false  */
     PM(PID_MOTION_PUL_INVERT, PARAM_T_BOOL, PARAM_F_NVM|PARAM_F_REBOOT, motion.pul_invert, 1, 0x00000000u, 0x00000001u, 0x00000000u, "motion.pul_invert"),
     /* motion.dir_invert: min false, max true, default false  */
@@ -60,12 +60,10 @@ const param_meta_t PARAM_TABLE[PARAM_COUNT] = {
     PM(PID_MOTION_V_UNHOMED_UM_S, PARAM_T_U32, PARAM_F_NVM, motion.v_unhomed_um_s, 4, 0x00000001u, 0x00004E20u, 0x000007D0u, "motion.v_unhomed_um_s"),
     /* motion.jog_timeout_ms: min 50, max 1000, default 250 ms */
     PM(PID_MOTION_JOG_TIMEOUT_MS, PARAM_T_U16, PARAM_F_MOVING_OK|PARAM_F_NVM, motion.jog_timeout_ms, 2, 0x00000032u, 0x000003E8u, 0x000000FAu, "motion.jog_timeout_ms"),
-    /* limits.soft_min_um: min -10000, max 400000, default 500 um */
-    PM(PID_LIMITS_SOFT_MIN_UM, PARAM_T_I32, PARAM_F_NVM, limits.soft_min_um, 4, 0xFFFFD8F0u, 0x00061A80u, 0x000001F4u, "limits.soft_min_um"),
+    /* limits.soft_min_um: min -10000, max 399999, default 500 um */
+    PM(PID_LIMITS_SOFT_MIN_UM, PARAM_T_I32, PARAM_F_NVM, limits.soft_min_um, 4, 0xFFFFD8F0u, 0x00061A7Fu, 0x000001F4u, "limits.soft_min_um"),
     /* limits.soft_max_um: min 0, max 400000, default 290000 um */
     PM(PID_LIMITS_SOFT_MAX_UM, PARAM_T_I32, PARAM_F_NVM, limits.soft_max_um, 4, 0x00000000u, 0x00061A80u, 0x00046CD0u, "limits.soft_max_um"),
-    /* home.ref_switch: min START, max END, default START  */
-    PM(PID_HOME_REF_SWITCH, PARAM_T_ENUM, PARAM_F_NVM, home.ref_switch, 1, 0x00000000u, 0x00000001u, 0x00000000u, "home.ref_switch"),
     /* home.v_fast_um_s: min 10, max 20000, default 5000 um/s */
     PM(PID_HOME_V_FAST_UM_S, PARAM_T_U32, PARAM_F_NVM, home.v_fast_um_s, 4, 0x0000000Au, 0x00004E20u, 0x00001388u, "home.v_fast_um_s"),
     /* home.v_slow_um_s: min 10, max 20000, default 500 um/s */
@@ -82,10 +80,10 @@ const param_meta_t PARAM_TABLE[PARAM_COUNT] = {
     PM(PID_HOME_MAX_LOAD_RAW, PARAM_T_I32, PARAM_F_NVM, home.max_load_raw, 4, 0x00000000u, 0x006D1E11u, 0x0004EA4Bu, "home.max_load_raw"),
     /* home.drift_tol_um: min 10, max 10000, default 200 um */
     PM(PID_HOME_DRIFT_TOL_UM, PARAM_T_U32, PARAM_F_NVM, home.drift_tol_um, 4, 0x0000000Au, 0x00002710u, 0x000000C8u, "home.drift_tol_um"),
-    /* safety.load_raw_max: min -7151121, max 7151121, default 7022271 counts */
-    PM(PID_SAFETY_LOAD_RAW_MAX, PARAM_T_I32, PARAM_F_MOVING_OK, safety.load_raw_max, 4, 0xFF92E1EFu, 0x006D1E11u, 0x006B26BFu, "safety.load_raw_max"),
-    /* safety.load_raw_min: min -7151121, max 7151121, default -7022271 counts */
-    PM(PID_SAFETY_LOAD_RAW_MIN, PARAM_T_I32, PARAM_F_MOVING_OK, safety.load_raw_min, 4, 0xFF92E1EFu, 0x006D1E11u, 0xFF94D941u, "safety.load_raw_min"),
+    /* safety.load_raw_max: min -7151120, max 7151121, default 7022271 counts */
+    PM(PID_SAFETY_LOAD_RAW_MAX, PARAM_T_I32, PARAM_F_MOVING_OK, safety.load_raw_max, 4, 0xFF92E1F0u, 0x006D1E11u, 0x006B26BFu, "safety.load_raw_max"),
+    /* safety.load_raw_min: min -7151121, max 7151120, default -7022271 counts */
+    PM(PID_SAFETY_LOAD_RAW_MIN, PARAM_T_I32, PARAM_F_MOVING_OK, safety.load_raw_min, 4, 0xFF92E1EFu, 0x006D1E10u, 0xFF94D941u, "safety.load_raw_min"),
     /* safety.load_trip_samples: min 1, max 4, default 1 samples */
     PM(PID_SAFETY_LOAD_TRIP_SAMPLES, PARAM_T_U8, PARAM_F_MOVING_OK|PARAM_F_NVM, safety.load_trip_samples, 1, 0x00000001u, 0x00000004u, 0x00000001u, "safety.load_trip_samples"),
     /* safety.load_regrow_raw: min 0, max 1288490, default 128849 counts */
@@ -114,6 +112,8 @@ const param_meta_t PARAM_TABLE[PARAM_COUNT] = {
     PM(PID_DRV_PEND_TIMEOUT_MS, PARAM_T_U16, PARAM_F_MOVING_OK|PARAM_F_NVM, drv.pend_timeout_ms, 2, 0x00000000u, 0x00001388u, 0x000000C8u, "drv.pend_timeout_ms"),
     /* drv.pwr_sense_enable: min false, max true, default true  */
     PM(PID_DRV_PWR_SENSE_ENABLE, PARAM_T_BOOL, PARAM_F_NVM|PARAM_F_REBOOT, drv.pwr_sense_enable, 1, 0x00000000u, 0x00000001u, 0x00000001u, "drv.pwr_sense_enable"),
+    /* drv.k1_weld_ms: min 100, max 2000, default 200 ms */
+    PM(PID_DRV_K1_WELD_MS, PARAM_T_U16, PARAM_F_NVM, drv.k1_weld_ms, 2, 0x00000064u, 0x000007D0u, 0x000000C8u, "drv.k1_weld_ms"),
     /* stream.fallback_hz: min 1, max 80, default 10 Hz */
     PM(PID_STREAM_FALLBACK_HZ, PARAM_T_U8, PARAM_F_MOVING_OK|PARAM_F_NVM, stream.fallback_hz, 1, 0x00000001u, 0x00000050u, 0x0000000Au, "stream.fallback_hz"),
 };

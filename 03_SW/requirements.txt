@@ -1,0 +1,8 @@
+# Bird Bend Stand PC application — runtime dependencies (SW-PLT-001, SW_design §1, KD-11).
+# Owner: Implementer B (D-31). Supported runtime: Python 3.14 (D-33 i), project venv .venv.
+# Pins = the versions verified in .venv; pyproject.toml carries the same set as ranges.
+# Install: .venv\Scripts\python -m pip install -r 03_SW\requirements.txt
+PySide6-Essentials==6.11.2
+pyqtgraph==0.14.0
+numpy==2.5.3
+pyserial==3.5

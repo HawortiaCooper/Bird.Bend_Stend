@@ -1,7 +1,7 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/params.yaml (dict_version 1, schema 1)
+ * Source : 00_System/specs/params.yaml (dict_version 3, schema 1)
  * Tool   : 00_System/tools/gen_params.py
- * Hash   : PARAM_DICT_HASH = 0x13961802
+ * Hash   : PARAM_DICT_HASH = 0xF0376293
  * Implements: FW-CFG-001, IF-010
  */
 #ifndef PARAMS_GEN_H
@@ -19,8 +19,8 @@ extern "C" {
 #define PARAMS_GEN_WITH_KEYS 1
 #endif
 
-#define PARAM_DICT_HASH       0x13961802UL
-#define PARAM_DICT_VERSION    1u
+#define PARAM_DICT_HASH       0xF0376293UL
+#define PARAM_DICT_VERSION    3u
 #define PARAM_SCHEMA_VERSION  1u
 #define PARAM_COUNT           48u
 
@@ -71,7 +71,6 @@ typedef enum {
     PID_MOTION_JOG_TIMEOUT_MS          = 0x020F, /* u16 */
     PID_LIMITS_SOFT_MIN_UM             = 0x0301, /* i32 */
     PID_LIMITS_SOFT_MAX_UM             = 0x0302, /* i32 */
-    PID_HOME_REF_SWITCH                = 0x0401, /* enum */
     PID_HOME_V_FAST_UM_S               = 0x0402, /* u32 */
     PID_HOME_V_SLOW_UM_S               = 0x0403, /* u32 */
     PID_HOME_A_UM_S2                   = 0x0404, /* u32 */
@@ -96,6 +95,7 @@ typedef enum {
     PID_DRV_PEND_ACTIVE_LEVEL          = 0x0702, /* enum */
     PID_DRV_PEND_TIMEOUT_MS            = 0x0703, /* u16 */
     PID_DRV_PWR_SENSE_ENABLE           = 0x0704, /* bool */
+    PID_DRV_K1_WELD_MS                 = 0x0705, /* u16 */
     PID_STREAM_FALLBACK_HZ             = 0x0801, /* u8 */
 } param_id_t;
 
@@ -110,11 +110,6 @@ typedef enum {
     AFE_RATE_SPS_SPS10 = 0, /* 10 SPS (RATE pin low) */
     AFE_RATE_SPS_SPS80 = 1, /* 80 SPS (RATE pin high) */
 } afe_rate_sps_t;
-
-typedef enum {
-    HOME_REF_SWITCH_START = 0, /* START switch (x = 0 end) */
-    HOME_REF_SWITCH_END = 1, /* END switch */
-} home_ref_switch_t;
 
 typedef enum {
     IO_STOP_ACTIVE_LEVEL_OPEN_ACTIVE = 0, /* NC contact: open / high = pressed */
@@ -169,7 +164,6 @@ typedef struct {
 } params_limits_t;
 
 typedef struct {
-    uint8_t   ref_switch;
     uint32_t  v_fast_um_s; /* um/s */
     uint32_t  v_slow_um_s; /* um/s */
     uint32_t  a_um_s2; /* um/s2 */
@@ -203,6 +197,7 @@ typedef struct {
     uint8_t   pend_active_level;
     uint16_t  pend_timeout_ms; /* ms */
     bool      pwr_sense_enable;
+    uint16_t  k1_weld_ms; /* ms */
 } params_drv_t;
 
 typedef struct {

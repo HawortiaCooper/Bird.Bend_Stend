@@ -69,6 +69,10 @@
 #   H2 safety.load_raw_min < safety.load_raw_max
 #   H3 1e9 / motion.max_step_rate_hz >= motion.pulse_high_ns + motion.pulse_low_min_ns
 #   H4 motion.v_max_load_um_s <= motion.v_max_travel_um_s
+#   H5 afe.timeout_ms >= 2 x configured conversion period of afe.rate_sps
+#      (integer form: timeout_ms * sps >= 2000; SPS10 -> >= 200 ms, SPS80 -> >= 25 ms; D-33a)
+# Every range end is reachable by a single SET in some valid configuration (strict rules H1/H2
+# use ranges whose ends differ by >= 1; vectors set_<key>_min/_max are OK with relaxed partners).
 # No polarity parameter exists for the E-stop sense, limit and driver-power sense inputs
 # (fixed NC fail-safe polarity, SAF-FW-007, FW-PAR-006).
 #
@@ -77,9 +81,18 @@
 # =====================================================================================
 
 schema_version: 1
-dict_version: 1
+dict_version: 3
+# dict_version history:
+#   1  ICD v0.1 — initial 48 parameters
+#   2  ICD v0.2 — D-29: home.ref_switch (0x0401) removed (homing only at START, D-29b);
+#                 drv.k1_weld_ms (0x0705) added (D-29c); unreachable range ends fixed:
+#                 limits.soft_min_um max 399 999, safety.load_raw_max min -7 151 120,
+#                 safety.load_raw_min max +7 151 120.
+#   3  ICD v0.4 — D-33a: afe.timeout_ms default 100 -> 250 ms, min 20 -> 25 ms, hard rule H5
+#                 (timeout >= 2 x conversion period, DEF-P1-01); D-27 closed:
+#                 motion.steps_per_mm default 160 -> 800 (4000 p/rev, closed loop).
 
-retired_ids: []
+retired_ids: [0x0401]   # home.ref_switch (dict_version 1)
 
 groups:
 
@@ -117,8 +130,9 @@ groups:
         description: >-
           HX711 RATE pin level driven by the MCU GPIO (D-21). Applied without reboot; the
           following afe.settle_discard samples are flagged AFE_SETTLING. The measured rate is
-          compared with this setting (afe.rate_tol_pct).
-        srs: [FW-AFE-002, FW-AFE-004, FW-PAR-001, D-04, D-21]
+          compared with this setting (afe.rate_tol_pct). Hard rule H5 with afe.timeout_ms
+          (SPS10 needs afe.timeout_ms >= 200 ms).
+        srs: [FW-AFE-002, FW-AFE-004, FW-PAR-001, D-04, D-21, D-33]
 
       - id_off: 0x03
         name: rate_tol_pct
@@ -153,14 +167,17 @@ groups:
         label: Stale timeout
         type: u16
         unit: ms
-        min: 20
+        min: 25
         max: 1000
-        default: 100
+        default: 250
         moving_ok: true
         description: >-
           No HX711 sample for this time sets AFE_STALE; while moving this is an immediate stop
-          and latches AFE_FAULT. Motion commands are refused while stale.
-        srs: [SAF-FW-012, FW-STR-005, FW-PAR-001]
+          and latches AFE_FAULT. Motion commands are refused while stale; idle disable is not
+          applied while stale (D-33g). Hard rule H5: >= 2 x the conversion period of
+          afe.rate_sps (SPS10: >= 200 ms, SPS80: >= 25 ms; D-33a, DEF-P1-01). Default 250 ms
+          is valid for both rates.
+        srs: [SAF-FW-012, FW-STR-005, FW-PAR-001, D-33]
 
   # --------------------------------------------------------------------------------
   - group: motion
@@ -175,12 +192,13 @@ groups:
         unit: steps/mm
         min: 100.0
         max: 100000.0
-        default: 160.0
+        default: 800.0
         decimals: 4
         moving_ok: false
         description: >-
-          Calibrated drive-train ratio (PO-FW-4). Default 160 = DIP 800 pulses/rev on the 5 mm
-          lead (ASSUMED, D-27; candidates 160 / 1280 / 800). Changeable only while idle;
+          Calibrated drive-train ratio (PO-FW-4). Default 800 = DIP 4000 pulses/rev, closed loop,
+          on the 5 mm lead (D-27 closed: PO approved the DIP change; direct coupling ASSUMED until
+          the first travel calibration). Changeable only while idle;
           HOMED is kept (machine zero is a step count) and every um position rescales:
           um = round_half_away(steps * 1000 / steps_per_mm). Minimum 100 (FW timer/ramp
           resolution, FW_design OI-FW-05; SRS proposed 1).
@@ -391,12 +409,13 @@ groups:
         type: i32
         unit: um
         min: -10000
-        max: 400000
+        max: 399999
         default: 500
         moving_ok: false
         description: >-
           Lower FW travel limit (machine coordinate), active when homed. MOVE_ABS /
-          MOVE_UNTIL_LOAD targets below -> E_RANGE; JOG stops here. Hard rule H1.
+          MOVE_UNTIL_LOAD targets below -> E_RANGE; JOG stops here. Hard rule H1 (max is one
+          below the soft_max_um max so that every range end is reachable).
         srs: [SAF-FW-020, FW-PAR-004, R4 §3.2]
 
       - id_off: 0x02
@@ -418,18 +437,8 @@ groups:
     c_member: home
     id_base: 0x0400
     params:
-      - id_off: 0x01
-        name: ref_switch
-        label: Home switch
-        type: enum
-        enum:
-          - {name: START, value: 0, label: "START switch (x = 0 end)"}
-          - {name: END, value: 1, label: "END switch"}
-        default: START
-        moving_ok: false
-        description: >-
-          Limit switch used as the home reference (D-08, D-18).
-        srs: [FW-HOM-001, FW-PAR-004, D-18]
+      # id_off 0x01 (home.ref_switch) retired in dict_version 2: homing only at the START
+      # switch in release 1 (D-29b, D-08, D-18); never reuse 0x0401.
 
       - id_off: 0x02
         name: v_fast_um_s
@@ -440,7 +449,7 @@ groups:
         max: 20000
         default: 5000
         moving_ok: false
-        description: Fast seek speed toward the home switch.
+        description: Fast seek speed toward the START (home) switch (-x).
         srs: [FW-HOM-001, FW-PAR-004]
 
       - id_off: 0x03
@@ -489,8 +498,8 @@ groups:
         default: 1000
         moving_ok: false
         description: >-
-          Machine zero lies this far from the captured switch edge on the travel side
-          (edge = -offset_um).
+          Machine zero lies this far from the captured START switch edge on the travel side
+          (START edge at x = -offset_um).
         srs: [FW-HOM-001, FW-PAR-004]
 
       - id_off: 0x07
@@ -548,7 +557,7 @@ groups:
         label: FW load limit max (raw)
         type: i32
         unit: counts
-        min: -7151121
+        min: -7151120
         max: 7151121
         default: 7022271
         moving_ok: true
@@ -557,7 +566,8 @@ groups:
           Every HX711 sample above this value counts as a load-limit violation (D-12).
           Session value written by the PC after calibration/tare (SAF-SW-002); default
           +110 % FS minus the 1 % FS zero-balance allowance. Range cap +-(110 % FS + 1 % FS);
-          outside -> E_RANGE, never clamped. Effective from the next sample. Hard rule H2.
+          outside -> E_RANGE, never clamped. Effective from the next sample. Hard rule H2
+          (min is one above the load_raw_min min so that every range end is reachable).
         srs: [SAF-FW-008, SAF-FW-010, FW-PAR-005, D-12]
 
       - id_off: 0x02
@@ -566,13 +576,13 @@ groups:
         type: i32
         unit: counts
         min: -7151121
-        max: 7151121
+        max: 7151120
         default: -7022271
         moving_ok: true
         nvm: false
         description: >-
           Every HX711 sample below this value counts as a load-limit violation. Session value
-          (see load_raw_max). Hard rule H2.
+          (see load_raw_max). Hard rule H2 (max is one below the load_raw_max max).
         srs: [SAF-FW-008, SAF-FW-010, FW-PAR-005, D-12]
 
       - id_off: 0x03
@@ -786,9 +796,27 @@ groups:
           fixed fail-safe polarity, D-28) is evaluated: power off -> immediate stop, not
           enabled, not homed, motion refused (E_STATE DRV_UNPOWERED); after power returns
           ENABLE waits motion.ena_settle_ms; E-stop sense open while power stays on for
-          100 ms -> fault K1_WELDED. false = bring-up without the contactor wiring only:
-          the input is ignored and status DRV_PWR reads 1 (power assumed present).
-        srs: [SAF-FW-005, D-28, R5 §1.5]
+          drv.k1_weld_ms -> fault K1_WELDED (D-29c). false = bring-up without the contactor
+          wiring only: the input is ignored, status DRV_PWR reads 1 (power assumed present)
+          and K1_WELDED is never detected.
+        srs: [SAF-FW-005, D-28, D-29, R5 §1.5]
+
+      - id_off: 0x05
+        name: k1_weld_ms
+        label: K1 weld detection time
+        type: u16
+        unit: ms
+        min: 100
+        max: 2000
+        default: 200
+        moving_ok: false
+        description: >-
+          With drv.pwr_sense_enable, the E-stop sense input open while the DRV_POWER input
+          still reports power continuously for longer than this time latches fault K1_WELDED
+          (contactor K1 welded or aux contact miswired; D-29c, R5 §1.5). Must exceed the
+          contactor drop-out time incl. the aux-contact delay. Minimum 100 ms (DILM7-class
+          drop-out plus margin).
+        srs: [SAF-FW-005, D-29, R5 §1.5]
 
   # --------------------------------------------------------------------------------
   - group: stream

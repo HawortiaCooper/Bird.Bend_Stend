@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Single generator of the shared protocol vectors (ICD_protocol.md v0.1 §12).
+"""Single generator of the shared protocol vectors (ICD_protocol.md v0.4.1 §12).
 
 Implements: IF-003, IF-004, IF-006, IF-010, FW-CMD-001, FW-CFG-003, SAF-FW-020
 Writes  00_System/tools/vectors/protocol_vectors.json   (CRC, frames, parser streams)
         00_System/tools/vectors/check_vectors.json      (state + command -> verdict)
+        00_System/tools/vectors/units_vectors.json      (um <-> steps, step-rate speed cap; ICD §0.1)
 
 Usage:
     python gen_vectors.py            # (re)generate both files
@@ -19,6 +20,7 @@ import json
 import math
 import struct
 import sys
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,7 @@ import ref_codec as rc  # noqa: E402
 VEC_DIR = TOOLS_DIR / "vectors"
 PROTO_PATH = VEC_DIR / "protocol_vectors.json"
 CHECK_PATH = VEC_DIR / "check_vectors.json"
+UNITS_PATH = VEC_DIR / "units_vectors.json"
 R = rc.RESP_BIT
 
 
@@ -98,23 +101,32 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
              "motion_state": "IDLE", "status": ["PEND", "DRV_PWR"], "faults": [],
              "io": ["PEND", "DRV_PWR", "RATE_80"], "home_phase": "DONE", "halt_src": "NONE",
              "reset_cause": "POWER_ON", "sys_flags": ["CFG_DIRTY", "STREAM_ON"],
-             "pos_um": 100000, "target_um": 100000, "pos_steps": 16000, "afe_raw_last": -1234,
+             "pos_um": 100000, "target_um": 100000, "pos_steps": 80000, "afe_raw_last": -1234,
              "afe_rate_dsps": 801, "afe_reinit_count": 0, "rx_frames_ok": 1500,
              "rx_crc_errors": 2, "rx_frame_errors": 1, "rx_overruns": 0, "tx_drops": 0,
              "event_overflows": 0, "loop_max_us": 412, "link_age_ms": 35,
              "stack_free_min": 1840, "nvm_save_ms": 0, "idle_disable_left_s": 512,
-             "nvm_record_seq": 37, "nvm_save_uptime_ms": 0, "v_limit_um_s": 30000}
+             "nvm_record_seq": 37, "nvm_save_uptime_ms": 0, "v_limit_um_s": 30000,
+             "pause_src": "NONE"}
     req_resp("GET_STATUS", 0x03, {}, {**ok, "board_status": board}, "GET_STATUS request",
-             "GET_STATUS response (84-byte STATUS)")
+             "GET_STATUS response (86-byte STATUS)")
     board2 = dict(board, flags=["ESTOP", "HALT", "FAULT"], motion_state="NOT_ENABLED",
-                  status=["LIMIT_START", "LOAD_LIMIT", "STOP_BTN"],
+                  status=["PAUSED", "LIMIT_START", "LOAD_LIMIT", "STOP_BTN"], pause_src="BUTTON",
                   faults=["LOAD_LIMIT", "K1_WELDED"], io=["ESTOP_OPEN", "STOP_BTN", "ENA_DISABLED",
                                                           "ALM", "DRV_PWR"],
                   home_phase="NONE", halt_src="BUTTON", reset_cause="IWDG",
                   sys_flags=["CLK_FALLBACK", "NVM_DEFAULTED"], afe_raw_last=7151200,
-                  idle_disable_left_s=0xFFFF, pos_um=-1500, target_um=-1500, pos_steps=-240)
+                  idle_disable_left_s=0xFFFF, pos_um=-1500, target_um=-1500, pos_steps=-1200)
     add("get_status_resp_latched", C["GET_STATUS"] | R, 0x04, {**ok, "board_status": board2},
-        "STATUS with E-stop, HALT (button), faults LOAD_LIMIT + K1_WELDED, IWDG reset")
+        "STATUS with E-stop, HALT (button), PAUSED (button), faults LOAD_LIMIT + K1_WELDED, IWDG reset")
+    board3 = dict(board, flags=["ENABLED"], status=["PAUSED", "PEND", "DRV_PWR"], pause_src="PC")
+    add("get_status_resp_paused_pc", C["GET_STATUS"] | R, 0x06, {**ok, "board_status": board3},
+        "STATUS PAUSED by the PC PAUSE command (pause_src PC, D-29a / GF-01), not homed")
+    board4 = dict(board, flags=[], motion_state="NOT_ENABLED", status=["PEND"], io=["PEND", "RATE_80"],
+                  idle_disable_left_s=0xFFFF)
+    add("get_status_resp_drv_power_lost", C["GET_STATUS"] | R, 0x07, {**ok, "board_status": board4},
+        "STATUS after driver power was lost with the E-stop closed (D-29c): NOT_ENABLED, HOMED "
+        "cleared, DRV_PWR 0, no latch")
     req_resp("REBOOT", 0x05, {"magic": rc.REBOOT_MAGIC}, dict(ok), "REBOOT with magic 0xB007B007",
              "OK; FW resets <= 50 ms after the response")
 
@@ -131,7 +143,7 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
         {"status": "E_RANGE", "detail": 0}, f"page >= page_count ({pages}) -> E_RANGE detail 0")
     req_resp("GET_PARAM", 0x13, {"id": by_key["motion.steps_per_mm"].id},
              {**ok, "entry": entry("motion.steps_per_mm")}, "GET_PARAM motion.steps_per_mm",
-             "f32 160.0 = 0x43200000")
+             "f32 800.0 = 0x44480000 (default, D-27)")
     set_cases = [("u8", "afe.settle_discard", 8), ("u16", "safety.link_timeout_ms", 1500),
                  ("u32", "motion.v_max_travel_um_s", 25000), ("i32", "safety.load_raw_min", -3000000),
                  ("f32", "motion.steps_per_mm", 636.0778), ("bool", "motion.dir_invert", 1),
@@ -209,7 +221,13 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
     req_resp("FAULT_CLEAR", 0x60, {}, {**ok, "cleared": ["LOAD_LIMIT", "STEP_FAULT"]},
              "FAULT_CLEAR", "OK, body = mask of cleared faults")
     req_resp("PAUSE", 0x61, {}, dict(ok), "PAUSE (GUI Pause): controlled stop + PAUSED latch",
-             "OK; PAUSED clears on the next accepted motion command or HALT_CLEAR")
+             "OK; PAUSED blocks motion until RESUME or HALT_CLEAR (D-30, D-31)")
+    req_resp("RESUME", 0x62, {}, dict(ok), "RESUME (GUI Resume, D-31): clears only PAUSED",
+             "OK; PAUSED cleared, no motion starts (the SW re-issues the absolute target)")
+    add("resume_state_nack", C["RESUME"] | R, 0x63,
+        {"status": "E_STATE", "detail": rc.names_to_bits(["HALT"], rc.BLOCK)},
+        "RESUME refused: HALT latched (e.g. STOP button pressed just before) -> E_STATE HALT, PAUSED "
+        "and HALT both stay (D-31)", detail_names=["HALT"])
 
     # --- NACK forms ----------------------------------------------------------------------
     add("unknown_cmd_req", 0x3F, 0x70, {"raw_hex": ""}, "undefined command TYPE 0x3F")
@@ -224,6 +242,9 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
     mask = rc.names_to_bits(["NOT_ENABLED", "NOT_HOMED"], rc.BLOCK)
     add("move_abs_state_nack", C["MOVE_ABS"] | R, 0x73, {"status": "E_STATE", "detail": mask},
         "E_STATE, detail = BLOCK mask NOT_ENABLED | NOT_HOMED", detail_names=["NOT_ENABLED", "NOT_HOMED"])
+    pmask = rc.names_to_bits(["PAUSED"], rc.BLOCK)
+    add("move_abs_paused_nack", C["MOVE_ABS"] | R, 0x79, {"status": "E_STATE", "detail": pmask},
+        "E_STATE, detail = BLOCK PAUSED: motion refused while PAUSED (D-30)", detail_names=["PAUSED"])
     add("move_abs_busy_nack", C["MOVE_ABS"] | R, 0x74, {"status": "E_BUSY", "detail": 1},
         "E_BUSY detail 1: another move is executing")
     add("estop_clear_cause_nack", C["ESTOP_CLEAR"] | R, 0x75,
@@ -235,6 +256,9 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
         "E_CONFIRM: load above home.max_load_raw and no confirmed flag")
     add("ping_internal_nack", C["PING"] | R, 0x78, {"status": "E_INTERNAL", "detail": 0x1234},
         "E_INTERNAL with implementation-defined detail (NACK form test)")
+    add("move_until_load_not_in_build_nack", C["MOVE_UNTIL_LOAD"] | R, 0x7A,
+        {"status": "E_INTERNAL", "detail": 1},
+        "E_INTERNAL detail 1 NOT_IN_BUILD: command of a later milestone, feature bit 0 (OI-FW-21)")
 
     # --- DATA ----------------------------------------------------------------------------
     def data(**kw: Any) -> dict[str, Any]:
@@ -277,15 +301,15 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
 
     # --- EVENT ---------------------------------------------------------------------------
     ev_args = {
-        "BOOT": (rc.RESET_CAUSE.index("POWER_ON"), 0), "STOPPED": (rc.STOP_CAUSE["LIMIT_END"], 289_950, 46_392),
-        "MOVE_DONE": (rc.MOVE_DONE_REASON.index("TARGET"), 110_000, 17_600),
-        "ESTOP_SET": (0, 104_375, 16_700), "ESTOP_CLEARED": (0, 0), "HALT_SET": (rc.HALT_SRC.index("BUTTON"), 0),
-        "HALT_CLEARED": (0, 0), "PAUSED": (rc.HALT_SRC.index("PC"), 0), "PAUSE_CLEARED": (1, 0),
-        "RESUME_REQUEST": (0, 0), "FAULT_SET": (rc.FAULTS.index("LOAD_LIMIT"), 7_022_272, 16_000),
-        "FAULT_CLEARED": (rc.names_to_bits(["LOAD_LIMIT"], rc.FAULTS), 0), "LIMIT_SET": (1, 290_400, 46_464),
+        "BOOT": (rc.RESET_CAUSE.index("POWER_ON"), 0), "STOPPED": (rc.STOP_CAUSE["LIMIT_END"], 289_950, 231_960),
+        "MOVE_DONE": (rc.MOVE_DONE_REASON.index("TARGET"), 110_000, 88_000),
+        "ESTOP_SET": (0, 104_375, 83_500), "ESTOP_CLEARED": (0, 0), "HALT_SET": (rc.HALT_SRC.index("BUTTON"), 0),
+        "HALT_CLEARED": (0, 0), "PAUSED": (rc.HALT_SRC.index("PC"), 0), "PAUSE_CLEARED": (2, 0),
+        "RESUME_REQUEST": (0, 0), "FAULT_SET": (rc.FAULTS.index("LOAD_LIMIT"), 7_022_272, 80_000),
+        "FAULT_CLEARED": (rc.names_to_bits(["LOAD_LIMIT"], rc.FAULTS), 0), "LIMIT_SET": (1, 290_400, 232_320),
         "LIMIT_CLEARED": (1, 0), "LINK_WDG": (0, 0), "LINK_RESTORED": (0, 0),
         "VALID_CLEARED": (rc.STOP_CAUSE["PC_STOP"], 0), "HOMED": (0, 12),
-        "HOME_FAILED": (1, -360_000, -57_600), "DRIVER_ENABLED": (0, 0), "DRIVER_DISABLED": (2, 0),
+        "HOME_FAILED": (1, -360_000, -288_000), "DRIVER_ENABLED": (0, 0), "DRIVER_DISABLED": (2, 0),
         "STOP_BUTTON": (1, 0), "PAUSE_BUTTON": (1, 0), "ALM_CHANGED": (1, 0), "AFE_REINIT": (3, 0),
         "AFE_RATE_MISMATCH": (1, 100), "AFE_STALE": (1, 0), "PARAMS_SAVED": (0, 38),
         "PARAMS_LOADED": (0, 0), "PARAMS_DEFAULTED": (1, 0), "NVM_ERROR": (2, 0),
@@ -296,6 +320,26 @@ def make_protocol(pd: gen_params.Dictionary) -> dict[str, Any]:
         arg, val, val2 = (a + (0,))[:3]
         add(f"event_{code.lower()}", rc.ASYNC["EVENT"], i, {"t_us": 1_000_000 + 1000 * i,
             "code": code, "arg": arg, "value": val, "value2": val2}, f"EVENT {code} (ICD §8.1)")
+
+    extra_events = [
+        ("event_paused_button", "PAUSED", rc.SOURCE.index("BUTTON"), 0, 0,
+         "EVENT PAUSED by the physical button (arg 2 = BUTTON; GF-01)"),
+        ("event_fault_set_k1_welded", "FAULT_SET", rc.FAULTS.index("K1_WELDED"), 200, 0,
+         "EVENT FAULT_SET K1_WELDED: E-stop open while driver power stayed present for 200 ms "
+         "(drv.k1_weld_ms; value = ms, D-29c)"),
+        ("event_stopped_drv_power_lost", "STOPPED", rc.STOP_CAUSE["DRV_POWER_LOST"], 150_000, 120_000,
+         "EVENT STOPPED cause DRV_POWER_LOST: driver power lost with the E-stop closed (D-29c)"),
+        ("event_driver_disabled_drv_power_lost", "DRIVER_DISABLED", 4, 0, 0,
+         "EVENT DRIVER_DISABLED cause 4 DRV_POWER_LOST (HOMED cleared, D-29c)"),
+        ("event_driver_power_lost", "DRIVER_POWER", 0, 0, 0, "EVENT DRIVER_POWER 0 = lost"),
+        ("event_pause_cleared_resume", "PAUSE_CLEARED", 3, 0, 0, "EVENT PAUSE_CLEARED by RESUME (arg 3, D-31)"),
+        ("event_boot_hardfault", "BOOT", rc.RESET_CAUSE.index("SOFTWARE"), 0x0800_1A2C, 0x0000_8200,
+         "EVENT BOOT after a HardFault reset: value = faulting PC 0x08001A2C, value2 = CFSR 0x00008200 "
+         "(OI-FW-21)"),
+    ]
+    for j, (name, code, arg, val, val2, desc) in enumerate(extra_events):
+        add(name, rc.ASYNC["EVENT"], 0x40 + j, {"t_us": 2_000_000 + 1000 * j, "code": code, "arg": arg,
+            "value": val, "value2": val2}, desc)
 
     # --- framing-only / invalid ----------------------------------------------------------
     add("max_len_frame", C["GET_ALL_PARAMS"] | R, 0x80, {}, f"LEN = {rc.MAX_LEN} (maximum) frame-layer test",
@@ -408,6 +452,8 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         if status != "OK":
             exp["response_frame_hex"] = rc.encode_frame(t | R, s, rc.encode_response(
                 cmd, {"status": status, "detail": detail})).hex().upper()
+        if st.paused or cmd in ("PAUSE", "RESUME"):
+            exp["paused_after"] = model.paused_after(st, t, pl, status)
         vecs.append({"name": name, "description": desc, "srs": list(srs), "state": state,
                      "request": {"type": f"0x{t:02X}", "type_name": cmd, "seq": s,
                                  "payload_hex": pl.hex().upper(),
@@ -481,11 +527,37 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         {"alm_active": True}, "MOVE_ABS", mv, srs=("FW-SW-004", "D-28"))
     add("jog_alarm_powered", "JOG with ALM active and power present -> E_STATE DRIVER_ALARM (D-28)",
         {"alm_active": True}, "JOG", jog_nb, srs=("FW-SW-004", "D-28"))
+    add("jog_refresh_alarm", "JOG speed refresh of a RUNNING jog with ALM active and power present -> "
+        "OK (not a new motion start; SAF-FW-026)", {"motion_state": "JOG", "alm_active": True}, "JOG",
+        dict(jog_nb, v_um_s=1500), srs=("SAF-FW-026", "D-28"))
+    add("home_alarm_powered", "HOME with ALM active and power present -> E_STATE DRIVER_ALARM",
+        {"homed": False, "alm_active": True}, "HOME", {"flags": 0}, srs=("SAF-FW-026", "D-28"))
+    add("enable_alarm_powered", "ENABLE with ALM active and power present -> OK (ENABLE not blocked)",
+        {"motion_state": "NOT_ENABLED", "homed": False, "alm_active": True}, "ENABLE",
+        srs=("SAF-FW-026",))
+    for c in ("STOP", "HALT", "PAUSE"):
+        add(f"{c.lower()}_alarm_moving", f"{c} during a move with ALM active -> OK (never blocked)",
+            dict(moving, alm_active=True), c, {"mode": 0} if c == "STOP" else None, srs=("SAF-FW-026",))
     add("move_alarm_unpowered", "ALM active because the driver is unpowered -> DRV_UNPOWERED only",
         {"alm_active": True, "drv_power": False}, "MOVE_ABS", mv, srs=("D-28",))
     add("move_alarm_sense_off", "ALM active, sense disabled (power assumed) -> DRIVER_ALARM",
         {"alm_active": True, "drv_power": False, "params": {"drv.pwr_sense_enable": False}},
         "MOVE_ABS", mv, srs=("D-28",))
+    add("move_after_drv_power_lost", "driver power lost with the E-stop closed: NOT_ENABLED, "
+        "HOMED cleared -> E_STATE NOT_ENABLED | NOT_HOMED | DRV_UNPOWERED (D-29c)",
+        {"motion_state": "NOT_ENABLED", "homed": False, "drv_power": False}, "MOVE_ABS", mv,
+        srs=("D-29c", "SAF-FW-005"))
+    add("jog_after_drv_power_lost", "JOG after driver power loss -> E_STATE NOT_ENABLED | "
+        "DRV_UNPOWERED (D-29c)", {"motion_state": "NOT_ENABLED", "homed": False, "drv_power": False},
+        "JOG", jog_nb, srs=("D-29c",))
+    add("enable_after_drv_power_return", "power back, axis not homed: ENABLE accepted (settle "
+        "follows), motion still needs HOME (D-29c)", {"motion_state": "NOT_ENABLED", "homed": False},
+        "ENABLE", srs=("D-29c", "FW-MOT-008"))
+    add("move_after_drv_power_return", "power back and ENABLE done, not homed -> E_STATE NOT_HOMED",
+        {"homed": False}, "MOVE_ABS", mv, srs=("D-29c",))
+    add("move_k1_welded", "K1_WELDED latched (E-stop open, power present) -> E_STATE ESTOP | FAULT",
+        {"motion_state": "NOT_ENABLED", "homed": False, "estop_latched": True, "estop_input_open": True,
+         "faults": ["K1_WELDED"], "fault_causes": ["K1_WELDED"]}, "MOVE_ABS", mv, srs=("D-29c",))
     add("alarm_running_move", "JOG 0 during a running move with ALM active -> OK, no effect "
         "(running moves are unaffected by ALM; only new motion is refused)",
         dict(moving, alm_active=True), "JOG", {"v_um_s": 0, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}, srs=("D-28", "D-16"))
@@ -497,8 +569,70 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         "commands are never retried, ICD §9.3)", moving, "MOVE_ABS", mv, srs=("IF-005",))
     add("move_while_stopping", "MOVE_ABS during a controlled stop -> E_BUSY 1",
         {"motion_state": "STOPPING"}, "MOVE_ABS", mv)
-    add("move_paused", "PAUSED does not block; the move clears it", {}, "MOVE_ABS", mv,
-        srs=("SAF-FW-023",))
+    # --- PAUSED (D-30, amends D-29a): blocks new motion incl. jog refreshes; only HALT_CLEAR clears it
+    P = ("SAF-FW-023", "D-30")
+    pz = {"paused": True}
+    jog0 = {"v_um_s": 0, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}
+    add("move_paused", "MOVE_ABS while PAUSED -> E_STATE PAUSED, PAUSED kept", pz, "MOVE_ABS", mv, srs=P)
+    add("move_paused_refused", "MOVE_ABS while PAUSED and HALT latched -> E_STATE HALT | PAUSED",
+        dict(pz, halt_latched=True), "MOVE_ABS", mv, srs=P)
+    add("jog_paused", "JOG != 0 while PAUSED -> E_STATE PAUSED", pz, "JOG",
+        {"v_um_s": 2000, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}, srs=P)
+    add("jog_refresh_paused", "JOG refresh in flight arriving while STOPPING after a PAUSE -> E_STATE "
+        "PAUSED (E_STATE is checked before E_BUSY; closes OI-ICD-04)", dict(pz, motion_state="STOPPING"),
+        "JOG", {"v_um_s": 2000, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}, srs=P)
+    add("jog_refresh_paused_jogging", "JOG refresh while still in state JOG with PAUSED set (clean-halt "
+        "edge) -> E_STATE PAUSED", dict(pz, motion_state="JOG"), "JOG",
+        {"v_um_s": 2000, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}, srs=P)
+    add("jog0_paused", "JOG 0 while PAUSED -> OK, PAUSED kept", pz, "JOG", jog0, srs=P)
+    add("mul_paused", "MOVE_UNTIL_LOAD while PAUSED -> E_STATE PAUSED", pz, "MOVE_UNTIL_LOAD",
+        {"bound_um": 150000, "v_um_s": 500, "a_um_s2": 0, "raw_stop": 1288490, "cmp": 0}, srs=P)
+    add("home_paused", "HOME while PAUSED -> E_STATE PAUSED", dict(pz, homed=False), "HOME",
+        {"flags": 0}, srs=P)
+    add("halt_clear_paused", "HALT_CLEAR with nothing else latched clears PAUSED (Resume step 1)", pz,
+        "HALT_CLEAR", srs=P)
+    add("move_after_resume", "MOVE_ABS after HALT_CLEAR (PAUSED cleared) -> OK (Resume step 2)", {},
+        "MOVE_ABS", mv, srs=P)
+    add("halt_clear_paused_refused", "HALT_CLEAR refused (STOP button held) -> PAUSED kept",
+        dict(pz, halt_latched=True, stop_btn_active=True), "HALT_CLEAR", srs=P)
+    for c in ("STOP", "HALT", "ESTOP_CLEAR", "FAULT_CLEAR", "ENABLE", "DISABLE", "PING", "SAVE_PARAMS"):
+        add(f"{c.lower()}_paused", f"{c} while PAUSED -> PAUSED kept", pz, c,
+            {"mode": 1} if c == "STOP" else None, srs=P)
+    add("pause_paused", "PAUSE while PAUSED -> OK, no event, source unchanged", pz, "PAUSE", srs=P)
+
+    # --- RESUME (D-31; OBS-P1-15, SWD-P1-02): clears only PAUSED; refused while ESTOP/HALT/FAULT
+    RS = ("SAF-FW-023", "D-31")
+    add("resume_paused", "RESUME while PAUSED -> OK, PAUSED cleared (PAUSE_CLEARED arg 3)", pz, "RESUME", srs=RS)
+    add("resume_not_paused", "RESUME with nothing paused -> OK, no-op, no event", {}, "RESUME", srs=RS)
+    add("resume_halt", "RESUME while PAUSED and HALT latched (PC) -> E_STATE HALT, both stay", dict(pz,
+        halt_latched=True), "RESUME", srs=RS)
+    add("resume_halt_button_race", "STOP button latched HALT ms before the RESUME frame, button already "
+        "released >= io.release_ms -> E_STATE HALT, HALT and PAUSED stay (F-B-30 closed)",
+        dict(pz, halt_latched=True, stop_btn_released_ms=500), "RESUME", srs=RS)
+    add("resume_estop_latched", "RESUME while PAUSED and ESTOP latched (input closed) -> E_STATE ESTOP",
+        dict(pz, motion_state="NOT_ENABLED", homed=False, estop_latched=True), "RESUME", srs=RS)
+    add("resume_estop_input_open", "RESUME while the E-stop sense input is open -> E_STATE ESTOP",
+        dict(pz, motion_state="NOT_ENABLED", homed=False, estop_latched=True, estop_input_open=True),
+        "RESUME", srs=RS)
+    add("resume_fault", "RESUME while PAUSED and a FAULT latched (cause gone) -> E_STATE FAULT",
+        dict(pz, faults=["LOAD_LIMIT"]), "RESUME", srs=RS)
+    add("resume_all_latched", "RESUME with ESTOP, HALT and FAULT latched -> E_STATE ESTOP | HALT | FAULT",
+        dict(pz, motion_state="NOT_ENABLED", homed=False, estop_latched=True, halt_latched=True,
+             faults=["STEP_FAULT"]), "RESUME", srs=RS)
+    add("resume_unpowered", "RESUME while PAUSED and driver power off -> OK (DRV_UNPOWERED not evaluated; "
+        "the following motion command is refused)", dict(pz, motion_state="NOT_ENABLED", homed=False,
+        drv_power=False), "RESUME", srs=RS)
+    add("resume_alarm", "RESUME while PAUSED and ALM active -> OK (ALM start-block applies to motion only)",
+        dict(pz, alm_active=True), "RESUME", srs=RS)
+    add("resume_limit_afe", "RESUME while PAUSED, END limit latched and AFE stale -> OK (not evaluated)",
+        dict(pz, limit_end=True, afe_stale=True), "RESUME", srs=RS)
+    add("resume_stopping", "RESUME while PAUSED and still STOPPING after the PAUSE -> OK (never E_BUSY; "
+        "the deceleration continues)", dict(pz, motion_state="STOPPING"), "RESUME", srs=RS)
+    add("resume_length", "RESUME with 1 payload byte -> E_LENGTH 0", pz, "RESUME", payload=b"\x00", srs=RS)
+    add("halt_clear_halt_and_paused", "HALT_CLEAR with HALT and PAUSED latched -> OK, both cleared (D-31)",
+        dict(pz, halt_latched=True), "HALT_CLEAR", srs=RS)
+    add("move_after_resume_halt_refused", "MOVE_ABS after a refused RESUME (HALT + PAUSED) -> E_STATE "
+        "HALT | PAUSED", dict(pz, halt_latched=True), "MOVE_ABS", mv, srs=RS)
 
     jog = {"v_um_s": 2000, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}
     add("jog_unhomed_ok", "JOG un-homed at v_unhomed accepted", {"homed": False}, "JOG", jog,
@@ -536,6 +670,10 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
     add("mul_raw_range", "raw_stop outside 24-bit -> E_RANGE 12", {}, "MOVE_UNTIL_LOAD",
         dict(mul, raw_stop=8388608), srs=S)
     add("mul_cmp", "cmp 2 -> E_RANGE 16", {}, "MOVE_UNTIL_LOAD", dict(mul, cmp=2), srs=S)
+    add("mul_bound_at_position", "bound_um = current position (no direction) -> E_RANGE 0 (F-B-28)", {},
+        "MOVE_UNTIL_LOAD", dict(mul, bound_um=100000), srs=("FW-MOT-006",))
+    add("mul_bound_at_position_bad_cmp", "bound_um = position and cmp 2 -> E_RANGE 0 (payload order)", {},
+        "MOVE_UNTIL_LOAD", dict(mul, bound_um=100000, cmp=2), srs=("FW-MOT-006",))
     add("mul_not_homed", "MOVE_UNTIL_LOAD not homed -> E_STATE NOT_HOMED", {"homed": False},
         "MOVE_UNTIL_LOAD", mul, srs=S)
 
@@ -687,6 +825,21 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         "SET_PARAM", payload=spk("motion.v_max_load_um_s", 30001), srs=("R5 §2.3",))
     add("rule_h4_travel_below_load", "v_max_travel 19 999 < v_max_load -> E_CONFIG (H4)", {},
         "SET_PARAM", payload=spk("motion.v_max_travel_um_s", 19999), srs=("R5 §2.3",))
+    H5 = ("SAF-FW-012", "D-33a")
+    sps10 = {"params": {"afe.rate_sps": 0}}
+    add("rule_h5_timeout_199_sps10", "afe.timeout_ms 199 at SPS10 (period 100 ms) -> E_CONFIG (H5)", sps10,
+        "SET_PARAM", payload=spk("afe.timeout_ms", 199), srs=H5)
+    add("rule_h5_timeout_200_sps10", "afe.timeout_ms 200 at SPS10 = 2 periods -> OK (H5)", sps10,
+        "SET_PARAM", payload=spk("afe.timeout_ms", 200), srs=H5)
+    add("rule_h5_timeout_25_sps80", "afe.timeout_ms 25 at SPS80 = 2 periods -> OK (H5)", {},
+        "SET_PARAM", payload=spk("afe.timeout_ms", 25), srs=H5)
+    add("rule_h5_rate_sps10_default_timeout", "afe.rate_sps SPS10 with the default timeout 250 ms -> OK",
+        {}, "SET_PARAM", payload=spk("afe.rate_sps", 0), srs=H5)
+    add("rule_h5_rate_sps10_short_timeout", "afe.rate_sps SPS10 with afe.timeout_ms 100 -> E_CONFIG (H5)",
+        {"params": {"afe.timeout_ms": 100}}, "SET_PARAM", payload=spk("afe.rate_sps", 0), srs=H5)
+    add("rule_h5_rate_sps80_from_sps10", "afe.rate_sps SPS10 -> SPS80 with afe.timeout_ms 200 -> OK",
+        {"params": {"afe.timeout_ms": 200, "afe.rate_sps": 0}}, "SET_PARAM", payload=spk("afe.rate_sps", 1),
+        srs=H5)
     add("load_raw_max_cap", "load_raw_max = 7 151 121 accepted (SAF-FW-010)", {}, "SET_PARAM",
         payload=spk("safety.load_raw_max", 7151121), srs=("SAF-FW-010",))
     add("spm_change_moving", "steps_per_mm while moving -> E_BUSY 1", moving, "SET_PARAM",
@@ -696,6 +849,15 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
 
     names = [v["name"] for v in vecs]
     assert len(names) == len(set(names)), "duplicate check-vector names"
+    # every vector state is a valid configuration (all hard rules hold for its parameter overrides)
+    for v in vecs:
+        st0 = cc.FwState.from_dict(v["state"])
+        for k, val in st0.params.items():
+            assert model.hard_rule(st0, k, val) is None, f"{v['name']}: state violates a hard rule ({k})"
+    # every range end is reachable (ICD §11.4, v0.2): min/max vectors are accepted
+    unreachable = [v["name"] for v in vecs if v["name"].startswith("set_")
+                   and v["name"].endswith(("_min", "_max")) and v["expect"]["status"] != "OK"]
+    assert not unreachable, f"unreachable range ends: {unreachable}"
     return {
         "_comment": ["GENERATED by 00_System/tools/gen_vectors.py from ref_cmdcheck.py - do not edit",
                      f"ICD_protocol.md v{rc.ICD_VERSION} §4-§6: command acceptance (check order "
@@ -703,12 +865,77 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
                      "state: overrides of state_defaults; params: overrides of the params.yaml "
                      "defaults (enum/bool as numeric code)",
                      "expect.status/detail: verdict; response_frame_hex for NACKs (same SEQ)",
+                     "expect.paused_after (present when state.paused or for PAUSE): PAUSED latch "
+                     "after the command (execution effect, ICD §5.5; twin / simulator / FW latch "
+                     "tests)",
+                     "state_schema: version of the state keys (state_defaults); keys are only added "
+                     "(never renamed or removed) and every addition bumps state_schema (F-B-25)",
                      "an implementation passes when, for each vector, the FW in the given state "
                      "answers the request with the expected STATUS and detail and, for a NACK, "
                      "exactly response_frame_hex, without side effects"],
         "icd_version": rc.ICD_VERSION, "param_dict_hash": f"0x{pd.hash:08X}",
+        "state_schema": cc.STATE_SCHEMA,
         "state_defaults": {k: v for k, v in cc.FwState().__dict__.items()},
         "vectors": vecs,
+    }
+
+
+# ======================================================================================
+# units vectors (ICD §0.1: um <-> steps, step-rate speed cap; OI-FW-20, SYS-003)
+# ======================================================================================
+def round_half_away(x: float) -> int:
+    """Exact round-half-away-from-zero of a binary64 value (C99 round())."""
+    return int(Decimal(x).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def um_to_steps(um: int, spm32: float) -> int:
+    return round_half_away(float(um) * spm32 / 1000.0)
+
+
+def steps_to_um(steps: int, spm32: float) -> int:
+    return round_half_away(float(steps) * 1000.0 / spm32)
+
+
+def rate_cap_um_s(rate_hz: int, spm32: float) -> int:
+    return math.floor(float(rate_hz) * 1000.0 / spm32)
+
+
+def make_units(pd: gen_params.Dictionary) -> dict[str, Any]:
+    p = {q.key: q for q in pd.params}["motion.steps_per_mm"]
+    spms = [100.0, 160.0, 636.0778443113772, 640.0, 800.0, 1280.0, 4000.0, 100000.0]
+    ums = [0, 1, -1, 3, 5, -5, 15, 100, -500, 12345, 25000, 104375, 290000, 399999, 400000, -10000]
+    steps = [0, 1, -1, 2, -2, 3, 64, -318, 7852, 16000, 46400, 160000, 4000000, -1600000]
+    rates = [100, 1000, 50000, 99999, 100000]
+    cases_u2s, cases_s2u, cases_cap = [], [], []
+    for spm in spms:
+        spm32 = _f32(spm)
+        assert p.min <= spm32 <= p.max
+        bits = f"0x{struct.unpack('<I', struct.pack('<f', spm32))[0]:08X}"
+        for um in ums:
+            cases_u2s.append({"spm_f32_hex": bits, "spm": spm32, "um": um, "steps": um_to_steps(um, spm32)})
+        for st in steps:
+            if abs(st * 1000.0 / spm32) < 2**31:
+                cases_s2u.append({"spm_f32_hex": bits, "spm": spm32, "steps": st, "um": steps_to_um(st, spm32)})
+        for r in rates:
+            cases_cap.append({"spm_f32_hex": bits, "spm": spm32, "max_step_rate_hz": r,
+                              "rate_cap_um_s": rate_cap_um_s(r, spm32)})
+    ties = [c for c in cases_u2s if (abs(c["um"] * c["spm"] / 1000.0) % 1) == 0.5]
+    ties += [c for c in cases_s2u if (abs(c["steps"] * 1000.0 / c["spm"]) % 1) == 0.5]
+    assert len(ties) >= 4, "tie cases must be present"
+    return {
+        "_comment": ["GENERATED by 00_System/tools/gen_vectors.py - do not edit",
+                     f"ICD_protocol.md v{rc.ICD_VERSION} §0.1: steps_per_mm is the binary32 parameter value "
+                     "(spm_f32_hex); every expression is evaluated in IEEE-754 binary64 left to right; "
+                     "rounding = round half away from zero (C99 round/lround) of the binary64 result",
+                     "um_to_steps(um) = round(um * spm / 1000.0); steps_to_um(steps) = "
+                     "round(steps * 1000.0 / spm); rate_cap_um_s = floor(max_step_rate_hz * 1000.0 / spm) "
+                     "(v_limit = min(v_max_*, rate_cap), ICD §5.4)",
+                     "an implementation in other arithmetic (float, fixed point) MUST reproduce every "
+                     "value exactly; tie cases (x.5) are included"],
+        "icd_version": rc.ICD_VERSION, "param_dict_hash": f"0x{pd.hash:08X}",
+        "um_to_steps": cases_u2s, "steps_to_um": cases_s2u, "rate_cap": cases_cap,
+        "motion_vectors": "planned for M2 as vectors/motion_vectors.json (R4 §12 TV-M: ramp periods, "
+                          "planner; FW float32 tolerance ±1 tick per period, sum ±N/1000 ticks)",
     }
 
 
@@ -721,7 +948,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true", help="verify the vector files are up to date")
     args = ap.parse_args(argv)
     pd = gen_params.load()
-    outputs = {PROTO_PATH: render(make_protocol(pd)), CHECK_PATH: render(make_check(pd))}
+    outputs = {PROTO_PATH: render(make_protocol(pd)), CHECK_PATH: render(make_check(pd)),
+               UNITS_PATH: render(make_units(pd))}
     stale = []
     for path, content in outputs.items():
         old = path.read_text(encoding="utf-8") if path.exists() else None
@@ -740,8 +968,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     pv = json.loads(outputs[PROTO_PATH])
     cv = json.loads(outputs[CHECK_PATH])
+    uv = json.loads(outputs[UNITS_PATH])
     print(f"protocol: {len(pv['crc16'])} crc, {len(pv['frames'])} frames, {len(pv['streams'])} streams; "
-          f"check: {len(cv['vectors'])} vectors; PARAM_DICT_HASH = 0x{pd.hash:08X}")
+          f"check: {len(cv['vectors'])} vectors; units: {len(uv['um_to_steps'])} + "
+          f"{len(uv['steps_to_um'])} + {len(uv['rate_cap'])}; PARAM_DICT_HASH = 0x{pd.hash:08X}")
     return 0
 
 
