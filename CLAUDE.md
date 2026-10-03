@@ -21,7 +21,7 @@ Bend (pull/push) test stand: NUCLEO-F446RE firmware (stepper via HBS86H driver, 
 ## Conventions
 - Tag code/tests with requirement IDs: `# Implements: SW-CAL-003`, `/* Verifies: FW-AFE-002 */`.
 - Protocol: little-endian, CRC-16 on every frame in both directions (variant fixed in the ICD).
-- FW: no dynamic allocation after init; no blocking > 1 ms in the main loop; motor disabled by default; E-stop and limit switches handled in FW independently of the PC.
+- FW: no dynamic allocation after init; no blocking > 1 ms in the main loop; motion disabled by default (no step pulses until enabled, axis not homed; ENA itself follows D-13: the driver keeps holding); E-stop and limit switches handled in FW independently of the PC.
 - SW: backend (`core`, `io`, `calc`) must not import Qt widgets; calculations are pure functions with pytest vectors.
 - Hardware: never open a COM port or flash a board unless the Orchestrator states the product owner allowed it (see DECISIONS).
-- Toolchain on this PC: Python 3.14 (`python`), STM32CubeCLT 1.20 arm-none-eabi-gcc (`G:\_SOFT\STM32CubeCLT_1.20.0`); project venv `.venv` (PlatformIO via pip).
+- Toolchain on this PC: Python 3.14 (`python`), STM32CubeCLT 1.20 arm-none-eabi-gcc (`G:\_SOFT\STM32CubeCLT_1.20.0`); project venv `.venv` (PySide6, pyqtgraph, numpy, pyserial, pytest(+qt,cov,randomly), PyYAML, PlatformIO 6.2). Host C compiler for FW native tests: CLion-bundled MinGW GCC 13.1 at `C:\Program Files\JetBrains\CLion 2025.3.2\bin\mingw\bin` (not on PATH by default — prepend it in the shell that runs `pio test -e native`).

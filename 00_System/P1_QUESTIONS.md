@@ -1,7 +1,7 @@
 # P1 entry questions for the product owner
 
 > **Answered by the PO on 2026-10-03** → recorded as D-10 (amended) … D-25 in `specs/DECISIONS.md`.
-> Follow-ups: HBS86H at 24 V is below the datasheet minimum (30 VDC); ALM/reset usage and buffer board → R5;
+> Follow-ups: ~~HBS86H at 24 V below the 30 VDC minimum~~ → PO: driver supply raised to 48 V (D-16); ALM/reset usage and buffer board → R5;
 > 1 kg + 10 kg weights cover only 5 % of FS (calibration extrapolates 20×); D-14 pause button interpretation.
 
 Consolidated from R1–R4 (source IDs in brackets). Every question has a **default**: if you don't answer,

@@ -1,0 +1,59 @@
+# Bird Bend Stand — PC application (SW_design §1, §2). Implements: SW-PLT-001
+# Design artefact (P1). Origin of structure: Thrust_Stand_HAW/03_SW/pyproject.toml @9473c68 (adapted:
+# package name, reduced runtime dependencies per SW_design KD-11, test extras per P1 task).
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bend_stand"
+version = "0.1.0"
+description = "Bird Bend Stand — PC application (PySide6 GUI, backend, FW simulator)"
+readme = "docs/SW_design.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Bird Bend Stand project" }]
+dependencies = [
+    "PySide6-Essentials>=6.8,<7",
+    "pyqtgraph>=0.13.7",
+    "numpy>=2.1",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3",
+    "pytest-qt>=4.4",
+    "pytest-cov>=5.0",
+    "pytest-randomly>=3.15",
+]
+
+[project.scripts]
+bend-stand = "bend_stand.gui.app:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra -p no:cacheprovider"
+markers = [
+    "req(*ids): requirement IDs verified by the test (SRS IDs, e.g. SW-CAL-003)",
+    "unit: unit test (pure functions, single classes)",
+    "component: backend component test (Backend + simulator, no Qt)",
+    "integration: integration test against the FW host twin (Integrator)",
+    "gui: GUI test (pytest-qt, offscreen)",
+    "perf: performance test (NFR-001..003)",
+    "soak: soak / endurance test (NFR-004)",
+    "hil: hardware-in-the-loop (only at a PO-approved hardware gate, D-06)",
+    "slow: slow test",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["bend_stand"]
+omit = ["*/params_gen.py", "*/gui/*"]
