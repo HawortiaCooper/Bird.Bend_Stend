@@ -180,7 +180,8 @@ def test_stop_halt_pause_priority_and_confirmed(be) -> None:
         assert r.sent and r.cmd == cmd.name and r.t_write_ns is not None
         h.advance(20)
     topics = [e.payload for e in be.events.history("stop.confirmed")]
-    assert topics == ["STOP", "HALT", "PAUSE"]
+    assert [t.cmd for t in topics] == ["STOP", "HALT", "PAUSE"]          # StopConfirmation (SWD-M1-06)
+    assert all(t.confirmed and t.source == "test" and t.attempts >= 1 for t in topics)
     h.advance(1100)
     st = be.status()
     assert st.indicators.halt.state == "ON" and st.indicators.halt.source == "PC"
@@ -196,7 +197,8 @@ def test_halt_unconfirmed_with_stream_off_polls_status(be) -> None:
     r = be.halt("hotkey")
     assert r.sent
     h.advance(1200)
-    assert [e.payload for e in be.events.history("stop.unconfirmed")] == ["HALT"]
+    unc = [e.payload for e in be.events.history("stop.unconfirmed")]
+    assert [u.cmd for u in unc] == ["HALT"] and not unc[0].confirmed and unc[0].source == "hotkey"
     assert 15 <= len(tx_frames(be, Cmd.HALT)) <= 20
     assert tx_frames(be, Cmd.GET_STATUS)
 
@@ -225,7 +227,7 @@ def test_clears_refused_and_fault_clear(be) -> None:
     sim.act("button", name="stop", pressed=True)
     h.advance(50)
     res = h.result(be.clear_stop_async())
-    assert res.outcome == "REFUSED" and "STOP button" in res.text
+    assert res.outcome == "REFUSED" and "STOP input" in res.text
     sim.act("button", name="stop", pressed=False)
     h.advance(50)
     assert h.result(be.clear_stop_async()).confirmed
@@ -350,3 +352,133 @@ def test_disconnect_and_set_valid(be) -> None:
     assert st.link.state == LinkState.DISCONNECTED and st.indicators.valid.state == "UNKNOWN"
     assert be.stop("gui").sent is False
     assert struct.calcsize("<I") == 4
+
+
+@pytest.mark.req("IF-011", "SW-STOP-001", "SAF-SW-003")
+def test_stop_written_while_link_lost(be) -> None:
+    """SWD-M1-01: the priority path writes STOP/HALT/PAUSE in every link state while the transport is open."""
+    h = be.test_hooks
+    be.sim.act("inject", fault="hang", duration_ms=3000)
+    assert h.run_until(lambda: be.status().link.state == LinkState.LOST, 2000)
+    n = len(tx_frames(be, Cmd.STOP))
+    for fn in (be.stop, be.halt, be.pause):
+        assert fn("gui").sent
+    assert len(tx_frames(be, Cmd.STOP)) == n + 1 and tx_frames(be, Cmd.HALT) and tx_frames(be, Cmd.PAUSE)
+
+
+def _forced_move(be, target_um: int) -> None:
+    h, ch = be.test_hooks, be.device.channel
+    h.result(ch.submit(Cmd.ENABLE))
+    h.advance(600)
+    h.result(ch.submit(Cmd.HOME, bytes([1])))
+    assert h.run_until(lambda: be.device.last_flags & pg.DataFlags.HOMED
+                       and not be.device.last_flags & pg.DataFlags.MOVING, 60_000)
+    h.result(ch.submit(Cmd.MOVE_ABS, P.build_request(Cmd.MOVE_ABS, target_um=target_um, v_um_s=10_000, a_um_s2=0),
+                       epoch=ch.motion_epoch))
+
+
+@pytest.mark.req("IF-005", "SW-STOP-001")
+def test_lost_stop_repeated_until_fresh_indication(be) -> None:
+    """SWD-M1-02: a stale MOVING = 0 never confirms; a lost STOP is repeated until ACK / fresh MOVING = 0."""
+    h = be.test_hooks
+    _forced_move(be, 200_000)
+    be.sim.act("inject", fault="drop_next", cmd="STOP", what="request", n=2)
+    n0 = len(tx_frames(be, Cmd.STOP))
+    assert be.stop("gui").sent
+    h.advance(1500)
+    assert len(tx_frames(be, Cmd.STOP)) - n0 == 3
+    assert not be.status().motion.moving
+    conf = [e.payload for e in be.events.history("stop.confirmed")]
+    assert conf and conf[-1].cmd == "STOP" and conf[-1].attempts == 3
+
+
+@pytest.mark.req("SW-CFG-003")
+def test_write_while_moving_busy_per_key(be) -> None:
+    """SWD-M1-08: non-moving_ok key -> BUSY (not sent), moving_ok keys written."""
+    h = be.test_hooks
+    _forced_move(be, 200_000)
+    h.advance(50)
+    n0 = len(tx_frames(be, Cmd.SET_PARAM))
+    rep = h.result(be.config.write_and_verify_async({"io.release_ms": 50, "stream.fallback_hz": 20}))
+    assert {i.key: i.status for i in rep.items} == {"io.release_ms": WriteStatus.BUSY,
+                                                    "stream.fallback_hz": WriteStatus.OK}
+    sent = [P.decode_param_entry(w.frame[6:13]).key for w in tx_frames(be, Cmd.SET_PARAM)[n0:]]
+    assert sent == ["stream.fallback_hz"]
+
+
+@pytest.mark.req("IF-011")
+def test_clears_written_at_once_behind_busy_queues(be) -> None:
+    """SWD-M1-04 (D-34): HALT_CLEAR / FAULT_CLEAR are written at the call instant on the priority path even with
+    the Worker queue and the GENERAL lane busy; RESUME is submitted at once on the CONTROL lane."""
+    h = be.test_hooks
+    be.halt("t")
+    h.advance(200)
+    for _ in range(40):
+        be.config.read_all_async()
+    h.advance(300)
+    for call, cmd in ((be.clear_stop_async, Cmd.HALT_CLEAR), (be.fault_clear_async, Cmd.FAULT_CLEAR)):
+        t = be.clock.monotonic_ns()
+        fut = call()
+        w = tx_frames(be, cmd)[-1]
+        assert w.t_ns == t
+        assert h.result(fut, 2000).confirmed
+    h.advance(50)
+    assert h.result(be.clear_stop_async()).cleared == ()            # nothing latched any more
+    be.halt("t")
+    be.pause("t")
+    h.advance(100)
+    assert h.result(be.clear_stop_async()).cleared == ("HALT", "PAUSED")          # GF-21
+    be.pause("t")
+    h.advance(100)
+    assert be.resume().ok
+    be.test_hooks.advance(100)                                       # CONTROL lane: behind the token bucket only
+    assert tx_frames(be, Cmd.RESUME) and be.status().indicators.paused.state == "OFF"
+
+
+@pytest.mark.req("SAF-SW-005")
+@pytest.mark.parametrize("latch", ["halt", "paused"])
+def test_latch_source_from_event(be, latch) -> None:
+    """SWD-M1-05: the source comes from the EVENT arg at once (not the 1 Hz STATUS poll); None when not latched."""
+    h = be.test_hooks
+    assert be.status().indicators[latch].source is None
+    (be.halt if latch == "halt" else be.pause)("gui")
+    h.advance(30)
+    assert be.status().indicators[latch].source == "PC"
+    h.result(be.clear_stop_async(confirmed=True))
+    h.advance(30)
+    assert be.status().indicators[latch].source is None
+    be.sim.act("button", name="pause", pressed=True)
+    h.advance(30)
+    assert be.status().indicators.paused.source == "BUTTON"
+
+
+@pytest.mark.req("IF-008")
+def test_read_only_refuses_clears_and_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SWD-M1-03: in the IF-008 read-only state the clears and SET_VALID are refused locally; STOP stays allowed."""
+    from bend_stand.core.errors import GateRefused
+
+    orig = SimBoard.info
+    monkeypatch.setattr(SimBoard, "info", lambda self: replace(orig(self), proto_major=2))
+    b = lockstep_backend()
+    try:
+        b.halt("t")
+        b.test_hooks.advance(50)
+        for call in (lambda: b.clear_stop_async(confirmed=True), lambda: b.estop_clear_async(confirmed=True),
+                     lambda: b.estop_clear_async(confirmed=False), b.fault_clear_async):
+            with pytest.raises(GateRefused):
+                b.test_hooks.result(call())
+        assert not b.motion.set_valid(True).ok
+        assert not any(tx_frames(b, c) for c in (Cmd.HALT_CLEAR, Cmd.ESTOP_CLEAR, Cmd.FAULT_CLEAR, Cmd.SET_VALID))
+        assert tx_frames(b, Cmd.HALT)
+    finally:
+        b.shutdown()
+
+
+@pytest.mark.req("SW-STOP-003")
+def test_clear_and_stop_after_unplug(be) -> None:
+    h = be.test_hooks
+    be.sim_endpoint.pair.unplug()
+    res = h.result(be.fault_clear_async())
+    assert res.outcome == "NOT_CONFIRMED" and not res.confirmed
+    r = be.stop("gui")
+    assert not r.sent and r.error

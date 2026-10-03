@@ -2,6 +2,8 @@
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/gui/widgets/status_led.py @37c87471 (unchanged except the
 docstring).
+
+Implements: SAF-SW-005 (indicator LED; colour always paired with text by the caller), SW-PLT-003 (link LED)
 """
 from __future__ import annotations
 

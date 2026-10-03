@@ -2,12 +2,13 @@
 
 | Doc | SW_test_plan |
 |---|---|
-| Version | **0.1 — DRAFT for the P1 gate** |
+| Version | **0.2 — M1 execution corrections** (0.1 = P1 gate draft) |
 | Date | 2026-10-03 |
 | Owner | Validator F — SW (`03_SW/docs/SW_test_plan.md`, `03_SW/docs/SW_test_report*.md`, `03_SW/tests/validation/**`) |
 | Verifies | SRS **v0.3**: SW-* (60), SAF-SW-* (6), NFR-001…004, the SW side of IF-001…012, SYS-003, SYS-008, SYS-010 (85 requirements) |
 | Binding inputs | `DECISIONS.md` D-01…**D-32**. D-30: PAUSED blocks motion. **D-31: dedicated RESUME command 0x3C**, clears only PAUSED, refused while HALT/ESTOP/fault latched; HALT_CLEAR clears HALT and PAUSED. **D-32 (PO Q26)**: a load step that does not reach its target travels to the soft limit in the step direction and stops there, the step is NOT_REACHED and the sequence stops; the approach bound is that soft limit; the timeout must not abort earlier; BREAK_DETECTED still aborts. PO accepted the GUI defaults GQ-01…20 and KL-01. |
-| Specs and tools | `ICD_protocol.md` **v0.3** (RESUME not yet in it, see SWD-P1-02), `protocol.yaml`, `params.yaml` dict_version 2 (PARAM_DICT_HASH 0xB046DD01), `00_System/tools/{ref_codec.py, ref_cmdcheck.py, vectors/}` (check vectors: 486 at ICD 0.3), R4 §12, `SW_design.md` **v0.2** (§15 API, §19 hooks, §22 M1 breakdown), `SW_design_GUI.md` v0.1 (G-01…G-36, P-01…P-05, §10.4 demonstrations, GF-09) |
+| M1 baseline (v0.2) | SRS **v0.4.1**, ICD **v0.4.1** (164 frame vectors, 11 streams, 509 check vectors, `units_vectors.json`), `params.yaml` dict_version 3 (PARAM_DICT_HASH **0xF0376293**), SW_design **v0.3.2** (as-built), SW_design_GUI **v0.3.1** (§15.1 as-built), FW host twin (A's firmware) — the M1 corrections of §10a apply |
+| Specs and tools (P1) | `ICD_protocol.md` **v0.3** (RESUME not yet in it, see SWD-P1-02), `protocol.yaml`, `params.yaml` dict_version 2 (PARAM_DICT_HASH 0xB046DD01), `00_System/tools/{ref_codec.py, ref_cmdcheck.py, vectors/}` (check vectors: 486 at ICD 0.3), R4 §12, `SW_design.md` **v0.2** (§15 API, §19 hooks, §22 M1 breakdown), `SW_design_GUI.md` v0.1 (G-01…G-36, P-01…P-05, §10.4 demonstrations, GF-09) |
 | Reference | Process pattern: Thrust_Stand_HAW `03_SW/docs/SW_test_plan.md` (read-only, D-02). Only the structure is reused. |
 
 **Where the SRS v0.3 and D-30/D-31/D-32 disagree, this plan follows the decisions.** These are:
@@ -179,18 +180,18 @@ Independence rules (binding for `tests/validation/**`):
 | TC-IF-003-01 | P | DEV | M1 | – | production `FrameDecoder` on all 11 `streams` vectors (chunked as given, idle timeout hook); seeded random fuzz (1 MB noise with 1 000 valid frames inserted at random split points) | frames **and** counters equal the vectors; every inserted frame recovered, no exception (AC) |
 | TC-IF-003-02 | P | DEV | M1 | – | all 158 `frames` vectors: PC→FW requests encoded from `decoded`; FW→PC frames decoded | requests byte-identical; decoded fields equal (`reencode: false` → `canonical_payload_hex`; `INVALID_PADDING` rejected; longer OK response accepted) |
 | TC-IF-004-01 | P | DEV | M1 | – | `crc16` vectors; bad-CRC frame vectors | 0x29B1 for "123456789", 0xFFFF for empty; bad frames dropped and counted |
-| TC-IF-004-02 | C | DEV | M1 | std | FI-04: corrupt a GET_STATUS response; corrupt a DATA frame; corrupt a PC→FW SET_PARAM frame | dropped and counted in the link stats; no state change from the corrupt frame; the lost SET_PARAM is retried per class; the FW `rx_crc_errors` counter increments (AC: corrupted frames → no action + counter) |
+| TC-IF-004-02 | C | DEV | M1 | std | FI-04: corrupt a response (`corrupt_next`); a corrupted PC→FW frame injected at the FW (`rx_bytes`); DATA/over-long/truncated frames on the F-board (v0.2, §10a) | dropped and counted in the link stats; no state change from the corrupt frame; the lost SET_PARAM is retried per class; the FW `rx_crc_errors` counter increments (AC: corrupted frames → no action + counter) |
 | TC-IF-005-01 | C | DEV | M1 | std | FI-02: drop the response to PING, GET_STATUS, SET_PARAM ×1 and ×3 | retry with a **new SEQ** and the newest value, ≤ 2 retries, then TIMEOUT; a late response to an abandoned SEQ is ignored and counted |
 | TC-IF-005-02 | C | DEV | M1/M3 | std | FI-02: drop the response to MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0, ENABLE, DISABLE, SAVE_PARAMS, REBOOT, RESUME [D-31] | each command appears **once** on the wire; then GET_STATUS; outcome resolved per SW_design §4.4.1; sim PUL count shows exactly one motion (AC: no duplicated motion, no motion command sent twice) |
 | TC-IF-005-03 | C | DEV | M1 | std | FI-03: duplicate a response frame; deliver a response after the next command's | the second copy is ignored; exactly one resolution per SEQ |
 | TC-IF-005-04 | P | DEV | M1 | – | retry class used by the channel for each of the commands vs `protocol_gen.CMD_RETRY` | equal for all commands (JOG decided by v) |
 | TC-IF-006-01 | P | DEV | M1 | – | every DATA vector (typical, idle, fallback, rails, sync in payload, all bits, wrap, E-stop); numpy batch decode vs per-frame decode | all fields equal (AC) |
-| TC-IF-007-01 | C | DEV | M1 | std | FI-01: `afe drop_every 50`; `inject tx_congestion` (FW drops); `LinkModel` loss; a seq wrap 65535 → 1 | FW-attributed losses (OVERRUN) and link losses counted separately; missed conversions (Δt > 1.5 × median) counted; the u16 wrap counts 1 lost; fallback frames excluded from the rate (SW side of IF-007) |
-| TC-IF-008-01 | C | DEV | M1 | sim with proto_major 2 / payload_version 2 / hash ≠ / proto_minor lower | connect | MAJOR/PAYLOAD mismatch → read-only: motion, clears-and-enable and config writes refused locally (nothing on the wire), DATA of the other payload not decoded; hash mismatch → config read-only + warning (session values still written when their id/type match); minor lower → MINOR_DIFF (AC) |
+| TC-IF-007-01 | C | DEV | M1 | std | FI-01: `afe drop_every 50`; `inject tx_congestion` (FW drops); link loss, duplicates and the seq wrap on the F-board (v0.2, §10a) | FW-attributed losses (OVERRUN) and link losses counted separately; missed conversions (Δt > 1.5 × median) counted; the u16 wrap counts 1 lost; fallback frames excluded from the rate (SW side of IF-007) |
+| TC-IF-008-01 | C | DEV | M1 | F-board (`oracle/fboard.py`, ref_codec) with proto_major 2 / payload_version 2 / hash ≠ / proto_minor higher (v0.2) | connect | MAJOR/PAYLOAD mismatch → read-only: motion, clears-and-enable and config writes refused locally (nothing on the wire), DATA of the other payload not decoded; hash mismatch → config read-only + warning (session values still written when their id/type match); minor higher → compatible (AC; 'minor lower' cannot exist against SW PROTO 1.0) |
 | TC-IF-008-02 | G | DEV | M1 | as -01 | GUI | RO chip + banner; motion and config controls disabled |
 | TC-IF-009-01 | C | DEV | M3 | std | scripted session: `move_to`, `move_by`, ±0.1/1/10, slider release, jog, travel cal, sequence with travel_ref test and machine | every motion frame carries absolute µm (= commanded target rounded half away); no relative command exists in `Cmd` (AC) |
 | TC-IF-010-01 | I/T | DEV | M1 | – | `gen_params.py --check`, `gen_vectors.py --check`; `params_gen.PARAM_DICT_HASH` vs `gen_params.py --hash`; vector `icd_version` vs implemented | exit 0; equal; vectors loaded in place (AC) |
-| TC-IF-011-01 | C | DEV | M1 | std | 4 outstanding commands + empty token bucket (SET_PARAM burst + GET_ALL_PARAMS); then `stop()`, `halt()`, `pause()`, RESUME [D-31], clears | each priority frame is the **next frame** written after the frame in progress (`wire_log`); wait ≤ one frame time + 3 ms (AC: STOP sent while the queue is full goes out first) |
+| TC-IF-011-01 | C | DEV | M1 | std | job queue + GENERAL lane busy (40 queued reads + a write) and the token bucket empty (TX held at 100 frames/s); then `stop()`, `halt()`, `pause()`, RESUME [D-31], clears (v0.2: '4 outstanding' is not constructible through the M1 public API — the Worker serialises jobs; B's ScriptedBoard unit test covers it) | each priority frame is the **next frame** written after the frame in progress (`wire_log`); wait ≤ one frame time + 3 ms (AC: STOP sent while the queue is full goes out first) |
 | TC-IF-011-02 | A+C | DEV | M1 | std | analysis of ICD §10; 10 min sim at 80 Hz with events | FW→PC ≤ 9 216 B/s (10 %); measured ≈ 2 080 B/s DATA + events (AC) |
 | TC-IF-012-01 | I+P | DEV | M1 | – | checklist: every IF-012 command (+ RESUME 0x3C, D-31) has a builder, and a vector in TC-IF-003-02 | complete. RESUME is blocked until the ICD carries it (SWD-P1-02). |
 
@@ -198,7 +199,7 @@ Independence rules (binding for `tests/validation/**`):
 
 | TC | Lvl | Env | MS | Pre | Stimulus | Expected |
 |---|---|---|---|---|---|---|
-| TC-SW-PLT-001-01 | I+D | REF / PY311 | M1 | clean Windows 10 user | install from `03_SW/requirements.txt`; `python -m bend_stand --sim`; full U+P+C under Python 3.11 | starts; runtime dependencies = PySide6-Essentials, pyqtgraph, numpy, pyserial (AC) |
+| TC-SW-PLT-001-01 | I+D | DEV (I) / REF (D) | M1 | clean Windows 10 user | inspection: Python 3.14 64-bit, `requirements*.txt` = the four runtime packages pinned and installed; offscreen `python -m bend_stand --sim` smoke; D: fresh install on REF (DM-02). v0.2: Python 3.11 dropped (D-33 i) | starts; runtime dependencies = PySide6-Essentials, pyqtgraph, numpy, pyserial (AC) |
 | TC-SW-PLT-002-01 | U | DEV | M1 | – | subprocess import of `bend_stand.calc/io/core` with PySide6/shiboken6/pyqtgraph blocked; AST scan for threads/clock/I/O in `calc` | imports succeed; no Qt; `calc` pure (AC: import check) |
 | TC-SW-PLT-002-02 | U | DEV | M1/M3 | – | all 22 R4 §12 functions against **production** `calc` (F's copy of the expected values) | 22/22 pass. M1: TV-U/TC/L/M; M3: the rest. |
 | TC-SW-PLT-003-01 | C | DEV | M1 | fresh sim | connect | wire order GET_INFO → GET_STATUS → GET_ALL_PARAMS (all pages) → session SET_PARAMs + read-back → STREAM_START; link statistics fields present (AC) |
@@ -612,8 +613,24 @@ Conditions:
 
 Every requirement in scope is covered.
 
+## 10a. M1 execution corrections (v0.2)
+
+| # | TC | Correction | Reason |
+|---|---|---|---|
+| M1-C1 | TC-IF-008-01/-02 | Version / hash mismatches are presented by F's own **F-board** (`tests/validation/oracle/fboard.py`: ref_codec + `params.yaml`, TCP, real clock) instead of the simulator; "minor lower" replaced by "minor higher → compatible" | the simulator cannot present another INFO (hook gap, cf. SW-C-M1-01); PROTO_MINOR of the SW is 0 |
+| M1-C2 | TC-IF-007-01, TC-SW-PLT-003-02, FI-03 | Link-attributed DATA gaps, duplicate DATA frames, the u16 wrap, over-long and truncated frames come from the F-board (`skip_every`, `dup_every`, `seq_start`, `inject_raw`) | the vocabulary has per-command response faults only, no per-DATA-frame link loss / duplicate |
+| M1-C3 | TC-IF-011-01 | "4 outstanding commands" replaced by "job queue + lane busy + empty token bucket"; RESUME and the clears are checked separately against SRS IF-011 (found delayed: SWD-M1-04) | the Worker runs board-waiting jobs one at a time, so ≤ 3 requests are outstanding through the public API |
+| M1-C4 | TC-SW-PLT-001-01 | Python 3.11 lower bound dropped; inspection + offscreen smoke on DEV, fresh install demonstrated on REF (DM-02, PO) | D-33 i (runtime 3.14 only), SRS v0.4.1 SW-PLT-001 |
+| M1-C5 | TC-SW-CFG-003-01 (BUSY), TC-SW-ACQ-001-01 (stream stop while moving), SWD-M1-02 | Motion is produced on the **forced path** (`Device` ENABLE / HOME / MOVE_ABS, harness `forced_*`) — never used for an expected value | the M1 API cannot move (motion is M2); same pattern as TC-SW-STOP-004-04 |
+| M1-C6 | TC-SAF-SW-003-01 | M1 runs a 120 s lock-step part (gap ≤ 250 ms, PING after ≥ 150 ms idle) + the pipeline-stall check; the 10 min rt run stays M3 | WP-B6 heartbeat is M1 code |
+| M1-C7 | all | Open defects are kept as `xfail(strict=True)` tests marked `defect("SWD-M1-nn")`; a fix turns them into XPASS = failure, then the marker is removed (regression test) | §7.1 rule "every fixed defect gets a regression test" |
+| M1-C8 | TC-IF-011-01 (RESUME) | RESUME stays on the CONTROL lane (Orchestrator decision; SRS IF-011 wording to be corrected in v0.5): expected = submitted at once, never behind Worker jobs, out within one token interval (≤ 12 ms) with busy queues; the clears are checked as priority frames (written at the call instant) | Orchestrator message at the M1 re-test |
+
+Validation suite layout (M1): `tests/validation/{conftest.py, harness.py, oracle/{f_ref.py, fboard.py}, test_v_protocol.py (P), test_v_connect.py, test_v_config.py, test_v_link.py, test_v_stream.py (C), test_v_gui.py (G), test_v_twin.py (X), test_v_static.py (U/I)}`; `_reports/trace.json` (req → node → outcome), `_reports/processes.log` (every process F started / stopped, by PID).
+
 ## 11. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 0.1 | 2026-10-03 | Validator F | First plan for the P1 gate: strategy and levels, 167 TCs for 85 requirements, R4 + VV vectors (R4 §12 independently verified 22/22 × 3 runs), 29 fault-injection scenarios, REF runs PR-1…5, demonstrations DM-01…10, milestone criteria, findings SWD-P1-01…18, P1 verdict YES WITH CONDITIONS (C1…C7). Includes D-30, D-31 (RESUME 0x3C) and D-32 (load step travels to the soft limit, NOT_REACHED) per Orchestrator messages. |
+| 0.2 | 2026-10-03 | Validator F | M1 execution: baseline SRS/ICD v0.4.1, dict 3, SW_design v0.3.2, GUI v0.3.1, twin; TC corrections M1-C1…C7 (§10a: F-board for IF-008 / link-attributed gaps / duplicates / frame errors, IF-011 queue condition, Python 3.14 only, forced motion path, heartbeat lock-step part, strict-xfail open defects, M1-C8 RESUME on the CONTROL lane); validation suite layout. Results: `SW_test_report_M1.md` (incl. re-test). |

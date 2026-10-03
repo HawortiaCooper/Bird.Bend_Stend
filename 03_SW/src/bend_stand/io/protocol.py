@@ -468,7 +468,7 @@ def nack_text(cmd: Cmd | int, status: int, detail: int) -> str:
         if cname == "ESTOP_CLEAR":
             return "E-stop input still open" if detail == pg.DETAIL_CAUSE_INPUT else f"wait {detail} ms"
         if cname == "HALT_CLEAR":
-            return "STOP button still pressed" if detail == pg.DETAIL_CAUSE_INPUT else f"wait {detail} ms"
+            return "STOP input still active" if detail == pg.DETAIL_CAUSE_INPUT else f"wait {detail} ms"
         return "cause still present: " + ", ".join(bit_names(pg.FAULTS_BITS, detail))
     if status == Status.E_CONFIRM:
         return "load above home.max_load_raw: confirm homing under load"

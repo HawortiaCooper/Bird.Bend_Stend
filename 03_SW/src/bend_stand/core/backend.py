@@ -34,7 +34,7 @@ from bend_stand.core.channels import ChannelRegistry
 from bend_stand.core.clock import MONOTONIC, Clock, LockstepClock, wall_utc_iso
 from bend_stand.core.dataview import DataView
 from bend_stand.core.device import Device, DeviceSettings
-from bend_stand.core.errors import ConfirmationRequired, GateRefused
+from bend_stand.core.errors import ConfirmationRequired, GateRefused, RecorderError
 from bend_stand.core.events import EventBus
 from bend_stand.core.gates import CLEAR_HINTS, GateSnapshot, all_gates
 from bend_stand.core.jobs import Job, Worker
@@ -558,7 +558,7 @@ class Backend:
         """M1 manual Resume = RESUME 0x3C only (no motion re-issue; the sequencer's re-issue is M4)."""
         g = self.status().gates[GateId.RESUME]
         if g.ok:
-            fut = self._job(self.device.clear_job, pg.Cmd.RESUME)
+            fut = self.device.clear_async(pg.Cmd.RESUME)       # submitted at once (CONTROL lane), no Worker job
             fut.add_done_callback(self._publish_resume)
         else:
             from bend_stand.core.model import ResumeIgnored  # noqa: PLC0415
@@ -591,8 +591,11 @@ class Backend:
         try:
             m = self.marks.get()
             self.recorder.start(root, meta, specimen=m.specimen, number=m.number)
-        except (OSError, Exception) as exc:  # noqa: BLE001
-            return GateResult((GateItem(GateCode.RECORDING_ACTIVE, Severity.REFUSE, f"cannot start: {exc}"),))
+        except RecorderError as exc:
+            return GateResult((GateItem(GateCode.RECORDING_ACTIVE, Severity.REFUSE, exc.user_text),))
+        except OSError as exc:                     # never surface the raw (localised) OS text (SWD-M1-09)
+            return GateResult((GateItem(GateCode.RECORDING_ACTIVE, Severity.REFUSE,
+                                        f"cannot start the recording (file error {exc.errno})"),))
         return g
 
     def record_stop(self) -> GateResult:
@@ -605,19 +608,35 @@ class Backend:
         return _not_implemented("Pause/Break key test", "M3")
 
     # ---- actions that wait for the board ---------------------------------------------------------------
-    def clear_stop_async(self, *, confirmed: bool = False) -> Future[ClearResult]:
-        g = self.status().gates[GateId.CLEAR_STOP]
-        if g.confirm_items and not confirmed:
+    def _clear_refusal(self, gid: GateId) -> GateResult | None:
+        """Local refusal of a clear (SWD-M1-03): link down or the IF-008 read-only state ("no clears-and-enable",
+        ICD §9.5). Other gate items (nothing to clear, cause still active) are left to the FW, whose NACK is
+        decoded and shown verbatim (a clear never starts motion)."""
+        g = self._gates()[gid]
+        hard = tuple(i for i in g.refused if i.code in (GateCode.LINK_DOWN, GateCode.COMPAT_READ_ONLY))
+        return GateResult(hard) if hard else None
+
+    def _clear(self, gid: GateId, cmd: pg.Cmd, *, confirmed: bool | None) -> Future[ClearResult]:
+        refused = self._clear_refusal(gid)
+        if refused is not None:
+            return failed_future(GateRefused(refused))
+        g = self._gates()[gid]
+        if confirmed is not None and g.confirm_items and not confirmed:
             return failed_future(ConfirmationRequired(g))
-        return self._job(self.device.clear_job, pg.Cmd.HALT_CLEAR)
+        return self.device.clear_async(cmd)         # priority path, written now (D-34, SWD-M1-04)
+
+    def clear_stop_async(self, *, confirmed: bool = False) -> Future[ClearResult]:
+        return self._clear(GateId.CLEAR_STOP, pg.Cmd.HALT_CLEAR, confirmed=confirmed)
 
     def estop_clear_async(self, *, confirmed: bool) -> Future[ClearResult]:
         if not confirmed:
-            return failed_future(ConfirmationRequired(self.status().gates[GateId.ESTOP_CLEAR]))
-        return self._job(self.device.clear_job, pg.Cmd.ESTOP_CLEAR)
+            refused = self._clear_refusal(GateId.ESTOP_CLEAR)
+            return failed_future(GateRefused(refused) if refused is not None
+                                 else ConfirmationRequired(self._gates()[GateId.ESTOP_CLEAR]))
+        return self._clear(GateId.ESTOP_CLEAR, pg.Cmd.ESTOP_CLEAR, confirmed=None)
 
     def fault_clear_async(self) -> Future[ClearResult]:
-        return self._job(self.device.clear_job, pg.Cmd.FAULT_CLEAR)
+        return self._clear(GateId.FAULT_CLEAR, pg.Cmd.FAULT_CLEAR, confirmed=None)
 
     def stream_start_async(self) -> Future[None]:
         g = self.status().gates[GateId.STREAM_START]
@@ -634,6 +653,17 @@ class Backend:
     # ---- status -------------------------------------------------------------------------------------
     def _link_stats(self) -> Any:
         return self.device.link_stats(self.pipeline.counters.as_linkstats())
+
+    @staticmethod
+    def _latch_source(on: bool, from_event: int | None, from_status: int | None) -> str | None:
+        """Source of a HALT / PAUSED latch (SWD-M1-05): the EVENT arg at once, the STATUS field as fallback;
+        ``None`` (not ``"NONE"``) when not latched or unknown (GF-18)."""
+        if not on:
+            return None
+        for v in (from_event, from_status):
+            if v in (int(pg.Source.PC), int(pg.Source.BUTTON)):
+                return pg.Source(v).name
+        return None
 
     def _indicators(self, now: int) -> Indicators:
         d = self.device
@@ -656,14 +686,16 @@ class Backend:
         for i, n in enumerate(pg.DATA_FLAGS_BITS):
             if n:
                 src = None
-                if n == "HALT" and st is not None and flags & pg.DataFlags.HALT:
-                    src = pg.Source(st.halt_src).name if st.halt_src in (0, 1, 2) else None
+                if n == "HALT":
+                    src = self._latch_source(bool(flags & pg.DataFlags.HALT), d.halt_src_ev,
+                                             st.halt_src if st is not None else None)
                 put(n, bool(flags >> i & 1), live, source=src)
         for i, n in enumerate(pg.DATA_STATUS_BITS):
             if n:
                 src = None
-                if n == "PAUSED" and st is not None and status & pg.DataStatus.PAUSED:
-                    src = pg.Source(st.pause_src).name if st.pause_src in (0, 1, 2) else None
+                if n == "PAUSED":
+                    src = self._latch_source(bool(status & pg.DataStatus.PAUSED), d.pause_src_ev,
+                                             st.pause_src if st is not None else None)
                 put(n, bool(status >> i & 1), live, source=src)
         for i, n in enumerate(pg.FAULTS_BITS):
             if n:
@@ -685,6 +717,18 @@ class Backend:
         items["hotkey"] = Indicator("OFF", None, "UNAVAILABLE")
         return Indicators(items)
 
+    def _gates(self, now: int | None = None) -> Mapping[GateId, GateResult]:
+        d = self.device
+        now = self.clock.monotonic_ns() if now is None else now
+        st = d.board
+        flags, status_bits = d.latest()
+        fresh = d.last_data_ns is not None and now - d.last_data_ns <= 500 * MS
+        snap = GateSnapshot(link=d.state, compat=d.compat, stream_on=d.stream_on, data_fresh=fresh, flags=flags,
+                            status=status_bits, faults=st.faults if st else 0, io=st.io if st else 0,
+                            moving=bool(flags & pg.DataFlags.MOVING), recording=self.recorder.state != "IDLE",
+                            status_known=st is not None)
+        return all_gates(snap)
+
     def status(self) -> BackendStatus:
         now = self.clock.monotonic_ns()
         d = self.device
@@ -694,10 +738,6 @@ class Backend:
         lt = self.pipeline.latest_copy()
         data_age = None if d.last_data_ns is None else (now - d.last_data_ns) / 1e6
         moving = bool(flags & pg.DataFlags.MOVING)
-        snap = GateSnapshot(link=d.state, compat=d.compat, stream_on=d.stream_on,
-                            data_fresh=data_age is not None and data_age <= 500, flags=flags, status=status_bits,
-                            faults=st.faults if st else 0, io=st.io if st else 0, moving=moving,
-                            recording=self.recorder.state != "IDLE", status_known=st is not None)
         fw_rate = (st.afe_rate_dsps / 10.0) if st is not None and st.afe_rate_dsps else None
         self._status_seq += 1
         return BackendStatus(
@@ -715,7 +755,7 @@ class Backend:
             calibration=CalibrationStatus(board_spm=d.params.get("motion.steps_per_mm")),
             operation=OperationStatus(),
             recording=self.recorder.status(),
-            gates=all_gates(snap),
+            gates=self._gates(now),
             hotkey=HotkeyStatus("UNAVAILABLE", "global hotkey: M3", False),
             cfg_dirty=None if st is None else bool(st.sys_flags & pg.SysFlags.CFG_DIRTY),
             config_read_only=d.compat.config_read_only,

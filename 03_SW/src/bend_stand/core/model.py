@@ -212,6 +212,31 @@ class StopResult:
     reason: str = ""
 
 
+@dataclass(frozen=True, eq=False)
+class StopConfirmation:
+    """Payload of the topics ``stop.confirmed`` / ``stop.unconfirmed`` (SWD-M1-06): which priority command
+    (``STOP`` / ``HALT`` / ``PAUSE``) was (not) confirmed, its source, the frames written, the decision time.
+
+    Compatibility: until M2 the payload also compares equal to its command name (``payload == "HALT"``), the
+    v0.3 payload form, so existing consumers keep working while they migrate to ``.cmd``."""
+
+    cmd: str
+    source: str
+    attempts: int
+    t_ns: int
+    confirmed: bool
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return other == self.cmd
+        if isinstance(other, StopConfirmation):
+            return (self.cmd, self.source, self.attempts, self.t_ns, self.confirmed) ==                 (other.cmd, other.source, other.attempts, other.t_ns, other.confirmed)
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.cmd)
+
+
 ClearOutcome = Literal["OK", "REFUSED", "NOT_CONFIRMED"]
 
 

@@ -108,13 +108,71 @@ static void test_congestion_drop_and_overrun(void)
     TEST_ASSERT_EQUAL_UINT32(1u, le_get32(&h_status().b[56]));       /* tx_drops */
 }
 
-static void test_missed_conversion_overrun(void)
+/* DEF-M1-02: OVERRUN only for FW losses - a sensor gap / stall is not one; a conversion missed
+ * during the FW's NVM hold is; a stale pending flag does not survive STREAM_STOP/START */
+static void test_overrun_only_for_fw_losses(void)
 {
+    uint32_t i;
     start();
     sample(0);
-    T += 12500u;                                                     /* one conversion missing */
+    T += 12500u;                                                     /* sensor skipped one */
+    sample(0);
+    TEST_ASSERT_EQUAL_HEX8(0u, last_data()->payload[5] & DF_OVERRUN);
+    T += 500000u;                                                    /* 500 ms DOUT stall */
+    sample(0);
+    TEST_ASSERT_EQUAL_HEX8(0u, last_data()->payload[5] & DF_OVERRUN);
+    /* NVM hold: the FW ignores conversions -> the first frame afterwards carries OVERRUN */
+    fake_set_time_us(T);
+    fake_cmd(CMD_SAVE_PARAMS, 9u, NULL, 0u);
+    app_loop();                                                      /* SAVE accepted: HOLD */
+    TEST_ASSERT_TRUE(nvm_busy());
+    for (i = 0u; i < 20u && nvm_busy(); i++) {
+        T += 12500u;                                                 /* dropped while held */
+        fake_set_time_us(T);
+        fake_sample(T, 0);
+        core_tick_1ms();
+        app_loop();
+    }
+    TEST_ASSERT_FALSE(nvm_busy());
+    TEST_ASSERT_TRUE(i >= 2u);
     sample(0);
     TEST_ASSERT_EQUAL_HEX8(DF_OVERRUN, last_data()->payload[5] & DF_OVERRUN);
+    sample(0);
+    TEST_ASSERT_EQUAL_HEX8(0u, last_data()->payload[5] & DF_OVERRUN);
+    /* DEF-M1-03: a class-D drop right before STREAM_STOP keeps its OVERRUN for the next sent frame */
+    fake_tx_auto(false);
+    sample(1);
+    sample(2);
+    sample(3);                                       /* third dropped */
+    (void)fake_tx_drain(UINT32_MAX);
+    fake_tx_auto(true);
+    h_expect_ok(h_cmd(CMD_STREAM_STOP, 10u, NULL, 0u));
+    h_expect_ok(h_cmd(CMD_STREAM_START, 11u, NULL, 0u));
+    sample(4);
+    TEST_ASSERT_EQUAL_HEX8(DF_OVERRUN, last_data()->payload[5] & DF_OVERRUN);
+    sample(5);
+    TEST_ASSERT_EQUAL_HEX8(0u, last_data()->payload[5] & DF_OVERRUN);
+}
+
+/* DEF-M1-04: stream off during a SAVE, STREAM_START right after it -> no OVERRUN (no frame was due) */
+static void test_no_overrun_when_stream_started_after_save(void)
+{
+    uint32_t i;
+    T = fake_now_us();
+    sample(0);
+    fake_cmd(CMD_SAVE_PARAMS, 9u, NULL, 0u);
+    app_loop();
+    TEST_ASSERT_TRUE(nvm_busy());
+    for (i = 0u; i < 20u && nvm_busy(); i++) {
+        T += 12500u;
+        fake_set_time_us(T);
+        fake_sample(T, 0);
+        core_tick_1ms();
+        app_loop();
+    }
+    TEST_ASSERT_FALSE(nvm_busy());
+    h_expect_ok(h_cmd(CMD_STREAM_START, 12u, NULL, 0u));
+    fake_cap_clear();
     sample(0);
     TEST_ASSERT_EQUAL_HEX8(0u, last_data()->payload[5] & DF_OVERRUN);
 }
@@ -204,7 +262,8 @@ int main(void)
     RUN_TEST(test_settle_flag_after_boot);
     RUN_TEST(test_valid_by_frame_time);
     RUN_TEST(test_congestion_drop_and_overrun);
-    RUN_TEST(test_missed_conversion_overrun);
+    RUN_TEST(test_overrun_only_for_fw_losses);
+    RUN_TEST(test_no_overrun_when_stream_started_after_save);
     RUN_TEST(test_stale_fallback_frames);
     RUN_TEST(test_stream_off_and_seq_not_reset);
     RUN_TEST(test_measured_rate_in_status);

@@ -4,7 +4,7 @@
  * Implements: FW-STR-002 (DATA built in the sample ISR), FW-TIM-001 (sample t_us = data-ready
  *             time from the HAL), FW-AFE-002 (gain/rate apply, settle flagging), FW-AFE-004,
  *             FW-STR-005 (stale -> fallback), SAF-FW-012 (stale detection; motion part M2),
- *             FW-NVM-003 (missed conversions -> OVERRUN)
+ *             FW-NVM-003 (conversions missed during the NVM hold -> OVERRUN; DEF-M1-02)
  */
 #include "fw.h"
 
@@ -56,9 +56,14 @@ void on_afe_sample(const afe_sample_t *s)
     afe_state_t *a = &g_fw.afe;
     bool settling = false;
     bool sat = s->raw >= PROTO_RAW_MAX || s->raw <= PROTO_RAW_MIN;
-    /* a conversion missed by the FW (NVM hold, late edge): delta > 1.5 periods -> OVERRUN */
-    if (a->have_sample && (uint32_t)(s->t_us - a->last_t_us) > a->period_us + a->period_us / 2u) {
-        g_fw.st.overrun = true;
+    /* OVERRUN = conversions missed BY THE FW (ICD §7.6 bit 7): only across the FW's own AFE hold
+     * (NVM operation, FW-NVM-003); a sensor stall (DOUT silent) is no FW loss (DEF-M1-02) */
+    if (g_fw.st.hold_gap) {
+        g_fw.st.hold_gap = false;
+        if (g_fw.st.hold_stream_on && a->have_sample &&     /* stream on DURING the hold */
+            (uint32_t)(s->t_us - a->last_t_us) > a->period_us + a->period_us / 2u) {
+            g_fw.st.overrun = true;
+        }
     }
     if (a->settle_left != 0u) {
         a->settle_left = (uint8_t)(a->settle_left - 1u);
@@ -115,6 +120,7 @@ void afe_rearm_after_hold(void)
 {
     uint32_t now = hal_time_us();
     CRIT_BEGIN(HAL_CRIT_DATA);
-    g_fw.afe.stale_ref_us = now;                 /* last_t_us kept: the gap -> OVERRUN */
+    g_fw.afe.stale_ref_us = now;                 /* no stale verdict from the hold itself */
+    g_fw.st.hold_gap = true;                     /* last_t_us kept: the hold gap -> OVERRUN */
     CRIT_END();
 }

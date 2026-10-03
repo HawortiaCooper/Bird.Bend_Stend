@@ -3,6 +3,8 @@
 (tests, portable use). Sessions (backend) never contain the GUI layout.
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/gui/settings.py @37c87471 (adapted: path, keys; no platformdirs).
+
+Implements: SW-RT-001 (layout persistence store), SW-PLT-001 (per-user GUI settings file)
 """
 from __future__ import annotations
 

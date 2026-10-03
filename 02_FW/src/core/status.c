@@ -51,7 +51,7 @@ void fw_flags(flags_in_t *f, uint32_t t_us)
     f->afe_stale = g_fw.afe.stale;
     f->afe_saturated = g_fw.afe.saturated;
     f->afe_rate_mismatch = g_fw.afe.rate.mismatch;
-    f->drv_pwr = !g_fw.p.drv.pwr_sense_enable;   /* M1: not sensed */
+    f->drv_pwr = !g_fw.boot_p.drv.pwr_sense_enable;   /* M1: not sensed; boot value (DEF-M1-01) */
 }
 
 void status_build(status_t *s)

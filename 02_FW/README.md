@@ -20,7 +20,9 @@ declared only for completeness).
 ## Commands (PowerShell, repo root)
 ```powershell
 . 02_FW\tools\host_env.ps1                         # CLion MinGW GCC 13.1 on PATH
-.venv\Scripts\pio test -d 02_FW -e native          # host suites (vectors read in place, gate on ICD/hash)
+.venv\Scripts\pio test -d 02_FW -e native -f "test_impl_*"   # Implementer A host suites (vectors in place)
+# unfiltered `-e native` also runs Validator E's test_val_* suites: run E's gen_val_vectors.py first
+# (they need 02_FW/.pio/val_vectors/; a missing file is a FAIL, OBS-M1-04)
 .venv\Scripts\pio run  -d 02_FW -e nucleo_f446re   # release image + sizes + tools/check_map.py
 .venv\Scripts\pio run  -d 02_FW -e nucleo_f446re_debug
 ```

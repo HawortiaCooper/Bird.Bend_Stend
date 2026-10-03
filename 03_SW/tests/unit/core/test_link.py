@@ -212,8 +212,8 @@ def test_payload_builder_may_drop_and_tx_error() -> None:
 def test_stop_confirmer_ack_and_unconfirmed() -> None:
     r = Rig(lambda c, s, p: None)
     seen: list = []
-    conf = StopConfirmer(r.ch, r.c, on_confirmed=lambda c, n: seen.append(("ok", n)),
-                         on_unconfirmed=lambda c, n: seen.append(("fail", n)), poll_status=lambda: seen.append("poll"),
+    conf = StopConfirmer(r.ch, r.c, on_confirmed=lambda c, n, *a: seen.append(("ok", n)),
+                         on_unconfirmed=lambda c, n, *a: seen.append(("fail", n)), poll_status=lambda: seen.append("poll"),
                          stream_on=lambda: False)
     fut, _t, _e = r.ch.send_priority(Cmd.HALT)
     conf.arm(Cmd.HALT, b"", fut, lambda: False)
@@ -230,7 +230,7 @@ def test_stop_confirmer_ack_and_unconfirmed() -> None:
     # with an ACK it confirms at once
     r2 = Rig()
     seen2: list = []
-    c2 = StopConfirmer(r2.ch, r2.c, on_confirmed=lambda c, n: seen2.append(n))
+    c2 = StopConfirmer(r2.ch, r2.c, on_confirmed=lambda c, n, *a: seen2.append(n))
     f2, _t, _e = r2.ch.send_priority(Cmd.PAUSE)
     c2.arm(Cmd.PAUSE, b"", f2, lambda: False)
     r2.run(3)
@@ -239,7 +239,7 @@ def test_stop_confirmer_ack_and_unconfirmed() -> None:
     # a FW indication confirms without ACK
     r3 = Rig(lambda c, s, p: None)
     seen3: list = []
-    c3 = StopConfirmer(r3.ch, r3.c, on_confirmed=lambda c, n: seen3.append(n))
+    c3 = StopConfirmer(r3.ch, r3.c, on_confirmed=lambda c, n, *a: seen3.append(n))
     f3, _t, _e = r3.ch.send_priority(Cmd.STOP, b"\x00")
     c3.arm(Cmd.STOP, b"\x00", f3, lambda: True)
     c3.arm(Cmd.STOP, b"\x00", f3, lambda: True)

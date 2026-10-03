@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""Validator E: shared vectors -> transient text files for the validator Unity suites (test_val_*).
+
+Independent of Implementer A's pre-script (02_FW/tools/gen_test_vectors.py) and A's test helpers:
+the JSON files are read IN PLACE (never copied into the repo) and translated here, with the
+Integrator's ref_codec tables and gen_params (sources of truth), into simple whitespace-separated
+lines under 02_FW/.pio/val_vectors/ (git-ignored build area). The C suites read these files at run
+time (path from $VAL_VEC_DIR, default .pio/val_vectors relative to 02_FW) and compare the count of
+executed cases with the `N` line (anti-silent-skip, FW_test_plan §1.1 principle 4).
+
+Gate (exit 1 = refuse to run): every vectors/*.json icd_version == PROTO_ICD_VERSION and
+param_dict_hash == PARAM_DICT_HASH of the generated FW headers.
+
+Extra validator oracle cases (units): binary64 left-to-right evaluation + round half away from zero
+(ICD §0.1) computed here for ties, negatives and large values that the shared vectors do not contain.
+
+    .venv\\Scripts\\python 02_FW\\test\\val_oracles\\gen_val_vectors.py [--out DIR]
+
+Verifies (test data for): IF-003, IF-004, IF-006, IF-010, FW-CMD-001, FW-CFG-003, SYS-003
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+import struct
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+FW = HERE.parents[1]                       # 02_FW
+ROOT = FW.parent
+TOOLS = ROOT / "00_System" / "tools"
+VEC = TOOLS / "vectors"
+sys.path.insert(0, str(TOOLS))
+import gen_params  # noqa: E402
+import ref_codec as rc  # noqa: E402
+
+
+def die(msg: str) -> None:
+    sys.stderr.write(f"gen_val_vectors: {msg}\n")
+    sys.exit(1)
+
+
+def c_define(path: Path, name: str) -> str:
+    m = re.search(r"#define\s+" + name + r"\s+(\S+)", path.read_text(encoding="utf-8"))
+    if not m:
+        die(f"{name} not in {path}")
+    return m.group(1)
+
+
+def hx(b: bytes | str) -> str:
+    if isinstance(b, str):
+        b = bytes.fromhex(b)
+    return b.hex().upper() if b else "-"
+
+
+def u32(v: int) -> int:
+    return int(v) & 0xFFFFFFFF
+
+
+# ------------------------------------------------------------------------------------------ params
+DICT = gen_params.load()
+PBYKEY = {p.key: p for p in DICT.params}
+PTCODE = {name: code for code, (name, _, _) in rc.PTYPE.items()}
+
+
+def raw_of(p, value) -> int:
+    """FW raw representation (params_gen.h): ints sign-extended to 32 bit, f32 = bits, enum code."""
+    if p.type == "f32":
+        return struct.unpack("<I", struct.pack("<f", float(value)))[0]
+    if p.type == "enum":
+        if isinstance(value, str):
+            return next(e.value for e in p.enum if e.name == value)
+        return int(value)
+    if p.type == "bool":
+        return 1 if value else 0
+    return u32(int(value))
+
+
+# ------------------------------------------------------------------------------------------ frames
+REQ_FIELDS = {   # decoded keys in the order of the C cmd_req_t member
+    "REBOOT": ["magic"], "GET_ALL_PARAMS": ["page"], "GET_PARAM": ["id"],
+    "SET_VALID": ["valid"], "HOME": ["flags"], "STOP": ["mode"],
+    "MOVE_ABS": ["target_um", "v_um_s", "a_um_s2"],
+    "JOG": ["v_um_s", "a_um_s2", "bound_um"],
+    "MOVE_UNTIL_LOAD": ["bound_um", "v_um_s", "a_um_s2", "raw_stop", "cmp"],
+}
+
+
+def entry_ints(e: dict) -> list:
+    code = PTCODE[e["type"]]
+    if isinstance(e["value"], str):            # marker such as INVALID_PADDING: wire not comparable
+        return [e["id"], code, "X"]
+    wire = rc.pvalue_pack(code, e["value"])
+    return [e["id"], code, struct.unpack("<I", wire.ljust(4, b"\0"))[0]]
+
+
+def info_ints(d: dict) -> list[int]:
+    b = d["build"].encode("ascii").ljust(16, b"\0")
+    uid = bytes.fromhex(d["uid"])
+    return ([d["proto_major"], d["proto_minor"], d["payload_version"], *d["fw_version"],
+             int(d["param_dict_hash"], 16)] + list(uid) + list(b) +
+            [d["param_count"], rc.names_to_bits(d["features"], rc.FEATURES)])
+
+
+BITS = {"flags": rc.DATA_FLAGS, "status": rc.DATA_STATUS, "faults": rc.FAULTS, "io": rc.IO,
+        "sys_flags": rc.SYS_FLAGS}
+ENUMS = {"motion_state": rc.MOTION_STATE, "home_phase": rc.HOME_PHASE, "halt_src": rc.SOURCE,
+         "reset_cause": rc.RESET_CAUSE, "pause_src": rc.SOURCE}
+
+
+def status_ints(d: dict) -> list[int]:
+    out = []
+    for k in rc.STATUS_FIELDS:      # same order as the C status_t declaration (verified in C)
+        v = d[k]
+        if k in BITS:
+            v = rc.names_to_bits(v, BITS[k])
+        elif k in ENUMS:
+            v = ENUMS[k].index(v) if isinstance(v, str) else int(v)
+        out.append(u32(int(v)))
+    return out
+
+
+def frames_lines(pv: dict) -> list[str]:
+    lines = []
+    for f in pv["frames"]:
+        name, kind = f["name"], f["kind"]
+        fr = f["frame_hex"]
+        if kind == "invalid":
+            lines.append(f"IV {name} {fr}")
+            continue
+        t = int(f["type"], 16)
+        seq, pl = f["seq"], f.get("payload_hex", "")
+        tn = f.get("type_name")
+        d = f.get("decoded", {})
+        if kind == "request":
+            cname = rc.CMD_NAME.get(t)
+            decodable = cname is not None and len(bytes.fromhex(pl)) == rc.REQ_LEN[cname]
+            if not decodable:
+                vals = []
+            elif tn == "SET_PARAM":
+                vals = entry_ints(d)
+            elif tn in REQ_FIELDS:
+                vals = [u32(d[k]) for k in REQ_FIELDS[tn]]
+            else:
+                vals = []
+            defined = 1 if decodable else 0
+            lines.append(f"RQ {name} {t} {seq} {hx(pl)} {fr} {defined} {len(vals)} " + " ".join(map(str, vals)))
+        elif kind == "response":
+            st = d.get("status")
+            if not d:
+                code, vals = 8, []                         # raw frame (max_len_frame)
+            elif st != "OK":
+                code, vals = 1, [rc.STATUS[st], d["detail"]]
+            elif tn == "GET_INFO":
+                code, vals = 2, info_ints(d["info"])
+            elif tn == "GET_STATUS":
+                code, vals = 3, status_ints(d["board_status"])
+            elif tn == "GET_ALL_PARAMS":
+                vals = [d["page"], d["page_count"], len(d["entries"])]
+                for e in d["entries"]:
+                    vals += entry_ints(e)
+                code = 4
+            elif tn in ("GET_PARAM", "SET_PARAM"):
+                code, vals = 5, entry_ints(d["entry"])
+            elif tn == "SET_VALID":
+                code, vals = 6, [d["t_us"]]
+            elif tn == "ENABLE":
+                code, vals = 7, [d["settle_ms"]]
+            elif tn == "FAULT_CLEAR":
+                code, vals = 7, [rc.names_to_bits(d["cleared"], rc.FAULTS)]
+            else:
+                code, vals = 0, []
+            canon = f.get("canonical_payload_hex") if f.get("reencode") is False else None
+            re_ok = 0 if canon is not None else 1
+            lines.append(f"RS {name} {t} {seq} {re_ok} {hx(canon if canon is not None else pl)} {fr} {code} "
+                         f"{len(vals)} " + " ".join(map(str, vals)))
+        elif kind == "async" and tn == "DATA":
+            vals = [d["t_us"], d["payload_version"], rc.names_to_bits(d["flags"], rc.DATA_FLAGS),
+                    u32(d["afe_raw"]), u32(d["setpoint_um"]), d["frame_seq"],
+                    rc.names_to_bits(d["status"], rc.DATA_STATUS)]
+            lines.append(f"AD {name} {t} {seq} {hx(pl)} {fr} " + " ".join(map(str, vals)))
+        elif kind == "async" and tn == "EVENT":
+            vals = [d["t_us"], rc.EVENT[d["code"]], d["arg"], u32(d["value"]), u32(d["value2"])]
+            lines.append(f"AE {name} {t} {seq} {hx(pl)} {fr} " + " ".join(map(str, vals)))
+        else:
+            die(f"unhandled frame kind {kind}/{tn} ({name})")
+    return lines
+
+
+def streams_lines(pv: dict) -> list[str]:
+    out = []
+    for s in pv["streams"]:
+        c = s["expect_counters"]
+        before = s.get("expect_frames_before_timeout")
+        bf = "-1" if before is None else " ".join([str(len(before))] + [hx(x) for x in before])
+        out.append(f"ST {s['name']} {len(s['chunks_hex'])} " + " ".join(hx(x) for x in s["chunks_hex"]) +
+                   f" {1 if s['idle_timeout_at_end'] else 0} {bf} "
+                   f"{len(s['expect_frames_hex'])} " + " ".join(hx(x) for x in s["expect_frames_hex"]) +
+                   f" {c['frames_ok']} {c['crc_errors']} {c['len_errors']} {c['timeout_drops']}")
+    return out
+
+
+def corpus_lines(n: int, seed: int) -> list[str]:
+    """Differential parser corpus (TC-IF-003-01): random streams, expectation = ref_codec.FrameParser."""
+    import random
+    rnd = random.Random(seed)
+    good = [bytes.fromhex(f["frame_hex"]) for f in json.loads((VEC / "protocol_vectors.json").read_text())["frames"]
+            if f["kind"] != "invalid"]
+    out = []
+    for _ in range(n):
+        parts = []
+        for _k in range(rnd.randint(1, 4)):
+            r = rnd.random()
+            if r < 0.35:
+                parts.append(rnd.choice(good))
+            elif r < 0.5:                                  # random valid frame
+                ln = rnd.choice([0, 1, 3, 7, 12, 26, 160])
+                parts.append(rc.encode_frame(rnd.randrange(256), rnd.randrange(256), rnd.randbytes(ln)))
+            elif r < 0.65:                                 # corrupted copy (one bit)
+                b = bytearray(rnd.choice(good))
+                i = rnd.randrange(len(b))
+                b[i] ^= 1 << rnd.randrange(8)
+                parts.append(bytes(b))
+            elif r < 0.75:                                 # truncated
+                b = rnd.choice(good)
+                parts.append(b[:rnd.randrange(1, len(b))])
+            elif r < 0.85:                                 # noise incl. sync bytes
+                parts.append(bytes(rnd.choice([0xA5, 0x5A, 0x00, 0xFF, rnd.randrange(256)])
+                                   for _ in range(rnd.randint(1, 12))))
+            elif r < 0.92:                                 # bad length header
+                parts.append(bytes([0xA5, 0x5A, rnd.randrange(256), 0]) +
+                             int(rnd.choice([161, 200, 0xFFFF])).to_bytes(2, "little"))
+            else:
+                parts.append(bytes([0xA5]))
+        data = b"".join(parts)
+        # split into chunks and timeout events
+        ev = []
+        i = 0
+        while i < len(data):
+            k = rnd.randint(1, max(1, len(data) - i))
+            ev.append(data[i:i + k])
+            i += k
+            if rnd.random() < 0.15:
+                ev.append(None)                            # idle timeout
+        if rnd.random() < 0.5:
+            ev.append(None)
+        ps = rc.FrameParser()
+        frames = []
+        for e in ev:
+            frames += ps.idle_timeout() if e is None else ps.feed(e)
+        c = ps.counters()
+        out.append("PC " + str(len(ev)) + " " + " ".join("T" if e is None else e.hex().upper() for e in ev) +
+                   f" {len(frames)} " + " ".join(f.raw.hex().upper() for f in frames) +
+                   f" {c['frames_ok']} {c['crc_errors']} {c['len_errors']} {c['timeout_drops']}")
+    return out
+
+
+# ------------------------------------------------------------------------------------------ check
+STATE_ORDER = ["motion_state", "enabling_left_ms", "homed", "pos_um", "estop_latched",
+               "estop_input_open", "estop_closed_ms", "halt_latched", "stop_btn_active",
+               "stop_btn_released_ms", "faults", "fault_causes", "limit_start", "limit_end",
+               "afe_stale", "afe_saturated", "raw", "drv_power", "alm_active", "nvm_record_valid",
+               "paused"]
+
+
+def check_lines(cv: dict) -> list[str]:
+    if cv.get("state_schema") != 2:
+        die(f"check_vectors state_schema {cv.get('state_schema')} != 2 (validator mapping)")
+    base = cv["state_defaults"]
+    if sorted(base) != sorted(["params"] + STATE_ORDER):
+        die(f"check_vectors state keys changed: {sorted(base)}")
+    out = []
+    for v in cv["vectors"]:
+        st = dict(base)
+        st.update(v["state"])
+        unknown = set(v["state"]) - set(base)
+        if unknown:
+            die(f"{v['name']}: unknown state keys {unknown}")
+        ints = []
+        for k in STATE_ORDER:
+            x = st[k]
+            if k == "motion_state":
+                x = rc.MOTION_STATE.index(x)
+            elif k in ("faults", "fault_causes"):
+                x = rc.names_to_bits(x, rc.FAULTS)
+            ints.append(u32(int(x)))
+        prm = []
+        for key, val in st["params"].items():
+            p = PBYKEY[key]
+            prm += [p.id, raw_of(p, val)]
+        rq, ex = v["request"], v["expect"]
+        pa = ex.get("paused_after")
+        out.append(f"CV {v['name']} {int(rq['type'], 16)} {rq['seq']} {hx(rq['payload_hex'])} "
+                   f"{rc.STATUS[ex['status']]} {ex['detail']} {ex.get('response_frame_hex') or '-'} "
+                   f"{-1 if pa is None else int(bool(pa))} " + " ".join(map(str, ints)) +
+                   f" {len(prm) // 2} " + " ".join(map(str, prm)))
+    return out
+
+
+# ------------------------------------------------------------------------------------------ units
+def round_half_away(x: float) -> int:
+    """C99 round() on a binary64 value (exact: no x + 0.5 double rounding)."""
+    a = abs(x)
+    r = math.floor(a)
+    if a - r >= 0.5:
+        r += 1
+    return int(-r if x < 0 else r)
+
+
+def f32(x: float) -> float:
+    return struct.unpack("<f", struct.pack("<f", x))[0]
+
+
+def um_to_steps(um: int, spm: float) -> int:
+    return round_half_away(float(um) * spm / 1000.0)
+
+
+def steps_to_um(steps: int, spm: float) -> int:
+    return round_half_away(float(steps) * 1000.0 / spm)
+
+
+def rate_cap(rate: int, spm: float) -> int:
+    return int(math.floor(float(rate) * 1000.0 / spm))
+
+
+def units_lines(uv: dict) -> list[str]:
+    out = []
+    for e in uv["um_to_steps"]:
+        out.append(f"UM {int(e['spm_f32_hex'], 16)} {e['um']} {e['steps']} S")
+    for e in uv["steps_to_um"]:
+        out.append(f"SU {int(e['spm_f32_hex'], 16)} {e['steps']} {e['um']} S")
+    for e in uv["rate_cap"]:
+        out.append(f"RC {int(e['spm_f32_hex'], 16)} {e['max_step_rate_hz']} {e['rate_cap_um_s']} S")
+    # validator oracle cases (V): ties, negatives, extremes inside the int32 result range
+    spms = [100.0, 160.0, 333.3333, 800.0, 1234.5678, 4000.0, 6400.0, 100000.0]
+    ums = [0, 1, -1, 2, -2, 3, 5, -5, 625, -625, 1875, -1875, 999, 1001, 123456, -123456, 400000,
+           -10000, 2147483, -2147483, 21474836, -21474836]
+    steps = [0, 1, -1, 2, 3, -3, 7, 8, -8, 1234567, -1234567, 320000000, -320000000, 2147483647,
+             -2147483648]
+    for s in spms:
+        sp = f32(s)
+        bits = struct.unpack("<I", struct.pack("<f", sp))[0]
+        for um in ums:
+            st = um_to_steps(um, sp)
+            if -2**31 <= st < 2**31:
+                out.append(f"UM {bits} {um} {st} V")
+        for k in steps:
+            um = steps_to_um(k, sp)
+            if -2**31 <= um < 2**31:
+                out.append(f"SU {bits} {k} {um} V")
+        # exact ties: steps = n + 0.5 for um = (2n+1) * 500 / spm when representable
+        for n in range(-3, 4):
+            um = (2 * n + 1) * 500
+            st = um_to_steps(um, sp)
+            out.append(f"UM {bits} {um} {st} V")
+        for rate in (100, 999, 50000, 100000):
+            out.append(f"RC {bits} {rate} {rate_cap(rate, sp)} V")
+    return out
+
+
+def bits_lines() -> list[str]:
+    """Bit positions (ICD §7.6 via ref_codec tables) for the flags/io/sys composition suite."""
+    out = []
+    for tab, names in (("DF", rc.DATA_FLAGS), ("DS", rc.DATA_STATUS), ("IO", rc.IO), ("SY", rc.SYS_FLAGS)):
+        for i, n in enumerate(names):
+            out.append(f"B {tab} {n} {i}")
+    return out
+
+
+import os  # noqa: E402
+CORPUS_N = int(os.environ.get("VAL_CORPUS_N", "100000"))
+CORPUS_SEED = int(os.environ.get("VAL_CORPUS_SEED", "1"))
+
+
+# ------------------------------------------------------------------------------------------ main
+def main() -> int:
+    out_dir = FW / ".pio" / "val_vectors"
+    if "--out" in sys.argv:
+        out_dir = Path(sys.argv[sys.argv.index("--out") + 1])
+    gen = FW / "src" / "gen"
+    icd = c_define(gen / "proto_gen.h", "PROTO_ICD_VERSION").strip('"')
+    h = int(c_define(gen / "params_gen.h", "PARAM_DICT_HASH").rstrip("uUlL"), 16)
+    jsons = {n: json.loads((VEC / f"{n}.json").read_text(encoding="utf-8"))
+             for n in ("protocol_vectors", "check_vectors", "units_vectors")}
+    for n, d in jsons.items():
+        if d["icd_version"] != icd or int(d["param_dict_hash"], 16) != h:
+            die(f"{n}.json ({d['icd_version']}, {d['param_dict_hash']}) != FW headers ({icd}, 0x{h:08X})")
+    pv, cv, uv = jsons["protocol_vectors"], jsons["check_vectors"], jsons["units_vectors"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    files = {
+        "crc.txt": [f"CR {c['name']} {hx(c['input_hex'])} {int(str(c['crc']), 0)}" for c in pv["crc16"]],
+        "frames.txt": frames_lines(pv),
+        "streams.txt": streams_lines(pv),
+        "check.txt": check_lines(cv),
+        "units.txt": units_lines(uv),
+        "corpus.txt": corpus_lines(CORPUS_N, CORPUS_SEED),
+        "bits.txt": bits_lines(),
+    }
+    counts = {}
+    for name, lines in files.items():
+        hdr = [f"H {icd} {h}", f"N {len(lines)}"]
+        (out_dir / name).write_text("\n".join(hdr + lines) + "\n", encoding="ascii", newline="\n")
+        counts[name] = len(lines)
+    # JSON counts for the report (anti-skip cross-check)
+    json_counts = {"crc16": len(pv["crc16"]), "frames": len(pv["frames"]), "streams": len(pv["streams"]),
+                   "check": len(cv["vectors"]), "units_shared": uv["um_to_steps"] and
+                   len(uv["um_to_steps"]) + len(uv["steps_to_um"]) + len(uv["rate_cap"])}
+    (out_dir / "counts.json").write_text(json.dumps({"files": counts, "json": json_counts}, indent=1))
+    print(f"val vectors -> {out_dir}: {counts}; json {json_counts}; corpus seed {CORPUS_SEED}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

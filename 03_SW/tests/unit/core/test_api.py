@@ -84,3 +84,11 @@ def test_bit_names_and_device_features() -> None:
     info = api.DeviceInfo(1, 0, 1, (0, 1, 0), 0, "00" * 12, "b", 48,
                           int(pg.Features.AFE | pg.Features.NVM))
     assert info.features == frozenset({"AFE", "NVM"})
+
+
+@pytest.mark.req("SW-RT-002")
+def test_bit_channel_prefix_and_stop_confirmation_exported() -> None:
+    """GRQ-B-20: the status-bit channel key prefix is part of the API; SWD-M1-06 payload type."""
+    assert api.BIT_PREFIX == "bit." and api.bit_key("PAUSED") == "bit.paused"
+    c = api.StopConfirmation("HALT", "gui", 2, 5, False)
+    assert c.cmd == "HALT" and not c.confirmed

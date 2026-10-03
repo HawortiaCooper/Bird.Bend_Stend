@@ -29,9 +29,11 @@ from bend_stand.core.model import (
     InputSpec, Issue, IssueSeverity, LatestSample, LimitConfig, LinkState, LinkStateChange, LinkStats,
     LinkStatus, MotionKind, MotionLimits, MotionStatus, MoveDone, MoveOutcome, OperationStatus, PlotSnapshot,
     RecordingStatus, ResumeIgnored, SafetyStatus, SeqStatus, SeriesMinMax, SessionSettings, Severity,
-    StopResult, StreamStatus, TareStatus, TestMarks, ThresholdState, Token, TravelDiffState, VerifyReport,
+    StopConfirmation, StopResult, StreamStatus, TareStatus, TestMarks, ThresholdState, Token, TravelDiffState, VerifyReport,
     WriteItem, WriteStatus, XYSnapshot, bit_names,
 )
+
+from bend_stand.core.channels import BIT_PREFIX, bit_key  # noqa: E402  status-bit channel keys (GRQ-B-20)
 
 #: A motion ticket: a future resolved with a ``MoveOutcome`` (SW_design §5.4).
 MoveTicket = Future  # Future[MoveOutcome]
@@ -288,7 +290,7 @@ __all__ = [
     "LimitConfig", "LinkState", "LinkStateChange", "LinkStats", "LinkStatus", "MotionKind", "MotionLimits",
     "MotionStatus", "MoveDone", "MoveOutcome", "OperationStatus", "PlotSnapshot", "RecordingStatus",
     "ResumeIgnored", "SafetyStatus", "SeqStatus", "SeriesMinMax", "SessionSettings", "Severity", "StopResult",
-    "StreamStatus", "TareStatus", "TestMarks", "ThresholdState", "Token", "TravelDiffState", "VerifyReport",
+    "StopConfirmation", "BIT_PREFIX", "bit_key", "StreamStatus", "TareStatus", "TestMarks", "ThresholdState", "Token", "TravelDiffState", "VerifyReport",
     "WriteItem", "WriteStatus", "XYSnapshot", "bit_names",
     # errors
     "BendStandError", "CalibrationError", "CommandNotExecuted", "CommandOutcomeUnknown", "CommandTimeout",

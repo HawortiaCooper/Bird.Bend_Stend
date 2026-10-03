@@ -411,7 +411,7 @@ def test_retry_class_and_block_paused() -> None:
     ("SET_PARAM", "E_TYPE", 0x0104, "afe.settle_discard"), ("MOVE_ABS", "E_BUSY", 1, "moving"),
     ("ENABLE", "E_BUSY", 2, "settling"), ("MOVE_ABS", "E_BUSY", 9, "busy"),
     ("MOVE_ABS", "E_STATE", 0x0402, "press Resume"), ("ESTOP_CLEAR", "E_CAUSE_ACTIVE", 0xFFFF, "still open"),
-    ("HALT_CLEAR", "E_CAUSE_ACTIVE", 0xFFFF, "STOP button"), ("HALT_CLEAR", "E_CAUSE_ACTIVE", 30, "wait 30"),
+    ("HALT_CLEAR", "E_CAUSE_ACTIVE", 0xFFFF, "STOP input"), ("HALT_CLEAR", "E_CAUSE_ACTIVE", 30, "wait 30"),
     ("FAULT_CLEAR", "E_CAUSE_ACTIVE", 8, "LIMIT_WIRING"), ("HOME", "E_CONFIRM", 0, "confirm"),
     ("SAVE_PARAMS", "E_NVM", 2, "erase"), ("SAVE_PARAMS", "E_NVM", 9, "NVM error"),
     ("MOVE_UNTIL_LOAD", "E_INTERNAL", 1, "not supported"), ("PING", "E_INTERNAL", 7, "internal"),

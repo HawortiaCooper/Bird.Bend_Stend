@@ -1,6 +1,6 @@
 # Project status
 
-**Phase:** **P2 Implementation — M1 (Link & skeleton) in progress** (P1 gate passed 2026-10-03, D-35) · baseline SRS v0.4.1, ICD v0.4.1, params dict v3 (0xF0376293) · D-06 in force (no hardware) · **Date:** 2026-10-03
+**Phase:** P2 Implementation — **M1 ACCEPTED WITH CONDITIONS (Orchestrator gate 2026-10-04)** · M1 close-out round (CR-01, ICD/SRS v0.5, CR-02) → then M2 (Sensor & motion) · D-06 in force · **Date:** 2026-10-04
 
 ## P0 gate (Orchestrator, 2026-10-03) — ACCEPTED
 R1–R4 written; conflicts resolved: (a) Stefan step-timer error: checked `Stefan/FW/stanok/Core/Src/main.c:136-158` + `tim.c:45` → TIM2 84 MHz / (9+1) = 8.4 MHz vs assumed 10 MHz → 16 % slow (R1/R4 correct, R2's 6.7 % ignores the prescaler); irrelevant for us (D-09). (b) Step timing: SRS takes R2's conservative defaults (≥ 10 µs high/low, ≤ 50 kHz, DIR setup 20 µs) as parameters; R4's TIM2 PWM-mode-2 scheme stays (CCR scaled). Key safety finding R2 §8: motor force ≈ 9 kN ≫ cell safe overload 2.35 kN → FW per-sample load limit is safety-critical.
@@ -81,3 +81,23 @@ M1-gate queue: IF-C-M1-02 meaning of ALM/PEND/DRV_PWR bits while FEAT_DRV_SIGNAL
 - M1-gate queue (from D): GRQ-B-20 bit-channel prefix in core.api · GF-18 latch source NONE → None · GF-19 HALT clear hint mentions STOP button (CR-01) · GF-20 status() rebuild per call (relevant for NFR-001 at M3) · GF-21 ClearResult.cleared after HALT_CLEAR.
 - **Incident 2026-10-03 (Implementer B):** a PowerShell stop filter `*fw_twin*` force-killed 3 Thrust_Stand_HAW twin processes (python PIDs 8224, 34160, 37812 + fw_twin.exe children; command lines pointed at old pytest temp dirs → probably orphans). Nothing written to Thrust_Stand_HAW. Corrective action: role rule "stop only processes you started, by recorded PID" added to all agents. Reported to the PO.
 | B SW backend | WP-B0…B11 done, WP-B12 partial (simple sim motion); SW_design v0.3.2 as-built; unit 1869 passed fixed + random; 509 vectors replayed ×2; 3000-case differential 0 divergences; branch coverage 93 %; headless smoke vs sim and vs FW twin (80.00 SPS, 0 errors) | see below |
+
+## M1 gate verification
+- **Validator E (FW): NO-GO as delivered** — 45 M1 TCs: 43 PASS, 2 FAIL (DEF-M1-01 Medium `drv.pwr_sense_enable` reboot-required param effective immediately; DEF-M1-02 Low OVERRUN on DOUT stall / stream-off gaps). Becomes GO WITH CONDITIONS (C1 target-only HG items open under D-06; C2 motion parts re-run at M2; C3 CR-01; C4 OBS-M1-01) once A's fixes pass E's strict-xfail tests. Orchestrator chose **fix, no waiver** → A resumed 2026-10-03. Validator suites: Unity 6 suites 24/24 ×2, twin 23 + 2 xfail ×2, static 13/13.
+- Gate queue additions: OBS-M1-01 commands during SAVE answered after the flash op (~0.5 s), RX ring may overflow if the PC keeps sending → SRS/ICD exemption + SW quiesce during SAVE (C, B, Orchestrator) · OBS-M1-02 twin delivers bytes injected during a flash stall only at stall end (C) · OBS-M1-03 PARAMS_DEFAULTED on LOAD (ICD vs FW, C) · OBS-M1-05 unit conversion int32 saturation undefined (C) · B: ref_cmdcheck ESTOP_CLEAR with open input but no latch (C).
+- **Validator E re-test: GO WITH CONDITIONS** (C1 target-only open under D-06; C2 motion parts at M2; C3 CR-01; C4 OBS-M1-01 SAVE-time responses exemption before M3; C5 DEF-M1-03/04 Low OVERRUN edge cases). DEF-M1-01/02 closed. Orchestrator: fix DEF-M1-03/04 + OBS-M1-08 now (A resumed), no waiver.
+- **Validator E re-test 2: FINAL GO WITH CONDITIONS (C1–C4)** — DEF-M1-01…04 and OBS-M1-08 closed; native 96/96, val Unity 24/24 ×2, val twin 27/27 ×2 (no xfail left), static 13/13, release flash 24 820 B / RAM 7 048 B.
+- **Validator F (SW): NOT ACCEPTED** — 2453 tests ×3 runs identical (2433 passed, 4 skipped, 16 xfail = 15 open-defect strict-xfail + IF-C-M1-02); validation suite 373 tests; coverage calc 100 %, io 96.8 %, core 95.6 %, gui 87 %. Blocking: SWD-M1-01 (S2) stop frames not sent while link LOST; SWD-M1-02 (S1 latent) stale MOVING=0 confirms STOP, lost STOP never repeated. S3: -03 clears sent in read-only state, -04 clears via job queue (Orchestrator: clears on priority path per D-34, RESUME stays normal lane), -05 latch source delay, -06 stop.confirmed payload, -08 BUSY write set, -09 recorder same-second restart; S4: -07 tags, -10 banner text, -11 sim timestamp step. → B and D resumed to fix all; F re-verifies.
+
+## M1 gate (Orchestrator, 2026-10-04) — ACCEPTED WITH CONDITIONS
+Evidence: FW_test_report_M1 (Validator E: **GO WITH CONDITIONS**, 45/45 M1 TCs, DEF-M1-01…04 closed); SW_test_report_M1 v1.1 (Validator F: **ACCEPTED WITH CONDITIONS**, SWD-M1-01…11 closed, 2479 tests ×3 identical); Orchestrator re-run: full 03_SW suite 2474 passed / 4 skipped / 1 xfail, FW native 96/96 (A, E), release build flash 24 820 B / RAM 7 048 B.
+| Condition | Owner | Due |
+|---|---|---|
+| E-C1 target-only (+H) parts open under D-06 | E | HW gate |
+| E-C2 motion/input parts of TC-FW-NVM-003-01, TC-IF-005-01, TC-FW-STR-003-01 | E | M2 gate |
+| E-C3 / F-MC-3 / F-MC-5: CR-01 (D-36) + D-37 into SRS v0.5, ICD v0.5, pinout, test plans; IF-C-M1-02 rule | Orchestrator, C, A, E, F | M2 entry |
+| E-C4 OBS-M1-01 SAVE exemption (D-37 a) + SW quiesce during SAVE | C (ICD), B | M2 entry |
+| F-MC-1 PO demos DM-02 fresh install, DM-05 NVM buttons, SYS-008 walk-through | PO + F | M2 exit |
+| F-MC-2 reference PC spec | PO | M3 entry |
+| F-MC-4 remove StopConfirmation string shim; OBS-M1-R1 order STOP confirmation by FW t_us (D-37 d) | B | M2 entry |
+| CR-02 HW-gate evidence without scope (on-chip measurement) | E (+A pinout loopback) | before HW gate |

@@ -55,6 +55,31 @@ def folder_name(wall_iso: str, specimen: str = "", number: str = "") -> str:
     return "_".join(parts)
 
 
+def unique_folder(root: Path, name: str) -> Path:
+    """Create ``root/name`` or, if it exists (stop + restart within the same second, SWD-M1-09), ``name_2``, …
+    Raises ``RecorderError`` with a user-level text (never the raw OS message)."""
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RecorderError(f"cannot create the recordings folder {root} ({_errname(exc)})") from exc
+    for i in range(1, 1000):
+        folder = root / (name if i == 1 else f"{name}_{i}")
+        try:
+            folder.mkdir(exist_ok=False)
+            return folder
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise RecorderError(f"cannot create the recording folder {folder.name} ({_errname(exc)})") from exc
+    raise RecorderError(f"too many recordings named {name}")
+
+
+def _errname(exc: OSError) -> str:
+    import errno as _errno  # noqa: PLC0415
+
+    return _errno.errorcode.get(exc.errno or 0, "OS error") if exc.errno else "OS error"
+
+
 @dataclass
 class _EventRow:
     t_host_ns: int
@@ -85,8 +110,7 @@ class Recorder:
         if self.state == "RECORDING":
             raise RecorderError("already recording")
         wall = wall_utc_iso(self.clock)
-        folder = Path(root) / folder_name(wall, specimen, number)
-        folder.mkdir(parents=True, exist_ok=False)
+        folder = unique_folder(Path(root), folder_name(wall, specimen, number))
         self.folder = folder
         self.rows = self.rows_lost = 0
         self.failure = None

@@ -390,3 +390,73 @@ def test_link_widget(window, connected_fake, qtbot) -> None:
     assert window.link_button.text() == "Disconnect"
     window.link_button.click()
     assert "disconnect_async" in connected_fake.call_names()
+
+
+# --------------------------------------------------------------------------------------------- M1 gate fixes
+
+@pytest.mark.req("SW-STOP-002", "SAF-SW-005")
+@pytest.mark.parametrize("shape", ["str", "object"])
+@pytest.mark.parametrize("cmd", ["HALT", "PAUSE", "STOP"])
+def test_confirmation_banner_names_the_command(window, connected_fake, qtbot, shape, cmd) -> None:
+    """Verifies: SW-STOP-002, SAF-SW-005 (SWD-M1-06) — stop.confirmed / stop.unconfirmed name the command actually
+    sent, whether the payload is the bare command name (M1 backend) or an object with ``.cmd``."""
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Confirmation:                      # shape of B's announced dataclass (cmd, source, attempts, t_ns)
+        cmd: str
+        source: str
+        attempts: int
+        t_ns: int
+
+    def payload():
+        return cmd if shape == "str" else Confirmation(cmd, "app-shortcut", 3, 0)
+
+    if cmd == "HALT":
+        window._on_app_halt()
+    else:
+        connected_fake.events.emit("stop.issued", StopResult(cmd, "toolbar", True))
+    connected_fake.events.emit("stop.confirmed", payload())
+    qtbot.waitUntil(lambda: window.stop_banner.recent.state == "confirmed", timeout=2000)
+    assert window.stop_banner.recent.cmd == cmd
+    connected_fake.events.emit("stop.unconfirmed", payload())
+    qtbot.waitUntil(lambda: window.stop_banner.recent.state == "unconfirmed", timeout=2000)
+    assert window.stop_banner.recent.cmd == cmd
+    assert window.stop_banner.top_text().startswith(f"{cmd} NOT CONFIRMED")
+
+
+@pytest.mark.req("SAF-SW-003", "SAF-SW-005")
+def test_link_lost_says_stop_sent_only_after_a_sent_stop(window, connected_fake, qtbot) -> None:
+    """Verifies: SAF-SW-003, SAF-SW-005 (SWD-M1-10) — "LINK LOST – STOP sent" only when a STOP was actually sent;
+    otherwise "LINK LOST" without the claim; a STOP that was not sent never counts."""
+    from bend_stand.core.api import LinkState
+    st = connected_fake.status()
+    connected_fake.set_status(link=LinkStatus(LinkState.LOST, "timeout", "sim", st.link.compat, st.link.info))
+    tick(window)
+    texts = [r.text for r in window.stop_banner.rows]
+    assert any(t.startswith("LINK LOST") for t in texts) and not any("STOP sent" in t for t in texts)
+    connected_fake.events.emit("stop.issued", StopResult("STOP", "link-loss", False, reason="link lost"))
+    qtbot.waitUntil(lambda: window.stop_banner.recent is not None, timeout=2000)
+    tick(window)
+    assert not any("LINK LOST – STOP sent" in r.text for r in window.stop_banner.rows)
+    connected_fake.events.emit("stop.issued", StopResult("STOP", "link-loss", True))
+    qtbot.waitUntil(lambda: window.stop_banner.recent.sent, timeout=2000)
+    tick(window)
+    assert any(r.text.startswith("LINK LOST – STOP sent") for r in window.stop_banner.rows)
+
+
+@pytest.mark.req("SW-STOP-001", "SAF-SW-005")
+def test_gui_texts_name_no_physical_stop_button(window, connected_fake) -> None:
+    """Verifies: SW-STOP-001, SAF-SW-005 (D-36 / CR-01) — GUI-owned operator texts point to the red E-stop, never to
+    a physical STOP/BREAK button (the backend's clear hints are shown verbatim and tracked as GF-19 for B)."""
+    from bend_stand.gui import indicator_map as imap
+    from bend_stand.gui.dialogs.confirm_dialog import TEXTS
+    from bend_stand.gui.widgets.stop_banner import E_STOP_HINT, link_lost_text
+    from bend_stand.gui.widgets.stop_button import STOP_TOOLTIP
+    texts = [STOP_TOOLTIP, imap.KL01_TEXT, E_STOP_HINT, link_lost_text(None, 0.0)]
+    texts += [t for v in TEXTS.values() for t in v if t]
+    for t in texts:
+        import re
+        low = t.lower()
+        assert "stop/break" not in low and "physical stop" not in low, t
+        assert not re.search(r"(?<!e-)stop button", low), t          # "E-stop button" is the D-36 path

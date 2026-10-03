@@ -36,9 +36,11 @@ from bend_stand.core.link import (
 )
 from bend_stand.core.liveness import LivenessMonitor
 from bend_stand.core.model import (
-    BoardStatus, ClearResult, Compat, DeviceInfo, LinkState, LinkStateChange, LinkStats, StopResult, ThresholdState,
+    BoardStatus, ClearResult, Compat, DeviceInfo, LinkState, LinkStateChange, LinkStats, StopConfirmation,
+    StopResult, ThresholdState,
     VerifyReport, WriteItem, WriteStatus, bit_names,
 )
+from bend_stand.core.observers import ReleasingFuture
 from bend_stand.core.params import ParamStore, check_edits, normalise, write_plan
 from bend_stand.io import protocol as P
 from bend_stand.io.framing import Frame
@@ -96,7 +98,10 @@ class Device:
         # latest FW indications (DATA, then STATUS)
         self.last_flags = 0
         self.last_status = 0
+        self.last_flags_ns = 0                       # receive stamp of the frame/STATUS that set last_flags
         self.last_data_ns: int | None = None
+        self.halt_src_ev: int | None = None          # latch sources from EVENT HALT_SET / PAUSED (SWD-M1-05)
+        self.pause_src_ev: int | None = None
         self.event_counts: dict[int, int] = {}
         self._user_disconnected = True
         self._poll_pending: Any = None
@@ -175,6 +180,7 @@ class Device:
             self.last_flags = fr.payload[5]
             self.last_status = struct.unpack_from("<H", fr.payload, 16)[0]
             self.last_data_ns = fr.t_ns
+            self.last_flags_ns = fr.t_ns
             self._data_loss_stop_sent = False
         cb = self.on_async
         if cb is not None:
@@ -283,6 +289,7 @@ class Device:
         self.board, self.board_ns = st, t_ns
         if self.last_data_ns is None or t_ns >= self.last_data_ns:
             self.last_flags, self.last_status = st.flags, st.status
+            self.last_flags_ns = t_ns
         self.stream_on = bool(st.sys_flags & pg.SysFlags.STREAM_ON)
         self.events.publish("device.status", st)
 
@@ -360,9 +367,13 @@ class Device:
         if errors:
             items = tuple(WriteItem(k, v, None, WriteStatus.NOT_ATTEMPTED, text="check failed") for k, v in edits.items())
             return VerifyReport(items, issues=tuple(issues))
-        plan = write_plan(values, edits)
+        busy = {i.key for i in issues if i.code == "MOVING" and i.key is not None}
+        plan = write_plan(values, {k: v for k, v in edits.items() if k not in busy})
         results: dict[str, WriteItem] = {k: WriteItem(k, edits[k], values.get(k), WriteStatus.UNCHANGED)
                                          for k in edits}
+        for k in busy:                               # not moving_ok while moving: BUSY without sending (§5.3)
+            results[k] = WriteItem(k, edits[k], values.get(k), WriteStatus.BUSY,
+                                   text="cannot be changed while the axis moves")
         todo = list(plan)
         while todo:
             again: list[tuple[str, Any]] = []
@@ -496,64 +507,90 @@ class Device:
         """Newest (flags, status) from DATA or GET_STATUS."""
         return self.last_flags, self.last_status
 
-    def _priority_stop(self, cmd: Cmd, payload: bytes, source: str, confirmed_by: Callable[[], bool]) -> StopResult:
-        ch, conf = self.channel, self.confirmer
-        if ch is None or conf is None or not self.connected:
+    def _priority_stop(self, cmd: Cmd, payload: bytes, source: str,
+                       indication: Callable[[int, int], bool]) -> StopResult:
+        """Write STOP / HALT / PAUSE on the priority path whenever a link is open — in every link state incl.
+        DEGRADED, LOST and CONNECTING (SWD-M1-01, IF-011; the FW→PC direction may be the broken one). Arms the
+        CONFIRM repetition: confirmed only by the ACK or by the FW indication in a DATA / STATUS **received after
+        the write** (SWD-M1-02, ICD §9.3)."""
+        ch, conf, tr = self.channel, self.confirmer, self.transport
+        if ch is None or conf is None or tr is None or not tr.is_open:
             res = StopResult(cmd.name, source, False, None, "not connected")
             self.events.publish("stop.issued", res)
             return res
         ch.bump_epoch()
         fut, t, err = ch.send_priority(cmd, payload)
-        if err is not None:
-            res = StopResult(cmd.name, source, False, None, err)
+        if err is not None or t is None:
+            res = StopResult(cmd.name, source, False, None, err or "not written")
         else:
-            conf.arm(int(cmd), payload, fut, confirmed_by, source)
+            t_sent = t
+
+            def confirmed() -> bool:
+                return self.last_flags_ns > t_sent and indication(self.last_flags, self.last_status)
+            conf.arm(int(cmd), payload, fut, confirmed, source)
             res = StopResult(cmd.name, source, True, t)
         self.events.publish("stop.issued", res)
         return res
 
     def stop(self, mode: pg.StopMode = pg.StopMode.IMMEDIATE, source: str = "user") -> StopResult:
         return self._priority_stop(Cmd.STOP, bytes([int(mode)]), source,
-                                   lambda: not self.latest()[0] & pg.DataFlags.MOVING and self._fresh_after_send())
+                                   lambda f, s: not f & pg.DataFlags.MOVING)
 
     def halt(self, source: str = "user") -> StopResult:
-        return self._priority_stop(Cmd.HALT, b"", source, lambda: bool(self.latest()[0] & pg.DataFlags.HALT))
+        return self._priority_stop(Cmd.HALT, b"", source, lambda f, s: bool(f & pg.DataFlags.HALT))
 
     def pause(self, source: str = "user") -> StopResult:
-        return self._priority_stop(Cmd.PAUSE, b"", source, lambda: bool(self.latest()[1] & pg.DataStatus.PAUSED))
+        return self._priority_stop(Cmd.PAUSE, b"", source, lambda f, s: bool(s & pg.DataStatus.PAUSED))
 
-    def _fresh_after_send(self) -> bool:
-        return True
+    def _stop_confirmed(self, cmd: int, name: str, attempts: int, source: str) -> None:
+        self.events.publish("stop.confirmed", StopConfirmation(name, source, attempts,
+                                                               self.clock.monotonic_ns(), True))
 
-    def _stop_confirmed(self, cmd: int, name: str) -> None:
-        self.events.publish("stop.confirmed", name)
-
-    def _stop_unconfirmed(self, cmd: int, name: str) -> None:
-        self.events.publish("stop.unconfirmed", name)
+    def _stop_unconfirmed(self, cmd: int, name: str, attempts: int, source: str) -> None:
+        self.events.publish("stop.unconfirmed", StopConfirmation(name, source, attempts,
+                                                                 self.clock.monotonic_ns(), False))
         self.events.log(f"{name} not confirmed within 1 s — use the physical STOP / E-stop", logging.ERROR)
 
     # ============================================================================== clears / resume (VERIFY)
     _CLEAR_EVENTS = {Cmd.HALT_CLEAR: (pg.Event.HALT_SET, pg.Event.PAUSED), Cmd.ESTOP_CLEAR: (pg.Event.ESTOP_SET,),
                      Cmd.FAULT_CLEAR: (pg.Event.FAULT_SET,), Cmd.RESUME: (pg.Event.PAUSED,)}
 
-    def clear_job(self, cmd: Cmd) -> Job:
-        """HALT_CLEAR / ESTOP_CLEAR / FAULT_CLEAR / RESUME: one frame, never re-sent (D-31, D-34)."""
+    def clear_async(self, cmd: Cmd) -> ReleasingFuture:
+        """HALT_CLEAR / ESTOP_CLEAR / FAULT_CLEAR / RESUME: **one** frame, never re-sent (VERIFY class, D-31, D-34).
+
+        The clears are written at once on the priority path from the caller's thread (D-34, SWD-M1-04) — never
+        behind the Worker queue, lanes or the token bucket; RESUME is submitted at once on the CONTROL lane
+        (Orchestrator decision, ICD §2.4). The outcome is resolved by callbacks on the Reader / Supervisor tick: ACK
+        → OK, NACK → REFUSED, timeout → one GET_STATUS decides (latch gone and no new latch event since →
+        confirmed). ``ClearResult.cleared`` names the latches that were set before (GF-21)."""
+        out = ReleasingFuture()
         name = cmd.name
-        if self.channel is None or not self.connected:
-            return ClearResult(name, False, False, "NOT_CONFIRMED", text="not connected")
+        ch = self.channel
+        if ch is None or self.transport is None or not self.connected:
+            out.set_result(ClearResult(name, False, False, "NOT_CONFIRMED", text="not connected"))
+            return out
         watch = self._CLEAR_EVENTS[cmd]
         ev0 = {int(e): self.event_counts.get(int(e), 0) for e in watch}
+        flags0, status0 = self.latest()
         faults0 = self.board.faults if self.board else 0
+        before = self._latched_names(cmd, flags0, status0, faults0)
         try:
-            resp = yield self.request(cmd)
-        except NackError as exc:
-            return ClearResult(name, True, False, "REFUSED", text=exc.detail_text, nack_status=exc.status,
-                               nack_detail=exc.detail)
-        except CommandTimeout:
-            try:
-                st = yield from self.get_status_job()
-            except (LinkError, CommandTimeout):
-                return ClearResult(name, True, False, "NOT_CONFIRMED", text=f"{name} not confirmed — click again")
+            fut = ch.submit(cmd)
+        except Exception as exc:  # noqa: BLE001 — never raises to the GUI
+            out.set_result(ClearResult(name, False, False, "NOT_CONFIRMED", text=str(exc)))
+            return out
+
+        def finish(res: ClearResult) -> None:
+            if not out.done():
+                out.set_result(res)
+            self._poll_now()                     # refresh latches / sys_flags for the indicators
+
+        def on_status(f: Any) -> None:
+            if f.exception() is not None or f.result() is None:
+                finish(ClearResult(name, True, False, "NOT_CONFIRMED", text=f"{name} not confirmed — click again"))
+                return
+            st = P.decode_status(f.result().body)
+            self._apply_status(st, f.result().t_host_ns)
             new_latch = any(self.event_counts.get(e, 0) > n for e, n in ev0.items())
             if cmd == Cmd.HALT_CLEAR:
                 done = not st.flags & pg.DataFlags.HALT and not st.status & pg.DataStatus.PAUSED
@@ -564,22 +601,56 @@ class Device:
             else:
                 done = (faults0 & st.faults) != faults0 or faults0 == 0
             if done and not new_latch:
-                cleared = bit_names(pg.FAULTS_BITS, faults0 & ~st.faults) if cmd == Cmd.FAULT_CLEAR else ()
-                return ClearResult(name, True, True, "OK", cleared, "confirmed by GET_STATUS")
+                cleared = (bit_names(pg.FAULTS_BITS, faults0 & ~st.faults) if cmd == Cmd.FAULT_CLEAR else before)
+                finish(ClearResult(name, True, True, "OK", cleared, "confirmed by GET_STATUS"))
+                return
             text = ("Resume not confirmed — press Resume again" if cmd == Cmd.RESUME
                     else "Clear not confirmed — click again")
-            return ClearResult(name, True, False, "NOT_CONFIRMED", text=text)
-        cleared = bit_names(pg.FAULTS_BITS, P.decode_u16(resp.body)) if cmd == Cmd.FAULT_CLEAR else ()
-        try:
-            yield from self.get_status_job()
-        except (LinkError, CommandTimeout):
-            pass
-        return ClearResult(name, True, True, "OK", cleared, "")
+            finish(ClearResult(name, True, False, "NOT_CONFIRMED", text=text))
+
+        def on_resp(f: Any) -> None:
+            exc = f.exception()
+            if exc is None:
+                r = f.result()
+                cleared = (bit_names(pg.FAULTS_BITS, P.decode_u16(r.body)) if cmd == Cmd.FAULT_CLEAR and r is not None
+                           else before)
+                finish(ClearResult(name, True, True, "OK", cleared, ""))
+            elif isinstance(exc, NackError):
+                finish(ClearResult(name, True, False, "REFUSED", text=exc.detail_text, nack_status=exc.status,
+                                   nack_detail=exc.detail))
+            elif isinstance(exc, CommandTimeout) and self.channel is not None:
+                self.channel.submit(Cmd.GET_STATUS).add_done_callback(on_status)
+            else:
+                finish(ClearResult(name, bool(fut.done() and not isinstance(exc, TransportError)), False,
+                                   "NOT_CONFIRMED", text=f"{name}: {exc}"))
+        fut.add_done_callback(on_resp)
+        return out
+
+    @staticmethod
+    def _latched_names(cmd: Cmd, flags: int, status: int, faults: int) -> tuple[str, ...]:
+        if cmd == Cmd.HALT_CLEAR:
+            return tuple(n for n, on in (("HALT", flags & pg.DataFlags.HALT), ("PAUSED", status & pg.DataStatus.PAUSED))
+                         if on)
+        if cmd == Cmd.ESTOP_CLEAR:
+            return ("ESTOP",) if flags & pg.DataFlags.ESTOP else ()
+        if cmd == Cmd.RESUME:
+            return ("PAUSED",) if status & pg.DataStatus.PAUSED else ()
+        return bit_names(pg.FAULTS_BITS, faults)
 
     # ============================================================================== FW events (pipeline thread)
     def handle_fw_event(self, ev: P.EventPayload) -> None:
         """Link-level reactions to FW EVENTs (in arrival order with DATA; called by the pipeline)."""
         self.event_counts[ev.code] = self.event_counts.get(ev.code, 0) + 1
+        if ev.code == pg.Event.HALT_SET:
+            self.halt_src_ev = ev.arg
+        elif ev.code == pg.Event.HALT_CLEARED:
+            self.halt_src_ev = None
+        elif ev.code == pg.Event.PAUSED:
+            self.pause_src_ev = ev.arg
+        elif ev.code == pg.Event.PAUSE_CLEARED:
+            self.pause_src_ev = None
+        elif ev.code == pg.Event.BOOT:
+            self.halt_src_ev = self.pause_src_ev = None
         ch = self.channel
         if ev.code in (pg.Event.STOPPED, pg.Event.ESTOP_SET, pg.Event.HALT_SET, pg.Event.PAUSED,
                        pg.Event.FAULT_SET, pg.Event.LIMIT_SET, pg.Event.LINK_WDG, pg.Event.HOME_FAILED,

@@ -50,6 +50,17 @@ class RecentStop:
     state: str                # sent / not_sent / confirmed / unconfirmed
 
 
+def stop_event_cmd(payload: Any) -> str:
+    """Command named by a ``stop.issued`` / ``stop.confirmed`` / ``stop.unconfirmed`` payload (SWD-M1-06): an object
+    with ``.cmd`` (StopResult / B's confirmation dataclass) or, from the M1 backend, the bare command name (str)."""
+    if isinstance(payload, str):
+        return payload.upper() or "STOP"
+    cmd = getattr(payload, "cmd", None) or getattr(payload, "kind", None) or getattr(payload, "name", None)
+    if cmd is None:
+        return "STOP"
+    return str(getattr(cmd, "name", cmd)).upper()
+
+
 def _hint(item: Any) -> str:
     h = getattr(item, "clear_hint", None)
     return f" {h}" if h else ""
@@ -61,6 +72,17 @@ def _on(ind: Any, name: str) -> Any:
     except (KeyError, TypeError):
         return None
     return it if getattr(it, "state", None) == "ON" else None
+
+
+LINK_LOST_STOP_WINDOW_S = 5.0
+
+
+def link_lost_text(recent: RecentStop | None, now: float) -> str:
+    """SWD-M1-10: "STOP sent" only when a STOP result with ``sent=True`` was reported shortly before (by the GUI or
+    the backend's ``stop.issued``); otherwise only "LINK LOST"."""
+    if recent is not None and recent.cmd == "STOP" and recent.sent and now - recent.t_mono < LINK_LOST_STOP_WINDOW_S:
+        return "LINK LOST – STOP sent; sequence terminated. Reconnecting…"
+    return "LINK LOST – reconnecting…"
 
 
 def banner_rows(status: Any, recent: RecentStop | None, now: float) -> list[BannerRow]:
@@ -100,8 +122,7 @@ def banner_rows(status: Any, recent: RecentStop | None, now: float) -> list[Bann
         rows.append(BannerRow(6, "alarm", f"SW load limit: {trip} – STOP sent, sequence terminated.", "", "sw_trip"))
     link = getattr(status, "link", None)
     if str(getattr(getattr(link, "state", None), "value", "")) == "LOST":
-        rows.append(BannerRow(7, "warn", "LINK LOST – STOP sent; sequence terminated. Reconnecting…",
-                              "connection", "link"))
+        rows.append(BannerRow(7, "warn", link_lost_text(recent, now), "connection", "link"))
     if ind is not None and (it := _on(ind, "paused")) is not None:
         src = f" ({source_text(it)})" if source_text(it) else ""
         text = f"PAUSED{src} – motion blocked."
@@ -168,7 +189,7 @@ class StopBanner(QFrame):
         """A ``StopResult`` from a STOP/HALT/PAUSE call or the ``stop.issued`` topic."""
         sent = bool(getattr(result, "sent", False))
         reason = getattr(result, "reason", "") or getattr(result, "error", "") or ""
-        self.recent = RecentStop(cmd=str(getattr(result, "cmd", "STOP")), source=str(getattr(result, "source", "")),
+        self.recent = RecentStop(cmd=stop_event_cmd(result), source=str(getattr(result, "source", "")),
                                  sent=sent, reason=str(reason), t_mono=self._clock(),
                                  wall=time.strftime("%H:%M:%S"), state="sent" if sent else "not_sent")
 
@@ -179,10 +200,10 @@ class StopBanner(QFrame):
             if payload is not None:
                 self.show_stop_result(payload)
             return
-        cmd = str(getattr(payload, "cmd", getattr(payload, "kind", "STOP")))
+        cmd = stop_event_cmd(payload)
         if self.recent is None or self.recent.cmd != cmd:
-            self.recent = RecentStop(cmd, str(getattr(payload, "source", "")), True, "", self._clock(),
-                                     time.strftime("%H:%M:%S"), "sent")
+            src = "" if isinstance(payload, str) else str(getattr(payload, "source", "") or "")
+            self.recent = RecentStop(cmd, src, True, "", self._clock(), time.strftime("%H:%M:%S"), "sent")
         if topic == "stop.confirmed" and self.recent.state == "sent":
             self.recent.state = "confirmed"
         elif topic == "stop.unconfirmed":

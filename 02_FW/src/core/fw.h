@@ -72,13 +72,18 @@ typedef struct {
     volatile bool     overrun;       /* the next sent frame carries DF_OVERRUN */
     volatile uint32_t tx_drops;
     volatile bool     hold;          /* NVM operation: no fallback frames */
+    volatile bool     hold_gap;      /* an AFE hold ended: the next sample checks for missed conversions */
+    volatile bool     hold_stream_on; /* stream state latched when the hold started (DEF-M1-04) */
     stream_sched_t    fb;            /* fallback schedule (tick) */
     bool              fb_running;
 } stream_state_t;
 
 typedef struct {
     params_t p;                      /* RAM parameter image */
-    bool     boot_pul_invert, boot_ena_invert, boot_pwr_sense;   /* reboot_required as applied */
+    /* parameter image as applied at boot (DEF-M1-01, OBS-M1-08): behaviour that depends on a
+     * reboot_required parameter (PARAM_F_REBOOT) reads it from here, never from p; constant after
+     * app_init(), so ISRs may read it */
+    params_t boot_p;
     uint8_t  reset_cause;
     bool     clk_fallback;
     latch_t  lat;
@@ -134,6 +139,9 @@ void cmd_reboot_service(void);
 void     params_rt_apply(uint16_t id);
 void     params_rt_apply_all(void);
 bool     params_rt_reboot_pending(void);
+/** Effective configuration = RAM image with every PARAM_F_REBOOT parameter (generated flags) at its
+ *  boot value (FW-CFG-003); this is what cmd_check() evaluates. Thread context only. */
+const params_t *params_rt_effective(void);
 uint8_t  params_rt_page(uint8_t page, uint8_t *body);   /* returns entries; body = page header + entries */
 void     params_rt_entry(const param_meta_t *m, uint8_t out[PROTO_PARAM_ENTRY_LEN]);
 

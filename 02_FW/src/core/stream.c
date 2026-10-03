@@ -50,6 +50,8 @@ void stream_on_sample(uint32_t t_us, int32_t raw, int32_t pos_steps, bool settli
 void stream_set(bool on)
 {
     CRIT_BEGIN(HAL_CRIT_DATA);
+    /* a pending OVERRUN (class-D drop) survives STOP/START: the frame_seq gap must be explained by
+     * the next sent frame (ICD §2.2/§2.4, DEF-M1-03); only FW losses set it (DEF-M1-02/-04) */
     g_fw.st.on = on;                             /* idempotent; frame_seq is not reset */
     CRIT_END();
 }

@@ -1,5 +1,7 @@
 /* Parameter runtime (FW_design §5.15): GET_ALL_PARAMS pages and PARAM_ENTRY from the generated
  * PARAM_TABLE (no hand-written parameter list), apply hooks after SET/LOAD/DEFAULT, REBOOT_PENDING.
+ * reboot_required parameters (PARAM_F_REBOOT in the generated table) are stored at once but act only
+ * after SAVE + REBOOT: behaviour uses the boot image g_fw.boot_p (DEF-M1-01, OBS-M1-08).
  * Implements: FW-CFG-001, FW-CFG-002, FW-CFG-003, FW-PAR-001...006 (consumer), SAF-FW-010 (session
  * thresholds read at use; loadlim copy from M2)
  */
@@ -33,11 +35,31 @@ uint8_t params_rt_page(uint8_t page, uint8_t *body)
     return n;
 }
 
+const params_t *params_rt_effective(void)
+{
+    static params_t eff;                     /* thread context only (cmd dispatch, STATUS) */
+    uint16_t i;
+    eff = g_fw.p;
+    for (i = 0u; i < (uint16_t)PARAM_COUNT; i++) {     /* list from the generated flags (OBS-M1-08) */
+        const param_meta_t *m = &PARAM_TABLE[i];
+        if ((m->flags & PARAM_F_REBOOT) != 0u) {
+            param_set_raw(&eff, m, param_get_raw(&g_fw.boot_p, m));
+        }
+    }
+    return &eff;
+}
+
 bool params_rt_reboot_pending(void)
 {
-    return g_fw.p.motion.pul_invert != g_fw.boot_pul_invert ||
-           g_fw.p.motion.ena_invert != g_fw.boot_ena_invert ||
-           g_fw.p.drv.pwr_sense_enable != g_fw.boot_pwr_sense;
+    uint16_t i;
+    for (i = 0u; i < (uint16_t)PARAM_COUNT; i++) {
+        const param_meta_t *m = &PARAM_TABLE[i];
+        if ((m->flags & PARAM_F_REBOOT) != 0u &&
+            param_get_raw(&g_fw.p, m) != param_get_raw(&g_fw.boot_p, m)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void params_rt_apply(uint16_t id)

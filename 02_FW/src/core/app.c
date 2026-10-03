@@ -34,9 +34,7 @@ void app_init(void)
     g_fw.last_cmd_rx_ms = g_fw.boot_ms;
 
     nvm_boot(&nvm_ev, &nvm_arg);                     /* ICD §11.3 rules 2..5 -> g_fw.p */
-    g_fw.boot_pul_invert = g_fw.p.motion.pul_invert;
-    g_fw.boot_ena_invert = g_fw.p.motion.ena_invert;
-    g_fw.boot_pwr_sense = g_fw.p.drv.pwr_sense_enable;
+    g_fw.boot_p = g_fw.p;                            /* reboot_required values as applied */
 
     /* EVENT order (FW_design §3.2 step 8): BOOT, CLK_FALLBACK, NVM result. BOOT value/value2 =
      * HardFault record: the seam has no accessor yet (M2 item) -> 0 / 0. */

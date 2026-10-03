@@ -88,7 +88,8 @@ def check_edits(values: Mapping[str, Any], edits: Mapping[str, Any], *, moving: 
             continue
         merged[key] = v
         if moving and not meta.moving_ok and values.get(key) != v:
-            issues.append(Issue(key, E, "MOVING", f"{key}: cannot be changed while the axis moves"))
+            # per-key BUSY in write_and_verify (not sent; the other keys are written) — SWD-M1-08, §5.3
+            issues.append(Issue(key, W, "MOVING", f"{key}: cannot be changed while the axis moves (BUSY)"))
         if meta.reboot_required and values.get(key) != v:
             issues.append(Issue(key, I, "REBOOT_REQUIRED", f"{key}: effective after Save + Reboot"))
     if not any(i.severity == E and i.code in ("TYPE", "RANGE", "UNKNOWN_KEY") for i in issues):

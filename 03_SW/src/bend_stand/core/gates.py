@@ -22,7 +22,7 @@ R, C, W = Severity.REFUSE, Severity.CONFIRM, Severity.WARN
 
 CLEAR_HINTS: Mapping[str, str] = MappingProxyType({
     "ESTOP": "release the E-stop, wait ≥ io.estop_release_ms, Clear E-stop, then Enable and Home",
-    "HALT": "release the STOP button (if pressed), then Clear stop",
+    "HALT": "Clear stop",                       # HALT comes from GUI STOP / Pause/Break only (D-36, GF-19)
     "PAUSED": "motion blocked — Resume (clears PAUSE) or Clear stop",
     "FAULT": "Fault clear when the cause is gone",
     "LOAD_LIMIT": "Fault clear, then move to reduce the load — re-trips if the load grows",
@@ -122,20 +122,20 @@ def g_resume(s: GateSnapshot) -> GateResult:
 
 
 def g_clear_stop(s: GateSnapshot) -> GateResult:
-    items = _link_items(s)
+    items = _link_items(s) + _ro(s)
     if items:
         return GateResult(tuple(items))
     if not s.flags & pg.DataFlags.HALT and not s.status & pg.DataStatus.PAUSED:
         items.append(GateItem(GateCode.NOTHING_TO_CLEAR, R, "nothing to clear (no HALT, no PAUSED)"))
-    if s.io & pg.IoBits.STOP_BTN:
-        items.append(GateItem("STOP_BTN", R, "STOP button still pressed", CLEAR_HINTS["HALT"]))
+    if s.io & pg.IoBits.STOP_BTN:               # input retired by D-36 / CR-01 (ICD v0.5); kept while the bit exists
+        items.append(GateItem("STOP_BTN", R, "STOP input active — the FW refuses the clear"))
     if s.sequence_paused:
         items.append(GateItem(GateCode.SEQUENCE_PAUSED, C, "ends the paused sequence — use Resume to continue it"))
     return GateResult(tuple(items))
 
 
 def g_estop_clear(s: GateSnapshot) -> GateResult:
-    items = _link_items(s)
+    items = _link_items(s) + _ro(s)
     if items:
         return GateResult(tuple(items))
     if not s.flags & pg.DataFlags.ESTOP:
@@ -148,7 +148,7 @@ def g_estop_clear(s: GateSnapshot) -> GateResult:
 
 
 def g_fault_clear(s: GateSnapshot) -> GateResult:
-    items = _link_items(s)
+    items = _link_items(s) + _ro(s)
     if items:
         return GateResult(tuple(items))
     if not s.faults:
@@ -173,7 +173,7 @@ def g_record_stop(s: GateSnapshot) -> GateResult:
 
 
 def g_valid_toggle(s: GateSnapshot) -> GateResult:
-    return GateResult(tuple(_link_items(s)))
+    return GateResult(tuple(_link_items(s) + _ro(s)))
 
 
 def g_not_implemented(s: GateSnapshot, what: str, milestone: str) -> GateResult:

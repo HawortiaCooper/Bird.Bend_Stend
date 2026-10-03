@@ -19,7 +19,7 @@ static uint32_t s_reboot_at_ms;
 
 void fw_cmd_ctx(cmd_ctx_t *c)
 {
-    c->p = &g_fw.p;
+    c->p = params_rt_effective();                /* reboot_required at boot value */
     c->motion_state = g_fw.motion_state;
     c->enabling_left_ms = 0u;
     c->homed = g_fw.homed;
@@ -38,7 +38,7 @@ void fw_cmd_ctx(cmd_ctx_t *c)
     c->afe_saturated = g_fw.afe.saturated;
     c->raw = (g_fw.afe.raw_last != PROTO_AFE_NO_DATA) ? g_fw.afe.raw_last : 0;
     /* M1: DRV_PWR not sensed -> power not confirmed unless sensing is disabled (fail-safe) */
-    c->drv_power = !g_fw.p.drv.pwr_sense_enable;
+    c->drv_power = !c->p->drv.pwr_sense_enable;   /* effective = boot value */
     c->alm_active = false;
     c->nvm_record_valid = g_fw.nvm_record_valid;
     c->paused = g_fw.lat.paused;

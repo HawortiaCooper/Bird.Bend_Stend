@@ -257,3 +257,23 @@ def test_real_clock_backend_with_sim() -> None:
         assert be.status().link.state == LinkState.DISCONNECTED
     finally:
         be.shutdown()
+
+
+@pytest.mark.req("SW-ACQ-002")
+def test_recording_restart_within_the_same_second(tmp_path) -> None:
+    """SWD-M1-09: stop + restart within one second -> its own folder (suffix), never a raw OS error."""
+    be = lockstep_backend(recordings_root=str(tmp_path / "rec"))
+    try:
+        h = be.test_hooks
+        for _ in range(3):
+            assert be.record_start().ok
+            h.advance(100)
+            assert be.record_stop().ok
+        names = sorted(p.name for p in (tmp_path / "rec").iterdir())
+        assert len(names) == 3 and names[1] == names[0] + "_2" and names[2] == names[0] + "_3"
+        (tmp_path / "blocker").write_text("x", encoding="utf-8")
+        object.__setattr__(be.settings, "recordings_root", str(tmp_path / "blocker"))
+        g = be.record_start()
+        assert not g.ok and "WinError" not in g.text() and "cannot create" in g.text()
+    finally:
+        be.shutdown()

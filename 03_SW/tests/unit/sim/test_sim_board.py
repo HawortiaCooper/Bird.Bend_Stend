@@ -461,3 +461,16 @@ def test_out_of_process_server_over_tcp() -> None:
         tr.close()
     finally:
         srv.stop()
+
+
+@pytest.mark.req("SYS-008")
+def test_no_backward_time_after_hang() -> None:
+    """SWD-M1-11: after an injected hang the HX711 model resumes at 'now' (no overdue stamps)."""
+    cl = Client()
+    cl.cmd(Cmd.STREAM_START)
+    cl.run(300)
+    cl.ctl.act("inject", fault="hang", duration_ms=3000)
+    cl.run(3500)
+    t = [d.t_us for d in cl.data]
+    assert all(b > a for a, b in zip(t, t[1:], strict=False))
+    assert any(b - a > 2_000_000 for a, b in zip(t, t[1:], strict=False))

@@ -132,6 +132,7 @@ class SimBoard:
         self.act_hook: Callable[[dict[str, Any]], Any] | None = None   # SimControl dispatches scheduled actions
         self.pulses = 0
         self._pos_override: int | None = None
+        self._hung = False
         self.boot(cause=self.cfg.reset_cause, first=True)
 
     # ============================================================================== boot / time
@@ -253,7 +254,12 @@ class SimBoard:
                 d.fn()
             if now < self.hang_until_us:
                 self._drain_rx(discard=True)
+                self._hung = True
                 return
+            if self._hung:                          # end of a hang: no overdue conversions with old stamps
+                self._hung = False                  # (SWD-M1-11); the main loop resumes at "now"
+                self.afe.schedule_from(now)
+                self.last_tick_us = now
             self._drain_rx(discard=now < self.link_silence_until_us)
             while self.last_tick_us + 1000 <= now:
                 self.last_tick_us += 1000

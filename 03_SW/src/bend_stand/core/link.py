@@ -491,8 +491,8 @@ class StopConfirmer:
     """CONFIRM class (ICD §9.3/§9.4): repeat until ACK or the FW indication; alarm after 1 s."""
 
     def __init__(self, channel: CommandChannel, clock: Clock = MONOTONIC, *,
-                 on_confirmed: Callable[[int, str], None] | None = None,
-                 on_unconfirmed: Callable[[int, str], None] | None = None,
+                 on_confirmed: Callable[[int, str, int, str], None] | None = None,
+                 on_unconfirmed: Callable[[int, str, int, str], None] | None = None,
                  poll_status: Callable[[], None] | None = None,
                  stream_on: Callable[[], bool] | None = None) -> None:
         self.channel = channel
@@ -507,6 +507,8 @@ class StopConfirmer:
 
     def arm(self, cmd: int, payload: bytes, fut: ReleasingFuture, confirmed_by: Callable[[], bool],
             reason: str = "") -> None:
+        """Arm (or re-arm) the CONFIRM repetition. A repeated operator command re-arms with the new predicate
+        (its freshness reference is the new write)."""
         now = self.clock.monotonic_ns()
         with self._lock:
             c = self._active.get(cmd)
@@ -516,6 +518,7 @@ class StopConfirmer:
             else:
                 c.futures.append(fut)
                 c.payload = payload
+                c.confirmed_by = confirmed_by
                 c.attempts += 1
                 c.last_ns = now
 
@@ -550,11 +553,11 @@ class StopConfirmer:
             name = Cmd(c.cmd).name
             if what == "ok":
                 if self.on_confirmed is not None:
-                    self.on_confirmed(c.cmd, name)
+                    self.on_confirmed(c.cmd, name, c.attempts, c.reason)
             else:
                 self.unconfirmed_count += 1
                 if self.on_unconfirmed is not None:
-                    self.on_unconfirmed(c.cmd, name)
+                    self.on_unconfirmed(c.cmd, name, c.attempts, c.reason)
 
 
 def link_state_for(consecutive_timeouts: int, rx_age_ns: int | None, streaming: bool) -> LinkState:

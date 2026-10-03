@@ -136,6 +136,7 @@ bool nvm_service(void)
     case NS_IDLE:
         return false;
     case NS_HOLD:
+        g_fw.st.hold_stream_on = g_fw.st.on;     /* frames due during the hold? (DEF-M1-04) */
         hal_hx711_hold(true);                    /* conversions missed -> OVERRUN (FW-NVM-003) */
         g_fw.st.hold = true;                     /* no fallback frames */
         s.q0_ms = now;
@@ -189,7 +190,7 @@ bool nvm_service(void)
     default:
         afe_rearm_after_hold();                  /* no stale verdict from the hold itself */
         g_fw.st.hold = false;
-        hal_hx711_hold(false);                   /* the next frame carries OVERRUN (missed Δt) */
+        hal_hx711_hold(false);                   /* the next frame carries OVERRUN if conversions were missed */
         s.st = NS_IDLE;                          /* dispatching resumes */
         return false;
     }
