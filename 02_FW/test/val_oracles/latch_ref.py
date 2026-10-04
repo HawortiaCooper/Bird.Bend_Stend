@@ -99,7 +99,8 @@ class LoadLimit:
     takes the LAST sample as reference and opens the regrow window if that sample violates; inside the window a
     violating sample re-trips at once only if it is more than regrow beyond the reference on its side, other
     violations are ignored (unloading); the window ends with the first in-range sample or the next FAULT_CLEAR;
-    a threshold change keeps the count and the window."""
+    a threshold change keeps the count and the window. ICD v0.7 (OI-B-M2-03): only a FAULT_CLEAR that actually clears
+    a latched LOAD_LIMIT takes a new reference; with LOAD_LIMIT not latched the load-limit state is unchanged."""
     raw_min: int = -7022271
     raw_max: int = 7022271
     trip_samples: int = 1
@@ -108,6 +109,7 @@ class LoadLimit:
     _window: bool = False
     _ref: int = 0
     _last: int = 0
+    latched: bool = False
     tripped: bool = False
     trips: list[int] = field(default_factory=list)
 
@@ -134,9 +136,13 @@ class LoadLimit:
                 return False
             self._window = False
             self._run = self.trip_samples
+            self.latched = True
             return True
         self._run += 1
-        return self._run >= self.trip_samples
+        if self._run >= self.trip_samples:
+            self.latched = True
+            return True
+        return False
 
     def feed(self, i: int, raw: int) -> bool:
         """Like sample(), but reports only the first trip of a latched episode (records its index)."""
@@ -151,6 +157,9 @@ class LoadLimit:
         """Reference = the last sample (or raw_at_clear when given); window opens if it violates."""
         if raw_at_clear is not None:
             self._last = raw_at_clear
+        if not self.latched:                     # ICD v0.7: nothing latched -> state unchanged
+            return
+        self.latched = False
         self.tripped, self._run = False, 0
         self._ref = self._last
         self._window = self.violates(self._last)

@@ -46,6 +46,16 @@ def _flags(w) -> list:
     return w.fields.get("flags", [])
 
 
+def _sense_lockstep(lockstep, tmp_path, *, k1: bool = False):
+    """Scenario with the optional 48 V presence sense on (ICD v0.7 default off, CR-03 / D-41) and optionally the K1 check
+    (D-43 e) — both boot-latched, set through the scenario ``params`` (written into RAM, then re-latched)."""
+    sc = {"schema": "bird.bend.simscenario", "version": 1, "world": {"load_offset_counts": 50_000},
+          "params": {"motion.steps_per_mm": 800.0, "drv.pwr_sense_enable": True, "drv.k1_check_enable": bool(k1)}}
+    path = tmp_path / f"sense_k1_{int(k1)}.simscn.json"
+    path.write_text(json.dumps(sc), encoding="utf-8")
+    return lockstep(endpoint=f"sim:{path}")
+
+
 def _move_done(be, since):
     return [w for w in _ev(be, since, "MOVE_DONE")]
 
@@ -150,12 +160,14 @@ def test_tc_sys_008_04_sim_limit_stops_latches_direction_aware(vbe, pdict):
 
 
 @pytest.mark.req("SYS-008", "SW-STOP-003", "SAF-SW-005")
-def test_tc_sys_008_04_sim_estop_cuts_driver_power(vbe, pdict):
-    """E-stop during a move (D-36: the red button cuts the driver supply through K1): immediate stop (STOPPED ESTOP),
+def test_tc_sys_008_04_sim_estop_cuts_driver_power(lockstep, tmp_path, pdict):
+    """(v0.3.2: optional presence sense ON via scenario, CR-03) E-stop during a move with a power-removal device
+    (``drv_power_follows``): immediate stop (STOPPED ESTOP),
     ESTOP_SET, DRIVER_DISABLED cause ESTOP, HOMED cleared; DRIVER_POWER 0 follows ``k1_delay_ms`` + the 20 ms DRV_PWR
     filter later (sense on, SAF-FW-024, SRS A-19);
     ENABLE refused (E_STATE ESTOP) until the input is closed ≥ ``io.estop_release_ms`` and ESTOP_CLEAR is sent."""
     # Verifies: SYS-008, SW-STOP-003, SAF-SW-005
+    vbe = _sense_lockstep(lockstep, tmp_path)
     H.forced_enable_home(vbe)
     H.result(vbe, H.forced_move_abs(vbe, 100_000, 20_000))
     H.advance(vbe, 200)
@@ -183,10 +195,11 @@ def test_tc_sys_008_04_sim_estop_cuts_driver_power(vbe, pdict):
 
 
 @pytest.mark.req("SYS-008", "SW-STOP-003")
-def test_tc_sys_008_04_sim_driver_power_loss_with_estop_closed(vbe):
-    """FI-15: DRV_PWR lost with the E-stop closed during a move → STOPPED DRV_POWER_LOST, DRIVER_POWER 0,
+def test_tc_sys_008_04_sim_driver_power_loss_with_estop_closed(lockstep, tmp_path):
+    """(v0.3.2: presence sense ON via scenario, CR-03) FI-15: DRV_PWR lost with the E-stop closed during a move → STOPPED DRV_POWER_LOST, DRIVER_POWER 0,
     DRIVER_DISABLED cause 4, HOMED cleared; motion refused with BLOCK DRV_UNPOWERED (SAF-FW-024)."""
     # Verifies: SYS-008, SW-STOP-003
+    vbe = _sense_lockstep(lockstep, tmp_path)
     H.forced_enable_home(vbe)
     H.result(vbe, H.forced_move_abs(vbe, 100_000, 20_000))
     H.advance(vbe, 200)
@@ -438,11 +451,11 @@ def test_tc_sw_lim_001_01_targets_outside_sw_limits_refused_jog_bound(lockstep):
 
 @pytest.mark.req("SW-MAN-006", "SAF-SW-005", "SW-STOP-004", "SW-STOP-003")
 @pytest.mark.parametrize("cond", ["not_enabled", "not_homed", "halt", "paused", "estop", "drv_unpowered", "alm"])
-def test_tc_sw_man_006_02_move_gate_refuses_and_sends_nothing(lockstep, cond):
+def test_tc_sw_man_006_02_move_gate_refuses_and_sends_nothing(lockstep, tmp_path, cond):
     """TC-SW-MAN-006-02 — motion gate (SW_design §5.6): one REFUSE item per condition, item code = the generated BLOCK name where the
     FW has one; move_to through the API raises and **no MOVE_ABS** reaches the wire."""
     # Verifies: SW-MAN-006, SAF-SW-005, SW-STOP-004, SW-STOP-003
-    be = lockstep()
+    be = _sense_lockstep(lockstep, tmp_path) if cond == "drv_unpowered" else lockstep()   # sense: CR-03 option
     code = {"not_enabled": "NOT_ENABLED", "not_homed": "NOT_HOMED", "halt": "HALT", "paused": "PAUSED",
             "estop": "ESTOP", "drv_unpowered": "DRV_UNPOWERED", "alm": "DRIVER_ALARM"}[cond]
     if cond != "not_enabled":
@@ -507,11 +520,12 @@ def test_tc_sw_stop_002_02_hotkey_halts_and_repeats_until_confirmed(lockstep):
 
 @pytest.mark.req("SYS-008")
 @pytest.mark.parametrize("k1_ms", [100, 200, 2000])
-def test_tc_sys_008_05_sim_k1_welded_timing(lockstep, k1_ms):
+def test_tc_sys_008_05_sim_k1_welded_timing(lockstep, tmp_path, k1_ms):
     """WP-B12 sim: E-stop open with DRV_PWR held on (drv_power_follows false) → no K1_WELDED before k1 − 50 ms, fault
-    latched within (k1, k1 + 25 ms] (SAF-FW-025); normal case (power drops 60 ms after) → never."""
+    latched within (k1, k1 + 25 ms] (SAF-FW-025); normal case (power drops 60 ms after) → never. v0.3.2: needs
+    ``drv.pwr_sense_enable`` and ``drv.k1_check_enable`` (D-43 e, both boot-latched, scenario params)."""
     # Verifies: SYS-008
-    be = lockstep()
+    be = _sense_lockstep(lockstep, tmp_path, k1=True)
     assert H.result(be, H.write_verify(be, {"drv.k1_weld_ms": k1_ms})).ok
     m0 = H.wire_mark(be)
     t0 = H.now_ns(be)
@@ -521,7 +535,7 @@ def test_tc_sys_008_05_sim_k1_welded_timing(lockstep, k1_ms):
     assert f and k1_ms < (f[0].t_ns - t0) / MS <= k1_ms + 25, [(w.t_ns - t0) / MS for w in f]
     H.act(be, "drv_power", on=False)
     H.act(be, "estop", open=False)
-    be2 = lockstep()
+    be2 = _sense_lockstep(lockstep, tmp_path, k1=True)
     m1 = H.wire_mark(be2)
     H.act(be2, "estop", open=True, k1_delay_ms=60)
     H.advance(be2, 2500)
@@ -662,26 +676,90 @@ def test_tc_sw_stop_002_05_hotkey_fake_backend_halts_and_test_mode_does_not(tmp_
         be.shutdown()
 
 
-@pytest.mark.req("SYS-008", "SAF-SW-005")
-def test_tc_sys_008_07_sim_power_sense_disabled_d41(lockstep):
-    """D-41 / CR-03 preview (no contactor; ``drv.pwr_sense_enable`` default 0 from ICD v0.7): with the sense disabled
-    (reboot-required: write, SAVE, REBOOT) DRV_PWR reads 1, an E-stop with the supply held never latches K1_WELDED
-    and no DRIVER_POWER event is sent; the E-stop itself still stops and disables (SAF-FW-005)."""
-    # Verifies: SYS-008, SAF-SW-005
-    be = lockstep()
-    rep = H.result(be, H.write_verify(be, {"drv.pwr_sense_enable": False}))
-    assert rep.ok or "REBOOT" in str(rep), rep
-    H.result(be, H.save_nvm(be))
-    H.result(be, H.reboot(be), 10_000)
-    H.advance(be, 3000)
-    assert H.config_values(be)["drv.pwr_sense_enable"] in (0, False)
+@pytest.mark.req("SYS-008", "SAF-SW-005", "SW-STOP-003")
+def test_tc_sys_008_07_sim_release1_no_contactor_d41(vbe, pdict):
+    """MC2-1 / D-41 / CR-03 (ICD v0.7 defaults ``drv.pwr_sense_enable`` = ``drv.k1_check_enable`` = false): E-stop during
+    a move with the driver supply staying on (no power-removal device, ``drv_power_follows`` false) → STOPPED ESTOP
+    ≤ 3 ms, ESTOP_SET, DRIVER_DISABLED cause ESTOP, HOMED cleared; **no** DRIVER_POWER event, **no** K1_WELDED; DRV_PWR
+    reads 1; ENABLE refused until released ≥ ``io.estop_release_ms`` + ESTOP_CLEAR; a DRV_POWER input change is
+    ignored (no stop)."""
+    # Verifies: SYS-008, SAF-SW-005, SW-STOP-003
+    assert H.param_default(pdict, "drv.pwr_sense_enable") in (0, False)
+    assert H.param_default(pdict, "drv.k1_check_enable") in (0, False)
+    assert H.config_values(vbe)["drv.pwr_sense_enable"] in (0, False)
+    H.forced_enable_home(vbe)
+    H.result(vbe, H.forced_move_abs(vbe, 100_000, 20_000))
+    H.advance(vbe, 200)
+    m0 = H.wire_mark(vbe)
+    t0 = H.now_ns(vbe)
+    H.act(vbe, "estop", open=True, drv_power_follows=False)
+    H.advance(vbe, 600)
+    st = _ev(vbe, m0, "STOPPED")
+    assert st and rc.STOP_CAUSE_NAME[st[0].fields["arg"]] == "ESTOP" and (st[0].t_ns - t0) / MS <= 3
+    assert _ev(vbe, m0, "ESTOP_SET")
+    assert [w for w in _ev(vbe, m0, "DRIVER_DISABLED") if w.fields["arg"] == 3]
+    assert not [w for w in _ev(vbe, m0, "FAULT_SET") if rc.FAULTS[w.fields["arg"]] == "K1_WELDED"]
+    assert not _ev(vbe, m0, "DRIVER_POWER")
+    last = H.rx(vbe, "DATA", since=m0)[-1]
+    assert "DRV_PWR" in last.fields["status"] and "HOMED" not in _flags(last)
+    status, detail = H.forced_outcome(vbe, "ENABLE")
+    assert status == "E_STATE" and "ESTOP" in _block_names(detail)
+    H.act(vbe, "estop", open=False)
+    H.advance(vbe, int(H.param_default(pdict, "io.estop_release_ms")) + 20)
+    assert H.result(vbe, H.estop_clear(vbe)).confirmed
+    H.forced_enable_home(vbe)
+    H.result(vbe, H.forced_move_abs(vbe, 30_000, 10_000))
+    H.advance(vbe, 200)
+    m1 = H.wire_mark(vbe)
+    H.act(vbe, "drv_power", on=False)                                    # input ignored with the sense off
+    H.advance(vbe, 300)
+    assert not _ev(vbe, m1, "STOPPED") and not _ev(vbe, m1, "DRIVER_POWER")
+    assert H.until(vbe, lambda: any(rc.MOVE_DONE_REASON[w.fields["arg"]] == "TARGET" for w in _move_done(vbe, m1)),
+                   10_000)
+    H.act(vbe, "drv_power", on=True)
+
+
+@pytest.mark.req("SYS-008")
+def test_tc_sys_008_05_sim_sense_on_k1_check_off_never_k1(lockstep, tmp_path):
+    """D-43 (e): presence sense on but ``drv.k1_check_enable`` false → an E-stop with the supply held is reported and
+    never latches K1_WELDED."""
+    # Verifies: SYS-008
+    be = _sense_lockstep(lockstep, tmp_path, k1=False)
     m0 = H.wire_mark(be)
     H.act(be, "estop", open=True, drv_power_follows=False)
-    H.advance(be, 600)
+    H.advance(be, 2500)
     assert _ev(be, m0, "ESTOP_SET")
     assert not [w for w in _ev(be, m0, "FAULT_SET") if rc.FAULTS[w.fields["arg"]] == "K1_WELDED"]
-    assert not _ev(be, m0, "DRIVER_POWER")
-    assert "DRV_PWR" in H.rx(be, "DATA", since=m0)[-1].fields["status"]
+
+
+@pytest.mark.req("SYS-008", "SW-MAN-004")
+def test_tc_sys_008_04_sim_unhomed_window_d43(vbe):
+    """D-43 (b): un-homed jog travel is bounded by the un-homed origin ± ``home.max_travel_um`` latched when the axis
+    became un-homed — not from each jog start: a held + jog stops at origin + max (MOVE_DONE SOFT_LIMIT); a new + jog
+    from there is refused (E_RANGE); a − jog is accepted."""
+    # Verifies: SYS-008, SW-MAN-004
+    assert H.result(vbe, H.write_verify(vbe, {"home.max_travel_um": 3_000})).ok
+    status, _ = H.forced_outcome(vbe, "ENABLE")
+    assert status == "OK"
+    H.advance(vbe, 700)
+    x0 = _x_um(vbe)
+    m0 = H.wire_mark(vbe)
+    jog = {"v_um_s": 2_000, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}
+    H.forced_request(vbe, "JOG", jog, motion=True)
+    for _ in range(60):
+        H.advance(vbe, 80)
+        if _move_done(vbe, m0):
+            break
+        H.forced_request(vbe, "JOG", jog, motion=True)
+    d = _move_done(vbe, m0)
+    assert d and rc.MOVE_DONE_REASON[d[0].fields["arg"]] == "SOFT_LIMIT", [w.fields for w in d]
+    assert abs(d[0].fields["value"] - (x0 + 3_000)) <= 1, (d[0].fields["value"], x0)
+    H.advance(vbe, 300)
+    status, _ = H.forced_outcome(vbe, "JOG", jog, motion=True)
+    assert status == "E_RANGE", status
+    status, _ = H.forced_outcome(vbe, "JOG", {"v_um_s": -1_000, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND},
+                                 motion=True)
+    assert status == "OK"
 
 
 @pytest.mark.req("SAF-SW-002")
@@ -786,3 +864,64 @@ def test_tc_saf_sw_002_06_threshold_rules_refused_locally():
     assert not check_manual(-1000, 1000, 0)
     assert calibrated_target(1.0, 0.5, 1e-9).invalid
     assert calibrated_target(1 / 3285, 8_000_000, 1000.0).invalid       # tare outside the clamped range
+
+
+# ============================================================================================ D — M2 close-out re-test
+
+@pytest.mark.req("SW-CFG-004", "IF-011")
+@pytest.mark.defect("MC2-4")
+def test_tc_sw_cfg_004_02_save_quiesce_with_simulated_flash_stall(vbe):
+    """MC2-4 (OI-F-M2-04): the simulator now stalls SAVE_PARAMS like the FW (default 500 ms, no injection). The SW sends
+    only STOP / HALT / PAUSE while the SAVE is outstanding; the HALT written during the stall is executed by the board
+    right after the flash operation (HALT latched at the end, D-37 a)."""
+    # Verifies: SW-CFG-004, IF-011
+    m0 = H.wire_mark(vbe)
+    fut = H.save_nvm(vbe)
+    H.advance(vbe, 200)
+    rd = H.read_all(vbe)
+    H.advance(vbe, 100)
+    assert H.halt(vbe).sent
+    H.advance(vbe, 700)
+    H.result(vbe, fut)
+    H.result(vbe, rd)
+    req = H.tx(vbe, "SAVE_PARAMS", since=m0)[0]
+    resp = [w for w in H.rx(vbe, "SAVE_PARAMS", since=m0, kind="response") if w.seq == req.seq][0]
+    assert (resp.t_ns - req.t_ns) / MS >= 450, (resp.t_ns - req.t_ns) / MS
+    between = {w.name for w in H.tx(vbe, since=m0) if req.t_ns < w.t_ns < resp.t_ns}
+    assert between and between <= {"STOP", "HALT", "PAUSE"}, between
+    assert any(w.name == "GET_ALL_PARAMS" and w.t_ns > resp.t_ns for w in H.tx(vbe, since=m0))
+    H.advance(vbe, 200)
+    assert H.indicator(vbe, "halt").state == "ON"
+
+
+@pytest.mark.req("SAF-SW-002", "SYS-003")
+@pytest.mark.defect("SWD-M2-02")
+@pytest.mark.parametrize("tare, zero", [(2.5, 3), (-2.5, -3), (3.5, 4), (2.4999, 2)])
+def test_tc_saf_sw_002_07_zero_raw_rounds_half_away(tare, zero):
+    """SWD-M2-02 regression: the session zero of the calibrated threshold path rounds half away from zero (SYS-003,
+    oracle ``f_ref.rha``), not to even."""
+    # Verifies: SAF-SW-002, SYS-003
+    from bend_stand.core.safety import calibrated_target
+
+    assert f_ref.rha(tare) == zero
+    assert calibrated_target(1 / 3285, tare, 1000.0).zero_raw == zero
+
+
+@pytest.mark.req("SAF-SW-005", "SAF-SW-004")
+@pytest.mark.defect("SWD-M2-01")
+def test_tc_saf_sw_005_05_no_contactor_texts_d41():
+    """SWD-M2-01 regression (D-41 / D-42, CR-03): no clear hint or E-stop gate text asks for a contactor RESET / K1
+    action; K1_WELDED / DRV_PWR hints refer to the optional presence sense."""
+    # Verifies: SAF-SW-005, SAF-SW-004
+    from bend_stand.core.gates import CLEAR_HINTS
+
+    for k, t in CLEAR_HINTS.items():
+        assert "RESET" not in t and "K1" not in t, (k, t)
+    for k in ("K1_WELDED", "DRV_PWR", "DRV_UNPOWERED"):
+        assert "optional" in CLEAR_HINTS[k], (k, CLEAR_HINTS[k])
+    import inspect
+
+    from bend_stand.core import gates
+
+    src = inspect.getsource(gates.g_estop_clear)
+    assert "K1" not in src and "RESET" not in src

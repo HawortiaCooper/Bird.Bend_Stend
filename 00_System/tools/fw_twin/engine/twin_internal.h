@@ -91,7 +91,9 @@ typedef struct {
     bool dir_wiring_inv;                     /* DIR wiring / driver SW5 inverted (world) */
     vt_t loop_load_ns, loop_load_until, main_busy_until;   /* inject loop_load (REQ-C-M2-02) */
     bool hw_meas;                            /* --hw-meas: model of the HW_MEAS seam (twin_meas.c) */
-    uint32_t ni_magic, ni_last_pul, ni_hang; /* --noinit: DIAG_MEAS .noinit carried over a reset */
+    uint32_t ni[9];                          /* --noinit: DIAG_MEAS .noinit carried over a reset (twin_meas.c
+                                                NI_* order: magic, last PUL, hang, heartbeat, prev_valid,
+                                                prev PUL, prev heartbeat, prev hang, boots) */
     /* ---- AFE model ---- */
     bool afe_on, afe_pd, afe_hold, afe_stall, afe_sck_overrun;
     int afe_rate_sps; uint8_t afe_gain_pulses;
@@ -125,7 +127,7 @@ double tw_x_um(void);
 bool hal_fault_record(uint32_t *pc, uint32_t *cfsr);
 size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max);
 /* twin_meas.c hooks */
-void tw_meas_init(bool on, uint32_t ni_magic, uint32_t ni_last_pul, uint32_t ni_hang);
+void tw_meas_init(bool on, const uint32_t ni[9]);
 void tw_meas_noinit_out(void);
 void tw_meas_noinit_y(void);              /* Q reply line "Y noinit <magic_hex>:<last_pul>:<hang>" */
 void tw_meas_edge(const char *pin, int level);

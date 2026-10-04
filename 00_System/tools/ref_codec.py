@@ -19,7 +19,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any
 
-ICD_VERSION = "0.7"
+ICD_VERSION = "0.7.1"
 
 # ======================================================================================
 # constants (ICD §2, §3)

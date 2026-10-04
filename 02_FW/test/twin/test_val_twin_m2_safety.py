@@ -55,6 +55,7 @@ def test_estop_clear_rules(v):
     """TC-SAF-FW-006-01: ESTOP_CLEAR open -> 0xFFFF; closed 50 ms -> E_CAUSE_ACTIVE ms missing; >= 100 ms
     -> OK; then JOG -> E_STATE NOT_ENABLED; ENABLE with DRV_PWR off -> E_STATE DRV_UNPOWERED."""
     m.need(v, "MOTION", "DRV_SIGNALS")
+    m.enable_power_sense(v)                                   # ENABLE with DRV_PWR off needs the sense (CR-03)
     m.enable(v)
     v.tw.act("estop", open=True, k1_delay_ms=30)
     v.advance(100)
@@ -124,6 +125,7 @@ def test_drv_power_loss_while_jogging(v):
     """TC-SAF-FW-024-01: DRV_PWR off (E-stop closed) during a jog -> stop + ENA disabled + NOT_ENABLED +
     HOMED 0 <= 25 ms; DRIVER_POWER(0), STOPPED(DRV_POWER_LOST), DRIVER_DISABLED(4); ENABLE refused."""
     m.need(v, "MOTION", "HOMING", "DRV_SIGNALS")
+    m.enable_power_sense(v)                                   # optional sense (CR-03 / D-41)
     _jogging(v)
     n0 = m.n_events(v)
     t0 = v.tw.now_us
@@ -132,6 +134,7 @@ def test_drv_power_loss_while_jogging(v):
     assert ok, "no NOT_ENABLED within 25 ms"
     last_pul = max((e["t_us"] for e in m.edges(v, "PUL", t0)), default=t0)
     assert last_pul - t0 <= lr.DRV_PWR_REACTION_MS * 1000.0
+    v.advance(10)                                             # EVENTs drain (lowest wire priority)
     codes = [e["code"] for e in m.events_since(v, n0)]
     assert "DRIVER_POWER" in codes and "STOPPED" in codes and "DRIVER_DISABLED" in codes, codes
     stp = m.events_since(v, n0, "STOPPED")[0]
@@ -144,6 +147,7 @@ def test_drv_power_loss_while_jogging(v):
 def test_drv_power_short_toggles_ignored(v):
     """TC-FW-SW-005-01: toggles < 20 ms ignored, >= 21 ms accepted (oracle drv_pwr_filtered)."""
     m.need(v, "MOTION", "DRV_SIGNALS")
+    m.enable_power_sense(v)
     m.enable(v)
     for dur, ignored in ((5, True), (19, True), (21, False)):
         n0 = m.n_events(v)
@@ -160,6 +164,7 @@ def test_k1_weld_window(v):
     """TC-SAF-FW-025-01: E-stop open with DRV_PWR held -> K1_WELDED in (k1, k1 + 25] ms; FAULT_CLEAR
     refused while the cause persists, accepted after power off."""
     m.need(v, "MOTION", "DRV_SIGNALS")
+    m.enable_power_sense(v, k1_check=True)                    # OI-18: K1 check only with both enabled
     m.enable(v)
     n0 = m.n_events(v)
     t_e = v.tw.now_us
@@ -202,3 +207,29 @@ def test_load_limit_trip_and_regrow(v):
     assert v.ok("FAULT_CLEAR")["cleared"] == ["LOAD_LIMIT"]
     v.advance(80)
     assert "LOAD_LIMIT" in v.status()["faults"]                 # grew by more than regrow -> re-trip
+
+
+def test_cr03_defaults_sense_and_k1_off(v):
+    """CR-03 / D-41 / OI-18 (ICD v0.7): defaults pwr_sense_enable = k1_check_enable = false: the DRV_PWR input is
+    ignored (status DRV_PWR = 1, ENABLE accepted with the input 'off'), an E-stop held > k1_weld_ms with power
+    present never latches K1_WELDED; with only the sense enabled (no k1_check) K1_WELDED is never latched either,
+    only DRIVER_POWER is reported."""
+    m.need(v, "MOTION", "DRV_SIGNALS")
+    assert v.get("drv.pwr_sense_enable") == 0 and v.get("drv.k1_check_enable") == 0
+    v.tw.act("drv_power", on=False)
+    v.advance(40)
+    assert "DRV_PWR" in v.status()["status"]
+    m.enable(v)                                               # accepted: input ignored
+    v.tw.act("drv_power", on=True)
+    n0 = m.n_events(v)
+    v.tw.act("estop", open=True, drv_power_follows=False)
+    m.run(v, 1_000)
+    assert "K1_WELDED" not in v.status()["faults"] and not m.events_since(v, n0, "DRIVER_POWER")
+    v.tw.act("estop", open=False, drv_power_follows=False)
+    m.run(v, 200)
+    v.ok("ESTOP_CLEAR")
+    m.enable_power_sense(v, k1_check=False)
+    n1 = m.n_events(v)
+    v.tw.act("estop", open=True, drv_power_follows=False)
+    m.run(v, 1_000)
+    assert "K1_WELDED" not in v.status()["faults"], "K1_WELDED without drv.k1_check_enable (OI-18)"

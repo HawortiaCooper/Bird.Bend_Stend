@@ -1,5 +1,5 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7, PROTO 1.0, PAYLOAD 1)
+ * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.1, PROTO 1.0, PAYLOAD 1)
  * Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
  * Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes
  * and their argument enums. FW code uses these identifiers only (no hand-listed codes).
@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define PROTO_ICD_VERSION      "0.7"
+#define PROTO_ICD_VERSION      "0.7.1"
 #define PROTO_MAJOR            1u
 #define PROTO_MINOR            0u
 #define PROTO_PAYLOAD_VERSION  1u
@@ -509,11 +509,11 @@ typedef enum {
     MEAS_OP_PROBE_READ               = 2, /* read the probe captures */
     MEAS_OP_COUNTER                  = 3, /* independent PUL counter (MT-2): read / reset */
     MEAS_OP_STAMPS                   = 4, /* device-time stamp ring (MT-4), newest first */
-    MEAS_OP_NOINIT                   = 5, /* .noinit block (last PUL, heartbeat, hang start; survives a reset) */
+    MEAS_OP_NOINIT                   = 5, /* .noinit block (last PUL, heartbeat, hang start, previous-boot record, boot counter; survives a reset) */
     MEAS_OP_STIM_RUN                 = 6, /* stimulus series on the J-STIM output (MT-7) */
     MEAS_OP_HANG                     = 7, /* test-image hang injection while moving (IWDG evidence) */
     MEAS_OP_STATIC_LEVEL             = 8, /* drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed) */
-    MEAS_OP_DWT                      = 9, /* DWT section statistics (HW_MEAS_DWT builds; else w0 = 0) */
+    MEAS_OP_DWT                      = 9, /* DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0) */
 } proto_meas_op_t;
 
 /* ---- DIAG_MEAS probe event source (PROBE_ARM sel; J-EVT selector position, FW_test_plan §6.2) (ICD App. C) ---- */

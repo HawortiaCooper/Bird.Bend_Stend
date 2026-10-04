@@ -3,7 +3,11 @@
  * cleared), w2 = heartbeat of the last 10 kHz DMA update (not the time of the read), ring 2048, stimulus clock
  * 10 MHz, PROBE_READ w5 = PUL stamps since arming, TRIGGERED = probe counter running (not in PWM_INPUT),
  * STATIC_LEVEL only with the step timer stopped. Not modelled: the stamp rings surviving a reset (the twin
- * carries only magic / last PUL / hang across a reset).
+ * carries only the .noinit words across a reset).
+ * v0.7.1 (OI-FW-41 / DEF-M2-02): NOINIT w4 prev_valid, w5 previous boot's newest PUL t_us, w6 previous boot's
+ * last heartbeat, w7 previous boot's hang start, w8 boots since the block was initialised / cleared — at boot a
+ * valid block is snapshot into the prev words, boots + 1, this boot's rings start empty (w1 = 0 until the first
+ * PUL), the hang start is kept; sel 1 clears all.
  * Owner: Integrator. Implements: REQ-C-M2-08 (Validator E dry runs of hil_*.py before the HW gate), D-40c.
  *
  * Without --hw-meas 1 the seam answers 0 (= no HW_MEAS in this build, like the release image): the core
@@ -47,31 +51,54 @@ static struct {
     uint32_t pwm_min_p, pwm_max_p, pwm_min_h, pwm_max_h, pwm_n;
     /* noinit */
     uint32_t ni_magic, ni_last_pul, ni_hang;
+    uint32_t ni_prev_valid, ni_prev_pul, ni_prev_hb, ni_prev_hang, ni_boots;
     /* static level */
     int static_pin;                               /* -1 none */
 } M;
 
-void tw_meas_init(bool on, uint32_t ni_magic, uint32_t ni_last_pul, uint32_t ni_hang)
+/* ni[]: magic, last PUL, hang, heartbeat at the reset, prev_valid, prev PUL, prev heartbeat, prev hang, boots */
+void tw_meas_init(bool on, const uint32_t ni[9])
 {
     memset(&M, 0, sizeof M);
     M.on = on;
     M.static_pin = -1;
-    M.ni_magic = ni_magic; M.ni_last_pul = ni_last_pul; M.ni_hang = ni_hang;
-    if (on && M.ni_magic != MEAS_MAGIC) {             /* meas_start(): invalid block -> cleared, magic set */
-        M.ni_magic = MEAS_MAGIC; M.ni_last_pul = 0; M.ni_hang = 0;
+    if (!on) return;
+    if (ni[0] != MEAS_MAGIC) {                        /* meas_start(): invalid block -> cleared, magic set */
+        M.ni_magic = MEAS_MAGIC;
+        return;
     }
+    M.ni_magic = MEAS_MAGIC;                          /* valid: snapshot the previous boot (DEF-M2-02) */
+    M.ni_prev_valid = 1u;
+    M.ni_prev_pul = ni[1];
+    M.ni_prev_hb = ni[3];
+    M.ni_prev_hang = ni[2];
+    M.ni_hang = ni[2];                                /* kept until a clear */
+    M.ni_boots = ni[8] + 1u;
+    M.ni_last_pul = 0;                                /* this boot's rings start empty */
 }
 
 static uint32_t heartbeat(void) { uint32_t t = tw_fw_us(T.now); return t - t % 100u; }   /* 10 kHz DMA copy */
 
+static void noinit_words(char *buf, size_t n, char sep)
+{
+    snprintf(buf, n, "%lx%c%lu%c%lu%c%lu%c%lu%c%lu%c%lu%c%lu%c%lu", (unsigned long)M.ni_magic, sep,
+             (unsigned long)M.ni_last_pul, sep, (unsigned long)M.ni_hang, sep, (unsigned long)(M.on ? heartbeat() : 0u), sep,
+             (unsigned long)M.ni_prev_valid, sep, (unsigned long)M.ni_prev_pul, sep, (unsigned long)M.ni_prev_hb, sep,
+             (unsigned long)M.ni_prev_hang, sep, (unsigned long)M.ni_boots);
+}
+
 void tw_meas_noinit_out(void)                     /* for twin.py at a reset: carried into the next boot */
 {
-    tw_out("N %lx %lu %lu", (unsigned long)M.ni_magic, (unsigned long)M.ni_last_pul, (unsigned long)M.ni_hang);
+    char b[160];
+    noinit_words(b, sizeof b, ' ');
+    tw_out("N %s", b);
 }
 
 void tw_meas_noinit_y(void)                       /* for twin.py before an externally requested reset */
 {
-    tw_out("Y noinit %lx:%lu:%lu", (unsigned long)M.ni_magic, (unsigned long)M.ni_last_pul, (unsigned long)M.ni_hang);
+    char b[160];
+    noinit_words(b, sizeof b, ':');
+    tw_out("Y noinit %s", b);
 }
 
 static void push(unsigned ch, uint32_t t_us) { M.ch[ch].v[M.ch[ch].n % RING] = t_us; M.ch[ch].n++; }
@@ -193,7 +220,12 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
     }
     case 5:                                                      /* NOINIT */
         put32(resp, 0, M.ni_magic); put32(resp, 1, M.ni_last_pul); put32(resp, 2, heartbeat()); put32(resp, 3, M.ni_hang);
-        if (sel == 1u) { M.ni_magic = MEAS_MAGIC; M.ni_last_pul = 0; M.ni_hang = 0; memset(M.ch, 0, sizeof M.ch); }
+        put32(resp, 4, M.ni_prev_valid); put32(resp, 5, M.ni_prev_pul); put32(resp, 6, M.ni_prev_hb);
+        put32(resp, 7, M.ni_prev_hang); put32(resp, 8, M.ni_boots);
+        if (sel == 1u) {
+            M.ni_magic = MEAS_MAGIC; M.ni_last_pul = 0; M.ni_hang = 0; memset(M.ch, 0, sizeof M.ch);
+            M.ni_prev_valid = M.ni_prev_pul = M.ni_prev_hb = M.ni_prev_hang = M.ni_boots = 0;
+        }
         break;
     case 6:                                                      /* STIM_RUN -> twin.py schedules the pulses */
         tw_out("M stim %u %u %u %lu %u %lu", (unsigned)M.src, (unsigned)(sel & 1u), (unsigned)(sel >> 1), (unsigned long)a,

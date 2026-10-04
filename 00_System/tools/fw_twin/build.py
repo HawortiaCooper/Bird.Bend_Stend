@@ -95,6 +95,12 @@ def _stamp(core: str, build_dir: Path) -> Path:
     return build_dir / f"build_{core}.stamp"
 
 
+def _shown(p: Path) -> Path:
+    """Repo-relative path for messages; absolute when outside the repo (e.g. a scratch --build-dir, OI-FW-41)."""
+    p = p.resolve()
+    return p.relative_to(REPO) if p.is_relative_to(REPO) else p
+
+
 def needs_build(core: str, build_dir: Path = HERE / "build") -> bool:
     exe, stamp = exe_path(core, build_dir), _stamp(core, build_dir)
     if not exe.exists() or not stamp.exists():
@@ -207,7 +213,7 @@ def build(core: str = "auto", build_dir: Path = HERE / "build", quiet: bool = Fa
         raise SystemExit(f"fw_twin build FAILED (core {core}), log: {log}")
     if not quiet:
         warn = r.stderr.count("warning:")
-        print(f"fw_twin build OK: {exe.relative_to(REPO)} (core {core}, seams from {hal_src}, {warn} warnings), log {log.relative_to(REPO)}")
+        print(f"fw_twin build OK: {_shown(exe)} (core {core}, seams from {hal_src}, {warn} warnings), log {_shown(log)}")
     _stamp(core, build_dir).write_text(fp, encoding="ascii")
     return exe
 

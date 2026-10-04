@@ -178,3 +178,16 @@ def rising_count(v: V, since_us: float = 0.0) -> int:
 
 def param(key: str):
     return PBYKEY[key]
+
+
+def enable_power_sense(v: V, k1_check: bool = False) -> None:
+    """ICD v0.7 / CR-03 (D-41): the driver-power sense (and the K1_WELDED check) are optional and default off.
+    Tests of SAF-FW-024/025 and FW-SW-005 enable them like an installation with a 48 V presence sense would:
+    SET (reboot_required) + SAVE + REBOOT."""
+    set_ok(v, "drv.pwr_sense_enable", True)
+    if k1_check:
+        set_ok(v, "drv.k1_check_enable", True)
+    v.ok("SAVE_PARAMS", timeout_ms=5000)
+    v.reboot()
+    v.advance(80)
+    assert v.get("drv.pwr_sense_enable") == 1 and "REBOOT_PENDING" not in v.status()["sys_flags"]

@@ -453,9 +453,10 @@ def test_diag_meas_model_counter_and_stamps(probe_exe, tmp_path):
 
 
 def test_diag_meas_noinit_and_info_match_target_v07(probe_exe, tmp_path):
-    """REQ-C-M2-12 / OI-FW-38 (ICD v0.7 App. C): NOINIT magic valid from the first read (set at boot), w2 = the
-    10 kHz heartbeat (not the time of the read), survives a reset; INFO ring 2048 / stimulus 10 MHz; PROBE_READ
-    w5 = PUL stamps since arming."""
+    """REQ-C-M2-12 / OI-FW-38 / OI-FW-41 (ICD v0.7.1 App. C): NOINIT magic valid from the first read (set at
+    boot), w2 = the 10 kHz heartbeat (not the time of the read), previous-boot snapshot w4...w8 at each reset,
+    sel 1 clears all, a power cycle starts fresh; INFO ring 2048 / stimulus 10 MHz; PROBE_READ w5 = PUL stamps
+    since arming."""
     with Twin("lockstep", exe=probe_exe, run_dir=tmp_path, hw_meas=True) as t:
         link = TwinLink(t)
         t.advance_ms(2)
@@ -476,9 +477,21 @@ def test_diag_meas_noinit_and_info_match_target_v07(probe_exe, tmp_path):
         assert pr[1] == 0 and pr[5] == 30                                  # since arming, not since the event
         last = link.cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"][1]
         assert last > 0
+        assert w[4:9] == [0, 0, 0, 0, 0]                                   # fresh block: no previous boot
+        hb_before = link.cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"][2]
         t.act("reset", cause="iwdg")
         t.advance_ms(5)
-        w2 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 1, "a": 0, "b": 0})["w"]
-        assert w2[0] == 0x4D454153 and w2[1] == last                    # kept over the reset, then cleared
-        w3 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"]
-        assert w3[0] == 0x4D454153 and w3[1] == 0
+        # v0.7.1 (OI-FW-41): previous boot snapshot w4...w8, this boot's w1 restarts at 0
+        w2 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"]
+        assert w2[0] == 0x4D454153 and w2[1] == 0
+        assert w2[4] == 1 and w2[5] == last and hb_before <= w2[6] and w2[8] == 1
+        t.act("reset", cause="pin")
+        t.advance_ms(5)
+        w3 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 1, "a": 0, "b": 0})["w"]
+        assert w3[4] == 1 and w3[5] == 0 and w3[8] == 2                    # no PUL in the second boot
+        w4 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"]
+        assert w4[0] == 0x4D454153 and w4[1] == 0 and w4[3:9] == [0, 0, 0, 0, 0, 0]   # sel 1 cleared all
+        t.act("reset", cause="power")
+        t.advance_ms(5)
+        w5 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"]
+        assert w5[0] == 0x4D454153 and w5[4] == 0 and w5[8] == 0           # power cycle: fresh block

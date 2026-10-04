@@ -27,8 +27,8 @@ def test_get_info_fields(v: V, tw):
     assert i["payload_version"] == rc.PAYLOAD_VERSION == 1
     assert i["fw_version"] == _fw_version_from_ini()
     assert int(i["param_dict_hash"], 16) == int(gen_define("PARAM_DICT_HASH").rstrip("uUlL"), 16)
-    # dict_version 4 (ICD v0.5, CR-01: io.stop_active_level retired) -> 47 parameters (v0.2 plan: 48)
-    assert i["param_count"] == int(gen_define("PARAM_COUNT").rstrip("u")) == 47
+    # dict_version 5 (ICD v0.7: v0.5 retired io.stop_active_level, v0.7 added drv.k1_check_enable) -> 48 parameters
+    assert i["param_count"] == int(gen_define("PARAM_COUNT").rstrip("u")) == 48
     assert i["uid"].upper() == tw.uid.upper()                      # hal_uid seam
     if "MOTION" in i["features"]:                                  # M2 build (plan v0.3 §5.2): MOVE_UNTIL_LOAD is M4
         assert set(i["features"]) == {"AFE", "MOTION", "HOMING", "NVM", "TWIN", "BUTTONS", "DRV_SIGNALS"}

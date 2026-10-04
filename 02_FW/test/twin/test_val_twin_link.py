@@ -434,14 +434,14 @@ def test_data_bits_provoked_in_m1(v: V, tw):
     if "DRV_SIGNALS" in v.info()["features"]:                      # M2 build: valid input, make it "off"
         tw.act("drv_power", on=False)
         v.advance(40)
-    assert "DRV_PWR" not in last()["status"]                       # sense enabled: not confirmed (M1) / off (M2)
-    assert v.set("drv.pwr_sense_enable", 0)["status"] == "OK"
-    v.ok("SAVE_PARAMS")
-    v.reboot()
-    v.advance(60)
-    v.ok("STREAM_START")
-    v.advance(100)
-    assert "DRV_PWR" in v.data()[-1]["status"]                     # sense disabled -> DRV_PWR = 1
+        assert "DRV_PWR" in last()["status"]                       # ICD v0.7 default: sense off -> reads 1
+        assert v.set("drv.pwr_sense_enable", 1)["status"] == "OK"
+        v.ok("SAVE_PARAMS")
+        v.reboot()
+        v.advance(60)
+        v.ok("STREAM_START")
+        v.advance(100)
+        assert "DRV_PWR" not in v.data()[-1]["status"]             # sense on, power off -> 0
 
 
 def test_overrun_only_for_fw_losses(v: V, tw):

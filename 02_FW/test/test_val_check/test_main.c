@@ -30,7 +30,7 @@ static void test_check_vectors(void)
         char name[160];
         uint8_t pl[PROTO_MAX_LEN], rf[PROTO_FRAME_MAX], b[PROTO_FRAME_MAX];
         uint16_t npl, nrf;
-        uint32_t type, seq, st, detail, s[21], np, k;
+        uint32_t type, seq, st, detail, s[22], np, k;
         int32_t paused_after;
         params_t prm, prm_before;
         cmd_ctx_t c, c_before;
@@ -46,7 +46,7 @@ static void test_check_vectors(void)
         val_tok(&v, T);
         nrf = val_hex(T, rf, sizeof rf);
         paused_after = (int32_t)val_u32(&v);
-        for (k = 0u; k < 21u; k++) s[k] = val_u32(&v);
+        for (k = 0u; k < 22u; k++) s[k] = val_u32(&v);   /* state_schema 3 */
         params_set_defaults(&prm);
         np = val_u32(&v);
         for (k = 0u; k < np; k++) {
@@ -79,6 +79,7 @@ static void test_check_vectors(void)
         c.alm_active = s[18] != 0u;
         c.nvm_record_valid = s[19] != 0u;
         c.paused = s[20] != 0u;
+        c.unhomed_origin_um = (int32_t)s[21];         /* D-43 b (ICD v0.7) */
         c_before = c;
         prm_before = prm;
 

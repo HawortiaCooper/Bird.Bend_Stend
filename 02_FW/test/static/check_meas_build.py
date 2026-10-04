@@ -24,6 +24,17 @@ FW = Path(__file__).resolve().parents[2]
 BUILD = FW / ".pio" / "build"
 TOOL = Path.home() / ".platformio" / "packages" / "toolchain-gccarmnoneeabi" / "bin" / "arm-none-eabi-objdump.exe"
 ALLOWED = {"src/hal/f446/meas_f4.c.o", "src/core/build_id.c.o"}
+
+
+def allowed_for(env: str) -> set[str]:
+    """Plan §6.3 exception (v0.4): in nucleo_f446re_meas_dwt the HAL objects that include meas_dwt.h (DWT stamps in
+    handlers / CRIT macros, NFR-007 only) and main.cpp.o may differ; core, pure and gen objects must stay identical."""
+    if not env.endswith("_dwt"):
+        return set(ALLOWED)
+    hal = FW / "src" / "hal" / "f446"
+    inst = {f"src/hal/f446/{c.name}.o" for c in hal.glob("*.c")
+            if '#include "meas_dwt.h"' in c.read_text(encoding="utf-8", errors="ignore")}
+    return set(ALLOWED) | inst | {"src/main.cpp.o"}
 SAFETY = ["EXTI15_10_IRQHandler", "EXTI0_IRQHandler", "EXTI1_IRQHandler", "EXTI9_5_IRQHandler",
           "EXTI4_IRQHandler", "TIM2_IRQHandler", "TIM5_IRQHandler", "step_isr", "hal_step_stop_now",
           "hal_step_abort", "hal_ena_set"]
@@ -61,11 +72,13 @@ def main() -> int:
                 continue
             if sections(a) == sections(b):
                 same += 1
-            elif o not in ALLOWED:
+            elif o not in allowed_for(env):
                 diff.append(o)
+            elif o.startswith(("src/core/", "src/pure/", "src/gen/")) and o not in ALLOWED:
+                diff.append(o + " (core/pure/gen must be identical)")
         extra = sorted(set(p.relative_to(other).as_posix() for p in (other / "src").rglob("*.o")) - set(objs))
         print(f"{env}: {same}/{len(objs)} objects identical; differing (not allowed): {diff or 'none'}; "
-              f"allowed to differ: {sorted(ALLOWED)}; extra objects: {extra or 'none'}")
+              f"allowed to differ: {sorted(allowed_for(env))}; extra objects: {extra or 'none'}")
         ok &= not diff and not extra
     # HW_MEAS confined
     hits = sorted({p.relative_to(FW).as_posix() for p in (FW / "src").rglob("*") if p.suffix in (".c", ".h", ".cpp")

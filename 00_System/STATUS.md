@@ -1,6 +1,6 @@
 # Project status
 
-**Phase:** P2 Implementation — M1 ACCEPTED WITH CONDITIONS · **M2 (Sensor & motion) in progress** (D-39, 2026-10-04) · ICD v0.5 / CR-01 landing · SW-RT-006 plot panes (D-38) in progress · D-06 in force · **Date:** 2026-10-04
+**Phase:** P2 Implementation — M1, **M2 ACCEPTED WITH CONDITIONS (2026-10-05)** · **M3 (SW application) in progress** (D-44) · baseline SRS v0.6.1, ICD v0.7.1 (dict 5, 48 params, 0xB7B0263F) · D-06 in force (HW gate pending PO approval of bench procedure) · **Date:** 2026-10-05
 
 ## P0 gate (Orchestrator, 2026-10-03) — ACCEPTED
 R1–R4 written; conflicts resolved: (a) Stefan step-timer error: checked `Stefan/FW/stanok/Core/Src/main.c:136-158` + `tim.c:45` → TIM2 84 MHz / (9+1) = 8.4 MHz vs assumed 10 MHz → 16 % slow (R1/R4 correct, R2's 6.7 % ignores the prescaler); irrelevant for us (D-09). (b) Step timing: SRS takes R2's conservative defaults (≥ 10 µs high/low, ≤ 50 kHz, DIR setup 20 µs) as parameters; R4's TIM2 PWM-mode-2 scheme stays (CCR scaled). Key safety finding R2 §8: motor force ≈ 9 kN ≫ cell safe overload 2.35 kN → FW per-sample load limit is safety-critical.
@@ -112,3 +112,18 @@ Evidence: FW_test_report_M1 (Validator E: **GO WITH CONDITIONS**, 45/45 M1 TCs, 
 - **Validator E M2: GO WITH CONDITIONS** (FW_test_report_M2.md, plan v0.4) — 79 off-target M2 TCs pass ×2; native 151/151 ×2, val Unity 34/34 ×2, val twin 190, 10 000-step cmd walk 0 mismatches, 2×10 000 random stops exact, integration 56/4 ×2, static 15/15, TC-SYS-009-02 PASS. DEF-M2-01 (Medium, uncounted pulse on halt) + DEF-M2-02 (Medium, meas build stamps lost at IWDG) → fixed now (D-43 a). Bench safety procedure §6.8 awaits PO approval. M2 close-out round started (A, B, C, SRS v0.6).
 - **ICD v0.7** (2026-10-04): CR-03 (pwr_sense default false, new `drv.k1_check_enable` default false), MC2-2, D-43 b (state_schema 3), twin DIAG_MEAS aligned, OI-FW-35 fixed, Appendix C (OI-ICD-10 closed), loadlim reference rule (OI-B-M2-03), sim/twin convention (OI-B-M2-04); dict v5, 48 params, hash 0xB7B0263F; Orchestrator: both --check exit 0. Integration 63 passed ×2 (no skips/xfails). SRS v0.6.1 (k1_check row, OI-18 closed). B close-out done (unit 2069 ×2). Pending: A close-out; E/F re-verification (E: gen_val_vectors schema 3 + 48 params; F: 6 cases need pwr_sense override).
 - A close-out done: DEF-M2-01/02 fixed, DWT stats (23 sections), D-43 b, k1_check, wiring/pinout v0.5 (D-42 diode-OR), FW_design v0.6; native 160/160 ×2; release flash 44 112 B / RAM 8 672 B; all images check_map PASS; integration 63. Static bounds to confirm at HG-18: E-stop handler all-branch 1.15 µs (> 1 µs budget, realistic 0.9 µs), step ISR 2.4 µs (> 2 µs). Re-verification E/F + ICD v0.7.1 (Appendix C) running.
+
+## M2 gate (Orchestrator, 2026-10-05) — ACCEPTED WITH CONDITIONS
+Evidence: FW_test_report_M2 (Validator E final **GO WITH CONDITIONS**: DEF-M2-01/02 closed; native 160/160 ×2, val Unity 34/34 ×2, val twin 193 ×2, 10k walk 0 mismatches, integration 63, static 15/15, check_meas_build PASS); SW_test_report_M2 v1.1 (Validator F final **ACCEPTED WITH CONDITIONS**: 2815 tests ×3 identical, 0 failed/skipped/xfail); Orchestrator re-run: full 03_SW 2815 passed; generators --check exit 0; traceability 173 req, 0 without design, 0 without TC (FW 130 / SW 197 TC IDs).
+| Condition | Owner | Due |
+|---|---|---|
+| F1 HW-gate checks incl. D-42 (HG-10 c/d/e, HG-20, C-25) | E | HW gate |
+| F2 HG-18 DWT: E-stop handler all-branch 1.15 µs vs ≤ 1 µs, step ISR 2.4 µs vs ≤ 2 µs | E (+A) | HW gate |
+| F3 PO approval of bench safety procedure (FW_test_plan §6.8) | PO | before HW gate |
+| F4 / E-C4 SW quiet during SAVE (MC2-4 verified on sim stall; re-check on twin) | F | M3 |
+| MC2-3 core.safety coverage ≥ 95 % with calibrated path | B, F | M3 gate |
+| MC2-5 reference PC: Win32 hotkey + NFR-003, DM-06, DM-11 | PO, F | M3 |
+| MC2-6 PO demos DM-02, DM-05, SYS-008 walk-through; sim-vs-twin motion subset | PO, C, F | M3 entry / M3 |
+| OBS-M2-08 ring_newest signed compare (< 35.8 min span) — informative | A | — |
+| OBS-M2-09 integration suite uses shared fw_twin.exe | C | M3 |
+| K1 chip UNKNOWN/hidden while k1_check off (cosmetic) | D | M3 |

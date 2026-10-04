@@ -33,7 +33,7 @@
 # =====================================================================================
 
 schema_version: 1
-icd_version: "0.7"
+icd_version: "0.7.1"
 proto_major: 1
 proto_minor: 0
 payload_version: 1
@@ -560,11 +560,11 @@ tables:
       - {name: PROBE_READ, value: 2, desc: "read the probe captures", sel: "0", a: "0", b: "0", retry: RETRY}
       - {name: COUNTER, value: 3, desc: "independent PUL counter (MT-2): read / reset", sel: "0 read, 1 reset (returns the value before the reset)", a: "0", b: "0", retry: "RETRY (read) / VERIFY (reset)"}
       - {name: STAMPS, value: 4, desc: "device-time stamp ring (MT-4), newest first", sel: "meas_chan", a: "page 0…1023", b: "0", retry: RETRY}
-      - {name: NOINIT, value: 5, desc: ".noinit block (last PUL, heartbeat, hang start; survives a reset)", sel: "0 read, 1 clear", a: "0", b: "0", retry: "RETRY (read) / VERIFY (clear)"}
+      - {name: NOINIT, value: 5, desc: ".noinit block (last PUL, heartbeat, hang start, previous-boot record, boot counter; survives a reset)", sel: "0 read, 1 clear", a: "0", b: "0", retry: "RETRY (read) / VERIFY (clear)"}
       - {name: STIM_RUN, value: 6, desc: "stimulus series on the J-STIM output (MT-7)", sel: "bit 0 polarity (0 high pulse, 1 low pulse), bits 1-7 hold time 1…127 ms", a: "pulses 1…1000", b: "seed", retry: VERIFY}
       - {name: HANG, value: 7, desc: "test-image hang injection while moving (IWDG evidence)", sel: "meas_hang_where", a: "duration 0…10000 ms (0 = until the IWDG resets)", b: "0", retry: VERIFY}
       - {name: STATIC_LEVEL, value: 8, desc: "drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed)", sel: "meas_pin", a: "level 0/1", b: "0", retry: VERIFY}
-      - {name: DWT, value: 9, desc: "DWT section statistics (HW_MEAS_DWT builds; else w0 = 0)", sel: "0 read, 1 reset", a: "section 0…31", b: "0", retry: "RETRY (read) / VERIFY (reset)"}
+      - {name: DWT, value: 9, desc: "DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0)", sel: "0 read, 1 reset", a: "section 0…31 (0…22 defined, App. C table C.1)", b: "0", retry: "RETRY (read) / VERIFY (reset)"}
 
   - id: meas_src
     kind: enum

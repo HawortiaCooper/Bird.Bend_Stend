@@ -358,7 +358,7 @@ class Twin:
                 c["rate_sps"] = int(p[5])
             self.conversions.append(c)
         elif tag == "N":
-            self.noinit = f"{p[0]}:{p[1]}:{p[2]}"
+            self.noinit = ":".join(p)                  # opaque .noinit words (twin_meas.c)
         elif tag == "M" and p[0] == "stim":
             self._stim(int(p[1]), int(p[2]), int(p[3]), int(p[4]), int(p[5]), int(p[6]))
         elif tag == "I":

@@ -60,19 +60,39 @@ def test_counter_equals_pos_steps(vm):
 
 
 def test_hang_noinit_readback(vm):
-    """Dry run of HG-14: HANG while moving -> IWDG reset; NOINIT after boot: last PUL - hang start <= 100 ms."""
+    """Dry run of HG-14 on the ICD v0.7.1 NOINIT record (DEF-M2-02 fix): HANG while moving -> IWDG reset; after the
+    reboot w4 = 1 and the previous boot's newest PUL stamp w5 and last heartbeat w6 give "PUL stops <= 100 ms after
+    the hang start (w7)" and the time to the reset; w8 counts the boot. A pin reset keeps the block; sel 1 clears."""
     m.need(vm, "MOTION", "HOMING", "HW_MEAS")
     m.ready(vm, x_um=20_000)
     assert meas(vm, "NOINIT", sel=1)["status"] == "OK"            # HG-14 step: clear the record before a trial
+    w0 = meas(vm, "NOINIT")["w"]
+    assert w0[0] == 0x4D454153 and w0[8] == 0, w0
     m.move_abs(vm, 200_000, 10_000, wait=False)
     m.run(vm, 200)
     assert meas(vm, "HANG", sel=0, a=0)["status"] == "OK"
     vm.advance(300)
     assert vm.status()["reset_cause"] == "IWDG"
     w = meas(vm, "NOINIT")["w"]
-    assert w[0] == 0x4D454153, w
-    last_pul, heartbeat, hang = w[1], w[2], w[3]
-    assert last_pul != 0 and ((last_pul - hang) & 0xFFFFFFFF) <= 100_000, (last_pul, hang)
-    # w2 (heartbeat) is the live device time in both the twin model and A's target HAL: the pre-reset
-    # heartbeat is not preserved (DEF-M2-03 / OBS-E-M2-10) - not asserted here
-    print(f"VALOBS HANG dry run: last PUL {(last_pul - hang) & 0xFFFFFFFF} µs after the hang start; w2 = {heartbeat}")
+    assert w[0] == 0x4D454153 and w[4] == 1 and w[8] == 1, w
+    prev_pul, prev_hb, hang = w[5], w[6], w[7]
+    assert prev_pul != 0 and ((prev_pul - hang) & 0xFFFFFFFF) <= 100_000, (prev_pul, hang)
+    t_reset = (prev_hb - hang) & 0xFFFFFFFF
+    assert t_reset <= 100_000, (prev_hb, hang)                    # IWDG <= 90 ms + heartbeat period
+    assert w[1] == 0                                              # this boot: no PUL yet
+    vm.tw.act("reset", cause="pin")
+    vm.advance(60)
+    w2 = meas(vm, "NOINIT", sel=1)["w"]
+    assert w2[4] == 1 and w2[8] == 2 and w2[7] == hang, w2        # survives a pin reset, boot counted
+    w3 = meas(vm, "NOINIT")["w"]
+    assert w3[0] == 0x4D454153 and w3[4:9] == [0, 0, 0, 0, 0], w3  # cleared by sel 1
+    print(f"VALOBS HANG dry run: last PUL {(prev_pul - hang) & 0xFFFFFFFF} µs, reset {t_reset} µs after the hang")
+
+
+def test_dwt_sections_not_in_meas_build(vm):
+    """op 9 in the twin / HW_MEAS (non-DWT) model: w0 valid = 0 for every section 0…22 (DWT exists only in the
+    HW_MEAS_DWT target image, OI-FW-37; its numbers are HG-18 evidence)."""
+    m.need(vm, "MOTION", "HW_MEAS")
+    for sec in (0, 11, 22, 23):
+        r = meas(vm, "DWT", sel=0, a=sec)
+        assert r["status"] == "OK" and r["w"][0] == 0, (sec, r)

@@ -313,7 +313,11 @@ set at boot whenever the block is invalid (block cleared), so w0 = `MEAS_MAGIC` 
 heartbeat of the last 10 kHz DMA update (FW t_us floored to 100 µs), not the time of the read; sel 1 clears the
 block and the rings. INFO w4 = 2048 stamps per channel, w7 = 10 000 000 (stimulus clock). PROBE_READ w5 = PUL
 stamps since arming; TRIGGERED = probe counter running (never in PWM_INPUT). STATIC_LEVEL acts only with the step
-timer stopped. Not modelled: the stamp rings surviving a reset (the twin carries magic, last PUL and hang start).
+timer stopped. Not modelled: the stamp rings surviving a reset (the twin carries the .noinit words), DWT
+statistics (op 9 w0 = 0). v0.7.1 (OI-FW-41): NOINIT w4 prev_valid, w5 / w6 / w7 previous boot's newest PUL /
+last heartbeat / hang start, w8 boot counter — at each MCU reset of a valid block the previous boot is snapshot,
+w8 + 1, w1 restarts at 0 (this boot's rings start empty), w3 is kept; a power cycle invalidates the block; sel 1
+clears all words. `build.py --build-dir` may lie outside the repo (absolute paths in its messages).
 The engine no longer calls `step_isr()` after a fixed-reaction halt at a counted step (OI-FW-35).
 
 ## Shared simulator / twin world-control vocabulary v2 (F-B-06, DEF-P1-03) — names FROZEN (ICD v0.4; v0.5: STOP-button names retired)

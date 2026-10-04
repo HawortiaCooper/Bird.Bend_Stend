@@ -447,9 +447,10 @@ int main(int argc, char **argv)
         else if (!strcmp(k, "--hse-fail")) T.hse_fail = atoi(v) != 0;
         else if (!strcmp(k, "--lsi")) T.lsi_hz = atof(v);
         else if (!strcmp(k, "--hw-meas")) T.hw_meas = atoi(v) != 0;
-        else if (!strcmp(k, "--noinit")) {                 /* "<magic_hex>:<last_pul>:<hang>" (DIAG_MEAS model) */
-            unsigned long mg, lp, hg;
-            if (sscanf(v, "%lx:%lu:%lu", &mg, &lp, &hg) == 3) { T.ni_magic = (uint32_t)mg; T.ni_last_pul = (uint32_t)lp; T.ni_hang = (uint32_t)hg; }
+        else if (!strcmp(k, "--noinit")) {                 /* "<magic_hex>:<w>:...": up to 9 words (twin_meas.c) */
+            unsigned long w[9] = {0};
+            int n = sscanf(v, "%lx:%lu:%lu:%lu:%lu:%lu:%lu:%lu:%lu", &w[0], &w[1], &w[2], &w[3], &w[4], &w[5], &w[6], &w[7], &w[8]);
+            for (int j = 0; j < 9; j++) T.ni[j] = (j < n) ? (uint32_t)w[j] : 0u;
         }
         else if (!strcmp(k, "--fault-rec")) {          /* "<pc_hex>:<cfsr_hex>" (seam v1.2) */
             unsigned long pc, cf;
@@ -457,7 +458,7 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(k, "--seed")) T.rng = strtoull(v, NULL, 0) | 1u;
     }
-    tw_meas_init(T.hw_meas, T.ni_magic, T.ni_last_pul, T.ni_hang);
+    tw_meas_init(T.hw_meas, T.ni);
     memset(T.flash, 0xFF, sizeof T.flash);
     FILE *f = fopen(T.flash_path, "rb");
     if (f) { size_t n = fread(T.flash, 1, FLASH_SIZE, f); (void)n; fclose(f); }

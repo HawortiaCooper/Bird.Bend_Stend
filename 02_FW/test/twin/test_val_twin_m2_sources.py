@@ -55,6 +55,8 @@ def test_every_stop_source(v, src):
     (dead-man: VALID unchanged), STOPPED(cause) then exactly one MOVE_DONE(STOPPED); after the matching
     clear(s) (+ ENABLE / HOME where needed) no PUL edge for 5 s (the old move never resumes)."""
     m.need(v, "MOTION", "HOMING", "AFE", "BUTTONS", "DRV_SIGNALS")
+    if src == "DRV_POWER_LOST":
+        m.enable_power_sense(v)                               # optional sense (CR-03 / D-41)
     m.ready(v, x_um=60_000)
     v.ok("STREAM_START")
     v.ok("SET_VALID", {"valid": 1})
@@ -201,6 +203,8 @@ def test_injected_step_fault(v):
 @pytest.mark.parametrize("inp", ["estop", "start", "end", "drv_power"])
 def test_wire_break_reads_active(v, inp):
     m.need(v, "MOTION", "HOMING", "DRV_SIGNALS")
+    if inp == "drv_power":
+        m.enable_power_sense(v)
     m.ready(v, x_um=60_000)
     m.move_abs(v, 200_000, 10_000, wait=False)
     m.run(v, 200)
@@ -222,6 +226,8 @@ def test_wire_break_reads_active(v, inp):
 @pytest.mark.parametrize("case", ["estop", "start", "end", "both", "drv_off"])
 def test_boot_with_input_active(v, case):
     m.need(v, "MOTION", "DRV_SIGNALS")
+    if case == "drv_off":
+        m.enable_power_sense(v)                               # OI-FW-22 boot rule applies with the sense on
     if case == "estop":
         v.tw.act("estop", open=True, drv_power_follows=False)
     elif case in ("start", "both"):
@@ -489,6 +495,8 @@ def test_fw_safety_without_pc(v, variant, src):
     """SYS-002: the FW-only safety reactions with the stream off (L2) and with the PC silent after its last
     command (L3, link_timeout 5000 ms so the watchdog does not mask the stimulus)."""
     m.need(v, "MOTION", "HOMING", "AFE", "DRV_SIGNALS")
+    if src == "DRV_POWER_LOST":
+        m.enable_power_sense(v)
     m.set_ok(v, "safety.link_timeout_ms", 5000)
     m.ready(v, x_um=60_000)
     v.ok("STREAM_STOP")

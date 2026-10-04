@@ -1,6 +1,6 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7, PROTO 1.0, PAYLOAD 1)
+Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.1, PROTO 1.0, PAYLOAD 1)
 Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
 
 Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes and
@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from enum import IntEnum, IntFlag
 from types import MappingProxyType
 
-ICD_VERSION = '0.7'
+ICD_VERSION = '0.7.1'
 PROTO_MAJOR = 1
 PROTO_MINOR = 0
 PAYLOAD_VERSION = 1
@@ -553,10 +553,10 @@ class MeasOp(IntEnum):
 
 
 MEAS_OP_NAMES: tuple[str, ...] = ('INFO', 'PROBE_ARM', 'PROBE_READ', 'COUNTER', 'STAMPS', 'NOINIT', 'STIM_RUN', 'HANG', 'STATIC_LEVEL', 'DWT')
-MEAS_OP_DESC: Mapping[str, str] = MappingProxyType({'INFO': 'variant, clocks, ring size, stamp overhead', 'PROBE_ARM': 'arm the event-latency probe (MT-3)', 'PROBE_READ': 'read the probe captures', 'COUNTER': 'independent PUL counter (MT-2): read / reset', 'STAMPS': 'device-time stamp ring (MT-4), newest first', 'NOINIT': '.noinit block (last PUL, heartbeat, hang start; survives a reset)', 'STIM_RUN': 'stimulus series on the J-STIM output (MT-7)', 'HANG': 'test-image hang injection while moving (IWDG evidence)', 'STATIC_LEVEL': 'drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed)', 'DWT': 'DWT section statistics (HW_MEAS_DWT builds; else w0 = 0)'})
+MEAS_OP_DESC: Mapping[str, str] = MappingProxyType({'INFO': 'variant, clocks, ring size, stamp overhead', 'PROBE_ARM': 'arm the event-latency probe (MT-3)', 'PROBE_READ': 'read the probe captures', 'COUNTER': 'independent PUL counter (MT-2): read / reset', 'STAMPS': 'device-time stamp ring (MT-4), newest first', 'NOINIT': '.noinit block (last PUL, heartbeat, hang start, previous-boot record, boot counter; survives a reset)', 'STIM_RUN': 'stimulus series on the J-STIM output (MT-7)', 'HANG': 'test-image hang injection while moving (IWDG evidence)', 'STATIC_LEVEL': 'drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed)', 'DWT': 'DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0)'})
 MEAS_OP_RETIRED: frozenset[str] = frozenset()
 MEAS_OP_SEL: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'meas_src', 'PROBE_READ': '0', 'COUNTER': '0 read, 1 reset (returns the value before the reset)', 'STAMPS': 'meas_chan', 'NOINIT': '0 read, 1 clear', 'STIM_RUN': 'bit 0 polarity (0 high pulse, 1 low pulse), bits 1-7 hold time 1…127 ms', 'HANG': 'meas_hang_where', 'STATIC_LEVEL': 'meas_pin', 'DWT': '0 read, 1 reset'})
-MEAS_OP_A: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'bits 0-1 meas_probe_mode, bit 8 event polarity (0 rising, 1 falling), other bits 0', 'PROBE_READ': '0', 'COUNTER': '0', 'STAMPS': 'page 0…1023', 'NOINIT': '0', 'STIM_RUN': 'pulses 1…1000', 'HANG': 'duration 0…10000 ms (0 = until the IWDG resets)', 'STATIC_LEVEL': 'level 0/1', 'DWT': 'section 0…31'})
+MEAS_OP_A: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'bits 0-1 meas_probe_mode, bit 8 event polarity (0 rising, 1 falling), other bits 0', 'PROBE_READ': '0', 'COUNTER': '0', 'STAMPS': 'page 0…1023', 'NOINIT': '0', 'STIM_RUN': 'pulses 1…1000', 'HANG': 'duration 0…10000 ms (0 = until the IWDG resets)', 'STATIC_LEVEL': 'level 0/1', 'DWT': 'section 0…31 (0…22 defined, App. C table C.1)'})
 MEAS_OP_B: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'timer prescaler 0…65535', 'PROBE_READ': '0', 'COUNTER': '0', 'STAMPS': '0', 'NOINIT': '0', 'STIM_RUN': 'seed', 'HANG': '0', 'STATIC_LEVEL': '0', 'DWT': '0'})
 MEAS_OP_RETRY: Mapping[str, str] = MappingProxyType({'INFO': 'RETRY', 'PROBE_ARM': 'VERIFY', 'PROBE_READ': 'RETRY', 'COUNTER': 'RETRY (read) / VERIFY (reset)', 'STAMPS': 'RETRY', 'NOINIT': 'RETRY (read) / VERIFY (clear)', 'STIM_RUN': 'VERIFY', 'HANG': 'VERIFY', 'STATIC_LEVEL': 'VERIFY', 'DWT': 'RETRY (read) / VERIFY (reset)'})
 

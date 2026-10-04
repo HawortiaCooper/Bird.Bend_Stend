@@ -79,35 +79,38 @@ def test_reboot_required_params_old_behaviour_until_save_reboot(v: V):
     """TC-FW-CFG-003-02 (reboot-required part): ena_invert / pul_invert / pwr_sense_enable."""
     # Verifies: FW-CFG-003, FW-PAR-002, FW-PAR-006
     # TC: TC-FW-CFG-003-02
-    assert REBOOT_REQ == {"motion.pul_invert", "motion.ena_invert", "drv.pwr_sense_enable"}
+    # ICD v0.7 (CR-03 / D-41, OI-18): drv.pwr_sense_enable default false, + drv.k1_check_enable (reboot)
+    assert REBOOT_REQ == {"motion.pul_invert", "motion.ena_invert", "drv.pwr_sense_enable", "drv.k1_check_enable"}
+    assert v.get("drv.pwr_sense_enable") == 0 and v.get("drv.k1_check_enable") == 0
     if "DRV_SIGNALS" in v.info()["features"]:                    # M2 build: make driver power absent
         v.tw.act("drv_power", on=False)
         v.advance(40)
     ena0 = v.tw.act("query", what="outputs")["ENA"]
     st0 = v.status()
-    assert "DRV_PWR" not in st0["status"]                         # sense enabled: M1 not confirmed / M2 off
-    en0 = v.cmd("ENABLE")
-    assert (en0["status"], en0["detail"]) == ("E_STATE", 1 << rc.BLOCK.index("DRV_UNPOWERED"))
+    sense_ignored = "DRV_PWR" in st0["status"]                     # default: input ignored, reads present
+    if "DRV_SIGNALS" in v.info()["features"]:
+        assert sense_ignored, st0["status"]
     for k in ("motion.ena_invert", "motion.pul_invert"):
         assert v.set(k, 1)["status"] == "OK"
     st = v.status()
     assert "REBOOT_PENDING" in st["sys_flags"]
     assert v.tw.act("query", what="outputs")["ENA"] == ena0       # old ENA level kept
-    assert v.set("drv.pwr_sense_enable", 0)["status"] == "OK"
+    assert v.set("drv.pwr_sense_enable", 1)["status"] == "OK"
     st = v.status()
     assert "REBOOT_PENDING" in st["sys_flags"]
     # old behaviour must be kept until SAVE + REBOOT (FW-CFG-003, params.yaml reboot_required)
-    r = v.cmd("ENABLE")
-    old_kept = {"status_DRV_PWR_unchanged": "DRV_PWR" not in st["status"],
-                "enable_still_refused_DRV_UNPOWERED": (r["status"], r.get("detail")) == ("E_STATE", en0["detail"])}
-    print("VALOBS reboot-required drv.pwr_sense_enable before reboot:", old_kept, "ENABLE ->", r)
+    old_kept = {"status_DRV_PWR_unchanged": ("DRV_PWR" in st["status"]) == sense_ignored}
+    print("VALOBS reboot-required drv.pwr_sense_enable before reboot:", old_kept)
     v.ok("SAVE_PARAMS")
     v.reboot()
     v.advance(60)
     st = v.status()
     assert "REBOOT_PENDING" not in st["sys_flags"]
-    assert "DRV_PWR" in st["status"]                              # new behaviour after SAVE + REBOOT
-    assert old_kept == {"status_DRV_PWR_unchanged": True, "enable_still_refused_DRV_UNPOWERED": True}, \
+    if "DRV_SIGNALS" in v.info()["features"]:
+        assert "DRV_PWR" not in st["status"]                      # new behaviour: sense evaluated, power off
+        en = v.cmd("ENABLE")
+        assert (en["status"], en["detail"]) == ("E_STATE", 1 << rc.BLOCK.index("DRV_UNPOWERED")), en
+    assert old_kept == {"status_DRV_PWR_unchanged": True}, \
         f"DEF-M1-01: drv.pwr_sense_enable (reboot_required) took effect without reboot: {old_kept}"
 
 

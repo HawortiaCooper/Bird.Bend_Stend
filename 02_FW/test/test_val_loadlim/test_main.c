@@ -2,6 +2,7 @@
  * v0.4 §2, level U). The vector file is translated by val_oracles/gen_val_vectors.py only if the validator's own
  * oracle (val_oracles/latch_ref.LoadLimit, written from ICD v0.6 §5.5 / D-40 d) reproduces every step.
  *
+ * Core gate modelled: FAULT_CLEAR passes the reference to loadlim only when it clears a latched LOAD_LIMIT.
  * Verifies: SAF-FW-008, SAF-FW-009, SAF-FW-010 (next-sample effect of a threshold change), SAF-FW-011
  * TC: TC-SAF-FW-008-02, TC-SAF-FW-009-01 (U part), TC-SAF-FW-011-01 (U part)
  */
@@ -25,6 +26,8 @@ static void test_loadlim_vectors(void)
         char name[96], msg[200];
         loadlim_t l;
         int32_t mn, mx, rg, last = 0;
+        bool latched = false;                   /* LOAD_LIMIT latch of the core (cmd.c calls on_clear only
+                                                   when FAULT_CLEAR actually clears it, ICD v0.7 OI-B-M2-03) */
         uint32_t ts, n, i;
         TEST_ASSERT_EQUAL_STRING("L", T);
         val_tok(&v, name);
@@ -38,13 +41,17 @@ static void test_loadlim_vectors(void)
                 uint32_t trip = val_u32(&v), win = val_u32(&v);
                 bool got = loadlim_check(&l, raw, is_rail(raw));
                 last = raw;
+                latched = latched || got;
                 snprintf(msg, sizeof msg, "%s step %u sample %d: trip", name, i, (int)raw);
                 TEST_ASSERT_EQUAL_MESSAGE((int)trip, (int)got, msg);
                 snprintf(msg, sizeof msg, "%s step %u sample %d: regrow window", name, i, (int)raw);
                 TEST_ASSERT_EQUAL_MESSAGE((int)win, (int)l.regrow_on, msg);
             } else if (T[0] == 'C') {
                 uint32_t win = val_u32(&v);
-                loadlim_on_clear(&l, last, is_rail(last));
+                if (latched) {
+                    loadlim_on_clear(&l, last, is_rail(last));
+                    latched = false;
+                }
                 snprintf(msg, sizeof msg, "%s step %u fault_clear: regrow window", name, i);
                 TEST_ASSERT_EQUAL_MESSAGE((int)win, (int)l.regrow_on, msg);
             } else if (T[0] == 'G') {

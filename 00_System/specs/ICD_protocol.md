@@ -2,7 +2,7 @@
 
 | Doc | ICD_protocol |
 |---|---|
-| Version | **0.7 — M2 close-out (CR-03, D-41…D-43)** (change history §15) |
+| Version | **0.7.1 — M2 close-out, Appendix C (OI-FW-41)** (change history §15) |
 | Date | 2026-10-03 |
 | Owner | Implementer C — Integrator (changes only with a version bump + change-history entry, IF-001) |
 | Implements | SRS v0.6: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34, D-36, D-37, D-40…D-43; FW_test_plan v0.3 §6.4 / §8.4 (REQ-C-M2-01…11); SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
@@ -1286,6 +1286,7 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 
 | ICD | Date | PROTO / PAYLOAD / dict | Change |
 |---|---|---|---|
+| 0.7.1 | 2026-10-04 | 1.0 / 1 / 5 | **Appendix C only (OI-FW-41, no wire change):** DIAG_MEAS NOINIT w4 prev_valid, w5 previous last PUL, w6 previous heartbeat, w7 previous hang start, w8 boot counter (sel 1 clears all); op 9 DWT = per-section statistics with table C.1 (23 sections 0…22; count / min / max / 64-bit sum / 10 log2 bins), INFO w0 = MEAS \| DWT and w6 = empty-pair overhead in DWT builds (the "main-loop section" wording withdrawn); twin DIAG_MEAS model mirrors w4…w8 (REQ-C-M2-12); `fw_twin/build.py` prints absolute paths for a build dir outside the repo. |
 | 0.7 | 2026-10-04 | 1.0 / 1 / 5 | **M2 close-out.** CR-03 / D-41 / D-42: `drv.pwr_sense_enable` default **0** (dict_version 5), new `drv.k1_check_enable` (0x0706, default 0, reboot; gates K1_WELDED, SRS OI-18), K1_WELDED / DRV_PWR / DRV_UNPOWERED texts "only with the optional power sense", E-stop = MCU / FW only + hardwired ENA cut, FW tolerates the externally forced ENA (§6.2); D-43 b un-homed travel window from a latched origin (§5.4, check vectors, state_schema 3: `unhomed_origin_um`); MC2-2 §9.3 rationale (no STOP-button HALT); OI-B-M2-03 load reference only at a LOAD_LIMIT clear (§5.5, `ref_loadlim.py`, vectors); OI-B-M2-04 coordinate convention (tools/README); Appendix C aligned to A's FW facts (OI-FW-38 / OI-ICD-10 closed); twin: DIAG_MEAS NOINIT magic at boot + 10 kHz heartbeat (REQ-C-M2-12), no `step_isr()` after a fixed-reaction halt (OI-FW-35), 4 stop-timing integration tests un-skipped. |
 | 0.6 | 2026-10-04 | 1.0 / 1 / 4 | **D-40 / Validator E M2 requests.** REQ-C-M2-01: command **DIAG_MEAS 0x3D** (LEN 8, 64-byte body, 10 ops, Appendix C), INFO feature bit 9 **FEAT_HW_MEAS**, BLOCK bit 11 **MEAS_STATE**, §4.4 step 2a NOT_IN_BUILD, §5.6, tables `meas_*` in `protocol.yaml`, seam v1.3 `hal_meas_cmd()` (+ SR-M2-01 `hal_step_set_dir` ±2 encoding, SR-M2-02 `hal_in_cfg_t` without `stop_active_level`). D-40a LIMIT_WIRING clear rule (§5.5, §6.2, vectors). D-40b sum tolerance ±ceil(N/1000) stated (§12). D-40d load-limit regrow window (§5.5) + `ref_loadlim.py` / `loadlim_vectors.json`. Twin: REQ-C-M2-02 `inject loop_load`, -05 conversions carry gain / rate, -06 world x from PUL + DIR pin (`driver dir_wiring_inverted`, x persists across resets), -07 automatic PEND, -08 DIAG_MEAS model (`--hw-meas`), -09 `stop=` removed, -10 `log_max` 1 000 000 + `query clear`. OI-ICD-09 closed; OI-ICD-10, SD-16 added. Dictionary unchanged. |
 | 0.5 | 2026-10-04 | 1.0 / 1 / 4 | **CR-01 / D-36** (one red button = E-stop with power cut; no physical holding STOP): DATA/STATUS `status` bit 9 and `io` bit 3 STOP_BTN, EVENT 22 STOP_BUTTON and stop cause 4 STOP_BUTTON **retired** (reserved, never reused; generated identifiers kept and marked RETIRED for compatibility, `RETIRED_MASK`); HALT source PC only; `io.stop_active_level` (0x0603) retired → **dict_version 4, 47 parameters**; SAF-FW-022 path removed (§5.5 HALT/HALT_CLEAR, §6.2 row, §6.3, §6.4); HALT_CLEAR never refused. **D-37**: (a) SAVE exemption + SW quiesce during SAVE (§2.4, §9.1); (b) feature-dependent status/IO bits sent as 0 and invalid while the feature bit is 0 (§7.6, `protocol.yaml` `feature:`, Python `<ID>_FEATURE`); (c) RESUME on the normal lane (§2.4); (d) STOP confirmation by device time (§9.4). **Queue**: OBS-M1-03 LOAD failure sends no EVENT (§5.2, §11.3); OBS-M1-05 µm/steps saturation (§0.1, `units_vectors.json` saturation cases); ESTOP_CLEAR with the input open but no latch = `E_CAUSE_ACTIVE` 0xFFFF (vector); `state_schema` stays 2 (STOP-button keys kept, ignored, never set); seam semantics + `afe_sample_t.status` bits + seam v1.2 `hal_fault_record()` in `tools/README.md`; OBS-M1-02 twin RX during flash stalls fixed; vocabulary: STOP-button inputs removed. **M2 start**: `motion_vectors.json` + `ref_motion.py` (§12), OI-ICD-09. |
@@ -1617,11 +1618,11 @@ Generated from `protocol.yaml` table `meas_op` (C `MEAS_OP_*`, Python `MeasOp`).
 | 2 | `PROBE_READ` | read the probe captures | 0 | 0 | 0 | RETRY |
 | 3 | `COUNTER` | independent PUL counter (MT-2): read / reset | 0 read, 1 reset (returns the value before the reset) | 0 | 0 | RETRY (read) / VERIFY (reset) |
 | 4 | `STAMPS` | device-time stamp ring (MT-4), newest first | meas_chan | page 0…1023 | 0 | RETRY |
-| 5 | `NOINIT` | .noinit block (last PUL, heartbeat, hang start; survives a reset) | 0 read, 1 clear | 0 | 0 | RETRY (read) / VERIFY (clear) |
+| 5 | `NOINIT` | .noinit block (last PUL, heartbeat, hang start, previous-boot record, boot counter; survives a reset) | 0 read, 1 clear | 0 | 0 | RETRY (read) / VERIFY (clear) |
 | 6 | `STIM_RUN` | stimulus series on the J-STIM output (MT-7) | bit 0 polarity (0 high pulse, 1 low pulse), bits 1-7 hold time 1…127 ms | pulses 1…1000 | seed | VERIFY |
 | 7 | `HANG` | test-image hang injection while moving (IWDG evidence) | meas_hang_where | duration 0…10000 ms (0 = until the IWDG resets) | 0 | VERIFY |
 | 8 | `STATIC_LEVEL` | drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed) | meas_pin | level 0/1 | 0 | VERIFY |
-| 9 | `DWT` | DWT section statistics (HW_MEAS_DWT builds; else w0 = 0) | 0 read, 1 reset | section 0…31 | 0 | RETRY (read) / VERIFY (reset) |
+| 9 | `DWT` | DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0) | 0 read, 1 reset | section 0…31 (0…22 defined, App. C table C.1) | 0 | RETRY (read) / VERIFY (reset) |
 
 ### B.19 DIAG_MEAS probe event source (PROBE_ARM sel; J-EVT selector position, FW_test_plan §6.2)
 
@@ -1727,16 +1728,36 @@ tables `meas_src`, `meas_chan`, `meas_probe_mode`, `meas_probe_flags`, `meas_var
 
 | op | Body words |
 |---|---|
-| 0 INFO | w0 variant (`meas_variant`), w1 probe timer clock Hz (180 000 000), w2 counter width bits (32, software-extended), w3 stamp clock Hz (1 000 000), w4 stamp ring size per channel (2048), w5 DMA stamp latency ns (≤ 1 000), w6 DWT stamp overhead cycles (0 without DWT), w7 stimulus timer clock Hz (10 000 000) |
+| 0 INFO | w0 variant (`meas_variant`), w1 probe timer clock Hz (180 000 000), w2 counter width bits (32, software-extended), w3 stamp clock Hz (1 000 000), w4 stamp ring size per channel (2048), w5 DMA stamp latency ns (≤ 1 000), w6 empty stamp-pair overhead cycles (calibrated at boot = section 21 of table C.1; 0 without DWT), w7 stimulus timer clock Hz (10 000 000). HW_MEAS_DWT builds: w0 = MEAS \| DWT |
 | 1 PROBE_ARM | – (armed; previous captures discarded) |
 | 2 PROBE_READ | w0 flags (`meas_probe_flags`; TRIGGERED = the probe counter is running), w1 CCR1 = 0 (the counter starts at the event), w2 CCR2 = last PUL rising edge after the event, w3 CCR3 = last ENA edge, w4 CCR4 = last DIR edge (probe ticks since the event), w5 PUL stamps since arming, w6 probe CNT now, w7 PSC, w8 / w9 PWM-input min / max PUL period, w10 / w11 min / max PUL high time, w12 PWM samples (probe ticks) |
 | 3 COUNTER | w0 PUL rising edges since the last reset (32 bit), w1 `t_us` of the read (sel 1: values before the reset) |
 | 4 STAMPS | w0 stamps written on the channel since boot / reset, w1 ring size, w2…w15 the 14 stamps of page `a`, newest first (stamp k = entry w0 − 1 − (14·a + k)); 0 = not available |
-| 5 NOINIT | w0 magic `0x4D454153` (set at boot when the block was invalid, rings then cleared), w1 last PUL `t_us`, w2 heartbeat `t_us` (DMA-updated at 10 kHz: the last update, not the time of the read), w3 hang start `t_us` (HANG op); survives a reset; sel 1 clears after reading |
+| 5 NOINIT | w0 magic `0x4D454153`, w1 last PUL `t_us` of this boot (0 until its first PUL), w2 heartbeat `t_us` (DMA-updated at 10 kHz: the last update, not the time of the read), w3 hang start `t_us` (HANG op; kept across resets until a clear), **w4 prev_valid** (1 = w5…w7 were snapshot at this boot from a valid block), **w5** previous boot's newest PUL `t_us` (0 = none), **w6** previous boot's last heartbeat `t_us` (≤ 100 µs before that boot ended), **w7** previous boot's hang start `t_us`, **w8** boot counter (boots since the block was initialised or cleared). At boot: block invalid → cleared (w1…w8 = 0) and the magic set; block valid → w4 = 1, w5…w7 snapshot, w8 + 1, the stamp rings cleared (each boot's rings hold only its own stamps). The block survives a reset (not a power cycle); sel 1 clears all words after reading (magic stays valid) |
 | 6 STIM_RUN | – (series started: `a` pulses on the J-STIM output, each after a seeded random delay of 0…1 running step period (TIM2 ARR; 1 ms when the step timer is stopped), `sel` bits 1–7 = hold ms, bit 0 polarity) |
 | 7 HANG | – (the selected context hangs for `a` ms, 0 = until the IWDG resets; only while moving) |
 | 8 STATIC_LEVEL | – (PUL or DIR held at level `a` until the next command; only NOT_ENABLED and with the step timer stopped) |
-| 9 DWT | w0 valid (1 in HW_MEAS_DWT builds, else 0), w1 count, w2 min cycles, w3 max cycles, w4 / w5 sum low / high, w6…w15 histogram bins (main-loop section) |
+| 9 DWT | statistics of **section `a`** (table C.1): w0 valid (1 in HW_MEAS_DWT builds, else 0), w1 count, w2 min cycles, w3 max cycles, w4 / w5 sum low / high (64-bit), w6…w15 histogram bins 0…9 of that section (cycles c at the 180 MHz core clock: bin 0 c < 512, bin k = 1…8 2^(k+8) ≤ c < 2^(k+9), bin 9 c ≥ 2^17); sections 23…31 read count 0; sel 1 resets the section after reading |
 
 Retry class (§9.3): ops 0, 2, 4 and the read variants of 3, 5, 9 = RETRY; ops 1, 6, 7, 8 and the reset / clear
 variants = VERIFY.
+
+**Table C.1 — DWT sections (op 9 `a`; HW_MEAS_DWT image, A's `src/hal/f446/meas_dwt.h`, FW_design v0.6 §9.9).**
+A section's figure = CYCCNT cycles between its entry and exit stamps; the record call runs after the exit stamp and
+is not part of the section's own figure, but an outer section that contains an inner recorded section includes the
+inner record call (section 22). Sections 21 / 22 are boot calibrations (16 samples each).
+
+| a | Section | a | Section |
+|---|---|---|---|
+| 0 | main-loop pass (`app_loop()`) | 12 | CRIT_AFE window (BASEPRI 0x20) |
+| 1 | TIM2 update ISR (step count + `step_isr`) | 13 | CRIT_MOTION window (BASEPRI 0x20) |
+| 2 | EXTI15_10 E-stop handler | 14 | CRIT_DATA window (BASEPRI 0x30) |
+| 3 | EXTI0 START limit handler | 15 | CRIT_TICK window (BASEPRI 0x40) |
+| 4 | EXTI1 END limit handler | 16 | `hal_step_stop_now()` PRIMASK window |
+| 5 | EXTI9_5 PAUSE handler | 17 | `hal_step_abort()` PRIMASK window |
+| 6 | EXTI4 HX711 data-ready handler (read + `on_afe_sample`) | 18 | `hal_step_set_period_now()` PRIMASK window |
+| 7 | TIM5 1 kHz tick (`core_tick_1ms`) | 19 | longest SCK-high of one HX711 read |
+| 8 | USART2 error IRQ | 20 | one HX711 shift-in (24 + 1…3 bits) |
+| 9 | DMA1 stream 5 (RX ring lap) | 21 | calibration: empty stamp pair (= INFO w6) |
+| 10 | DMA1 stream 6 (TX complete → next frame) | 22 | calibration: one record call |
+| 11 | CRIT_HALT window (PRIMASK) | 23…31 | reserved (31 = internal calibration scratch, reads 0) |

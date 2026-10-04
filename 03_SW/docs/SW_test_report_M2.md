@@ -2,7 +2,7 @@
 
 | Doc | SW_test_report_M2 |
 |---|---|
-| Version | **1.0 — M2 gate verification** |
+| Version | **1.1 — M2 close-out re-test** (1.0: M2 gate verification, ACCEPTED WITH CONDITIONS) |
 | Date | 2026-10-04 |
 | Author | Validator F — SW |
 | Plan | `03_SW/docs/SW_test_plan.md` **v0.3.1** (§3.14 M2 SW early acceptance armed, §2.4a, §10b M2-C1…C9) |
@@ -12,7 +12,28 @@
 
 ---
 
-## 0. Verdict
+## 0. Final verdict (after the close-out re-test, §8)
+
+```
+Verdict M2: ACCEPTED WITH CONDITIONS
+SW tree: HEAD 4e9989e (M2 close-out implementation) — 03_SW/src fingerprint identical before / after all runs
+ICD 0.7.1 (dict 5, 48 params, PARAM_DICT_HASH 0xB7B0263F, state_schema 3) · SRS 0.6.1 (CR-03) · D-01…D-43
+Runs (full 03_SW/tests: unit 2069 + gui 188 + integration 63 + validation 495 = 2815):
+   #1 fixed order          2815 passed (480 s)
+   #2 seed 12345           2815 passed (484 s)
+   #3 seed 1343553697      2815 passed (499 s)
+   → identical, 0 skipped, 0 xfail; the Integrator's former M1 stop-timing skips now run (M2 motion in the twin)
+Validation suite alone (trace run): 495 passed → _reports/trace.json
+Coverage (unit + validation, branch on): calc 99.7 %, core 94.9 % line / 88.3 % branch, io 95.6 / 90.8 %,
+   io.sim 95.3 / 90.3 %; core.link 96.5 %, core.gates 97.3 %, core.motion 89.4 %, core.safety 92.7 % (floor 95 %:
+   remaining misses = calibrated / INVALID threshold path used from M3 → MC2-3)
+Closed in the re-test: SWD-M2-01, -02, -03; MC2-1, MC2-2, MC2-4; OBS-M2-R1 not reproduced (3 / 3 runs)
+Open defects: none
+Remaining conditions: MC2-3 (core.safety coverage, M3 gate), MC2-5 (REF PC: Win32 hotkey / NFR-003, DM-11),
+   MC2-6 (PO demos DM-02 / DM-05 / SYS-008 walk-through; sim-vs-twin motion subset)
+```
+
+## 0a. Verdict of the gate verification (v1.0, superseded by §0)
 
 ```
 Verdict M2: ACCEPTED WITH CONDITIONS
@@ -137,8 +158,56 @@ Logs: scratchpad `validator-f-sw/m2gate/run1…4.txt`, `cov.txt`, `val_trace.txt
 * **Integrator:** OI-F-M2-03 (ICD §9.3 text).
 * **Orchestrator / PO:** CR-03 SRS items (OI-F-M2-01/02), REF PC, DM-02 / 05 / 11.
 
-## 7. Change history
+## 8. Close-out re-test (v1.1)
+
+B reported SWD-M2-01 (D-41 texts), -02 (round half away), -03 (lost MOVE_DONE resolved from STATUS), MC2-4
+(simulator NVM flash stall, SAVE 500 ms default), D-43 b (un-homed travel window from a latched origin), CR-03
+(boot-latched `drv.pwr_sense_enable` / `drv.k1_check_enable`, D-42 world `ena_hardwired_cut`); ICD v0.7 / v0.7.1
+(dict 5, 48 params, 0xB7B0263F, state_schema 3).
+
+### 8.1 Suite adaptation (plan v0.3.2, M2-C10)
+* The 6 cases B reported as failing assumed the power sense on by default (ICD ≤ v0.6). They now run in a scenario with
+  `params` `drv.pwr_sense_enable` = true (+ `drv.k1_check_enable` = true for K1), written into RAM and re-latched by the
+  simulator (both reboot-required): TC-SYS-008-04 (e)(f), TC-SW-MAN-006-02 [drv_unpowered], TC-SYS-008-05 K1 ×3. This
+  is a test-precondition change, not a weakened expectation: the timing bounds are unchanged.
+* TC-SYS-008-07 (**MC2-1**) rewritten for the release-1 defaults: E-stop during a move with the supply held
+  (`drv_power_follows` false) → STOPPED ESTOP ≤ 3 ms, ESTOP_SET, DRIVER_DISABLED 3, HOMED cleared, no DRIVER_POWER,
+  no K1_WELDED, DRV_PWR reads 1; ENABLE refused until released + ESTOP_CLEAR; a DRV_POWER input change is ignored
+  (the move completes). **Pass.**
+* New: D-43 e (sense on + K1 check off → never K1_WELDED); D-43 b (un-homed jog bounded at origin + `home.max_travel_um`,
+  MOVE_DONE SOFT_LIMIT, further + JOG E_RANGE, − JOG OK); **MC2-4** SAVE quiesce with the simulator's own stall (response
+  ≥ 450 ms after the request, only STOP / HALT / PAUSE in between, HALT executed after the flash op, held read follows);
+  regression tests SWD-M2-01 (no RESET / K1 action in any clear hint or E-stop gate text; K1_WELDED / DRV_PWR hints name
+  the optional presence sense) and SWD-M2-02 (zero_raw 2.5 → 3, −2.5 → −3, 3.5 → 4, 2.4999 → 2; oracle `f_ref.rha`).
+
+### 8.2 Per-item result
+
+| ID | Fix (reviewed) | Re-test | State |
+|---|---|---|---|
+| SWD-M2-01 | `core/gates.py` CLEAR_HINTS: E-stop = release, wait, Clear E-stop, Enable + Home; K1 / DRV_PWR texts for the optional sense; E-stop clear CONFIRM without K1 | `test_tc_saf_sw_005_05_no_contactor_texts_d41`, `…005_04` | **closed** |
+| SWD-M2-02 | `core/safety.py:79` `round_half_away(tare_raw)` | `test_tc_saf_sw_002_07_zero_raw_rounds_half_away[4]` | **closed** |
+| SWD-M2-03 | `core/motion.py:369-377` IDLE and `pos_um == target` → DONE from STATUS (+ pending sent) | review + B's unit test (an EVENT cannot be dropped through the frozen vocabulary; rule 2) | **closed** (by inspection + implementer test) |
+| MC2-1 | CR-03 in SRS v0.6.1 (incl. OI-F-M2-01 "D-63 rules (1)–(5)", OI-F-M2-02 SYS-002 "physical PAUSE"), ICD v0.7 defaults, backend texts | TC-SYS-008-07 (release 1), sense variants | **closed** |
+| MC2-2 | OI-F-M2-03: the ICD no longer mentions a STOP-button HALT (grep) | inspection | **closed** |
+| MC2-3 | SWD-M2-02 fixed; `core.safety` 92.7 % line (< 95 %): the calibrated / INVALID path is unused until M3 | coverage | **open (partial)** → M3 gate |
+| MC2-4 | simulator SAVE / LOAD / DEFAULTS stall (`nvm_stall_ms`, SAVE 500 ms), response after the flash op | `test_tc_sw_cfg_004_02_save_quiesce_with_simulated_flash_stall` + the D-37 a cases | **closed** |
+| MC2-5 | REF PC: Win32 hotkey / NFR-003 (PR-3, DM-06), DM-11 (SW-RT-006 on the second monitor, restart, 4-pane smoothness) | — | **open** → M3 |
+| MC2-6 | PO demos DM-02 / DM-05 / SYS-008 GUI walk-through; sim-vs-twin motion subset (the Integrator's twin motion cases pass; the former M1 skips now run) | — | **open** → M2 exit / M3 entry |
+| OBS-M2-R1 | — | `test_gui_sim_smoke_offscreen` passed in all three re-test runs (+ 16 / 16 earlier) | **not reproduced**; watched in the REF-PC runs |
+
+### 8.3 Review notes (no defect)
+* SWD-M2-03 fix: when the request was lost but the axis already stood at the target, the ticket resolves DONE (nothing
+  executed, position = target) — harmless and consistent with "position = target".
+* `gui/indicator_map.py` keeps a K1 chip; it is only meaningful with the optional sense + K1 check (D-43 e) — D to
+  show it UNKNOWN / hidden when `drv.k1_check_enable` is false (M3, cosmetic).
+
+### 8.4 Processes
+`_reports/processes.log`: 239 started, 239 stopped / exited, each through its own handle and the PID recorded at
+start (simulator servers, GUI smokes, fw_twin engines).
+
+## 9. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 1.0 | 2026-10-04 | Validator F | M2 gate verification on 099af88 + GUI B4 alignment: §3.14 armed, 3 (+1) full runs, coverage, code review of the M2 backend; OBS-M1-R1 and F-MC-4 closed; SWD-M2-01…03 (S4); verdict ACCEPTED WITH CONDITIONS (MC2-1…6). |
+| 1.1 | 2026-10-04 | Validator F | Close-out re-test on 4e9989e (ICD v0.7.1, SRS v0.6.1): suite adapted to the CR-03 defaults (sense cases via scenario params, M2-C10), new D-43 b/e, MC2-4 stall and SWD-M2-01/02 regression tests; 3 runs identical (2815 passed); SWD-M2-01…03, MC2-1/2/4 closed; final verdict ACCEPTED WITH CONDITIONS (MC2-3 partial, MC2-5, MC2-6). |

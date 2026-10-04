@@ -265,12 +265,12 @@ STATE_ORDER = ["motion_state", "enabling_left_ms", "homed", "pos_um", "estop_lat
                "estop_input_open", "estop_closed_ms", "halt_latched", "stop_btn_active",
                "stop_btn_released_ms", "faults", "fault_causes", "limit_start", "limit_end",
                "afe_stale", "afe_saturated", "raw", "drv_power", "alm_active", "nvm_record_valid",
-               "paused"]
+               "paused", "unhomed_origin_um"]                        # schema 3 (ICD v0.7, D-43 b)
 
 
 def check_lines(cv: dict) -> list[str]:
-    if cv.get("state_schema") != 2:
-        die(f"check_vectors state_schema {cv.get('state_schema')} != 2 (validator mapping)")
+    if cv.get("state_schema") != 3:
+        die(f"check_vectors state_schema {cv.get('state_schema')} != 3 (validator mapping)")
     base = cv["state_defaults"]
     if sorted(base) != sorted(["params"] + STATE_ORDER):
         die(f"check_vectors state keys changed: {sorted(base)}")

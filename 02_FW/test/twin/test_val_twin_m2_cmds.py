@@ -168,6 +168,7 @@ def test_drv_power_loss_during_save_with_erase(v):
     """Reaction to a driver-power loss during an idle SAVE <= operation time + 25 ms (D-33 f); SAVEs repeated
     until one performs a sector erase."""
     m.need(v, "MOTION", "DRV_SIGNALS")
+    m.enable_power_sense(v)
     worst = []
     for i in range(80):
         m.enable(v)
@@ -198,6 +199,7 @@ def test_drv_power_loss_during_save_with_erase(v):
 # ------------------------------------------------------------------ SAF-FW-026 ALM start-block
 def test_alm_start_block(v):
     m.need(v, "MOTION", "HOMING", "DRV_SIGNALS")
+    m.enable_power_sense(v)                                   # the DRV_UNPOWERED part needs the sense (CR-03)
     m.ready(v, x_um=50_000)
     n0 = m.n_events(v)
     v.tw.act("alm", active=True)
@@ -465,6 +467,7 @@ def test_enable_settle_disable(v, settle):
 
 def test_settle_counts_from_power_return(v):
     m.need(v, "MOTION", "DRV_SIGNALS")
+    m.enable_power_sense(v)
     v.tw.act("drv_power", on=False)
     v.advance(40)
     assert _blk(v.cmd("ENABLE"), "DRV_UNPOWERED")
@@ -635,6 +638,8 @@ def test_alm_pend_reporting(v):
                                    "HOME_WIRING", "HOME_DRIFT", "K1_WELDED"])
 def test_fault_clear_per_fault(v, fault):
     m.need(v, "MOTION", "HOMING", "AFE", "DRV_SIGNALS")
+    if fault == "K1_WELDED":
+        m.enable_power_sense(v, k1_check=True)
     m.ready(v, x_um=50_000)
     cause_gone = None
     if fault == "LOAD_LIMIT":
@@ -776,6 +781,7 @@ def test_event_catalogue(v):
     """TC-FW-STR-006-01: a scenario that triggers every reachable EVENT code (1…34 without the retired 22);
     each EVENT decodes and its SEQ is consecutive; NVM_ERROR (31) is covered by the M1 flash-cut suite."""
     m.need(v, "MOTION", "HOMING", "AFE", "BUTTONS", "DRV_SIGNALS")
+    m.enable_power_sense(v)                                   # DRIVER_POWER is reported only with the sense
     v.tw.act("clk", hse_fail=True)
     v.tw.act("reset", cause="power")
     v.advance(60)
@@ -1016,3 +1022,31 @@ def test_jog_unhomed_bound_and_reversal(v):
     assert before and dirs[0]["t_us"] - before[-1] > 0
     s2 = v.status()["pos_steps"]
     assert s2 - s1 == len(before) - len(after), (s2 - s1, len(before), len(after))
+
+
+def test_unhomed_window_fixed_origin_d43b(v):
+    """D-43 b (closes OBS-M2-02): the un-homed travel window is origin ± home.max_travel_um with the origin latched
+    when the axis became un-homed (here: boot / ENABLE); a held jog that reaches the bound stops and further JOG
+    toward it is refused (E_RANGE) until homed; JOG away is accepted; repeated jogs do not move the origin."""
+    m.need(v, "MOTION", "HOMING")
+    m.set_ok(v, "home.max_travel_um", 1_000)
+    m.enable(v)
+    s0 = v.status()["pos_steps"]
+    vu = v.get("motion.v_unhomed_um_s")
+    for _ in range(3):                                       # three separate jogs toward +x
+        n0 = m.n_events(v)
+        m.jog(v, vu)
+        for _ in range(12):
+            v.advance(100)
+            r = m.jog(v, vu)
+            if m.events_since(v, n0, "MOVE_DONE"):
+                break
+        m.jog(v, 0)
+        m.wait_until(v, lambda: m.state(v) == "IDLE", 2_000)
+    s = v.status()["pos_steps"]
+    assert s - s0 <= 800, (s - s0)                            # never beyond origin + 1 mm (800 spm)
+    r = m.jog(v, vu)
+    assert (r["status"], r["detail"]) == ("E_RANGE", 0), r     # toward the reached bound
+    assert m.jog(v, -vu)["status"] == "OK"                    # away
+    m.jog(v, 0)
+    m.wait_until(v, lambda: m.state(v) == "IDLE", 2_000)
