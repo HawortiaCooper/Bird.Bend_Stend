@@ -20,8 +20,9 @@ from bend_stand.gui.plots.plot_pane import XYPane, pane_from_mime, pane_mime
 from bend_stand.gui.plots.quantity import quantity_group
 from bend_stand.gui.widgets.stop_button import StopButton
 
-EXTRA = [ChannelSpec("x_mm", "Setpoint", "mm", "travel"), ChannelSpec("x2_mm", "Travel 2", "mm", "travel"),
-         ChannelSpec("F_kgf", "Force", "kgf", "Force")]
+EXTRA = [ChannelSpec("x_mm", "Setpoint", "mm", "travel", dimension="length"),
+         ChannelSpec("x2_mm", "Travel 2", "mm", "travel", dimension="length"),
+         ChannelSpec("F_kgf", "Force", "kgf", "Force", dimension="force")]
 
 
 @pytest.fixture
@@ -70,7 +71,11 @@ def test_quantity_groups_of_the_registry() -> None:
 
     class WithDim:
         key, unit, group, dimension = "k", "N", "", "length"
-    assert quantity_group(WithDim()) == "Travel"
+    assert quantity_group(WithDim()) == "Travel"                     # dimension (B4-08) wins over the unit
+    for dim, group in (("counts", "Raw counts"), ("length", "Travel"), ("rate", "Sample rate"),
+                       ("count", "Link counters"), ("state", "States"), ("bits", "Status bits"), ("force", "Force"),
+                       ("speed", "Speed"), ("force_rate", "Force rate")):
+        assert quantity_group(ChannelSpec("k", "k", "", "", dimension=dim)) == group, dim
 
 
 @pytest.mark.req("SW-RT-006")

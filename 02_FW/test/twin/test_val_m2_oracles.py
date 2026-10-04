@@ -24,6 +24,7 @@ import pytest
 import homing_ref as hr
 import latch_ref as lr
 import ramp_ref as rr
+import vhelp as VH
 
 VEC = Path(__file__).resolve().parents[3] / "00_System" / "tools" / "vectors"
 F = rr.F_TICK_TARGET
@@ -86,8 +87,7 @@ def test_motion_vectors_cases_vs_independent_oracle():
         ok, msg = rr.check_periods(p, c["periods"], tol_each=0)
         assert ok, (c["name"], msg)
         assert c["tolerance"]["period_ticks"] == 1
-        # SRS FW-MOT-003 "±N/1000 ticks": the vectors use ceil(N/1000) (31 280 -> 32); the literal bound is
-        # floor (31). Accepted here, the FW verdict uses the stricter floor (OBS-E-M2-02 to the Integrator).
+        # D-40 b: total tolerance ±ceil(N/1000) ticks (31 280 periods -> 32), SRS FW-MOT-003 aligned
         assert c["tolerance"]["sum_ticks"] == max(1, math.ceil(c["n_periods"] / 1000)), c["name"]
         executed += 1
     assert executed == len(cases)                               # anti-skip
@@ -103,7 +103,7 @@ def test_motion_vectors_ctrl_stop_paths_and_planner():
         t = rr.plan_trapezoid(row["n_steps"], row["v_steps_s"], row["a_steps_s2"], row["d_steps_s2"])
         assert (t["kind"], t["n_acc"], t["n_dec"]) == (row["kind"], row["n_acc"], row["n_dec"]), row
         assert t["t"] == pytest.approx(row["t"], rel=1e-12)
-    assert mv["icd_version"] == "0.5"
+    assert mv["icd_version"] == VH.gen_define("PROTO_ICD_VERSION").strip('"')     # OI-FW-36
 
 
 # --------------------------------------------------------------------------- helper controls
@@ -271,6 +271,23 @@ def test_load_limit_rules():
     ll.fault_clear(7100000)
     assert not ll.feed(1, 6000000)               # unloaded into the band ...
     assert ll.feed(2, 7022272)                   # ... normal threshold again (ASSUMED window end)
+
+
+def test_loadlim_vectors_vs_independent_oracle():
+    """ICD v0.6 loadlim_vectors.json (D-40 d) replayed by the validator's LoadLimit: every trip / window flag."""
+    f = VEC / "loadlim_vectors.json"
+    if not f.exists():
+        pytest.skip("loadlim_vectors.json not published")
+    lv = json.loads(f.read_text(encoding="utf-8"))
+    n = 0
+    for c in lv["cases"]:
+        got = lr.run_loadlim_case(c)
+        for k, (st, (trip, win)) in enumerate(zip(c["steps"], got)):
+            if st["op"] == "sample":
+                assert trip == st["trip"], (c["name"], k, st, trip)
+            assert win == st["regrow_window"], (c["name"], k, st, win)
+        n += 1
+    assert n == len(lv["cases"]) >= 12
 
 
 def test_h5_rule():

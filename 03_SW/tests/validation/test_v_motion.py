@@ -16,6 +16,10 @@ SW-STOP-004, SAF-SW-004, SAF-SW-005
 """
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
+
 import pytest
 
 import harness as H
@@ -273,9 +277,9 @@ def test_tc_sys_008_04_sim_limit_wiring_clear_rule_d40(vbe):
     H.act(vbe, "limit", name="start", active=False)
 
 
-# ============================================================================================ B — pending M2
+# ============================================================================================ B — M2 public API (armed at the M2 gate)
 
-M2 = pytest.mark.pending("M2", needs="backend.motion (WP-B12), MotionController, motion gates")
+# v0.3 / M2 gate: armed (B declared the M2 backend done, commit 099af88) — pending("M2") markers removed.
 
 
 def _ready(lockstep, **kw):
@@ -284,7 +288,6 @@ def _ready(lockstep, **kw):
     return be
 
 
-@M2
 @pytest.mark.req("SW-MAN-002", "IF-009", "SYS-003")
 def test_tc_sw_man_002_02_move_to_and_move_by_absolute_um(lockstep):
     """move_to(20) → one MOVE_ABS 20 000 µm; move_by(+2.5) → 22 500 (base = commanded target); move_to(12.3455) →
@@ -301,7 +304,6 @@ def test_tc_sw_man_002_02_move_to_and_move_by_absolute_um(lockstep):
     assert not {"JOG"} & {w.name for w in H.tx(be)}
 
 
-@M2
 @pytest.mark.req("SW-MAN-003")
 def test_tc_sw_man_003_01_latest_wins_pending_target(lockstep):
     """(a) three +1 mm clicks, each move completed in between → 11, 12, 13; (b) three +1 mm clicks during a running
@@ -327,7 +329,6 @@ def test_tc_sw_man_003_01_latest_wins_pending_target(lockstep):
     assert [w.fields["target_um"] for w in H.tx(be, "MOVE_ABS", since=m1)] == [11_000, 13_000]
 
 
-@M2
 @pytest.mark.req("SW-MAN-003", "SW-STOP-004")
 @pytest.mark.parametrize("how", ["stop", "pause"])
 def test_tc_sw_man_003_02_pending_target_dropped_on_stop_or_pause(lockstep, how):
@@ -344,7 +345,6 @@ def test_tc_sw_man_003_02_pending_target_dropped_on_stop_or_pause(lockstep, how)
     assert H.motion(be).pending_target_mm is None and not H.tx(be, "MOVE_ABS", since=m0)
 
 
-@M2
 @pytest.mark.req("SW-MAN-004")
 def test_tc_sw_man_004_01_jog_refresh_and_stop(lockstep):
     """jog_start → JOG ≠ 0 at once, refreshed with max interval ≤ 100 ms for 5 s; jog_stop → JOG 0 (v = 0)."""
@@ -364,7 +364,6 @@ def test_tc_sw_man_004_01_jog_refresh_and_stop(lockstep):
     assert jogs[-1].fields["v_um_s"] == 0
 
 
-@M2
 @pytest.mark.req("SW-MAN-004", "SAF-SW-003")
 def test_tc_sw_man_004_01_jog_dead_man_without_gui_beat(lockstep, pdict):
     """GUI beat withheld while jogging → the backend stops refreshing (beat older than 300 ms) → FW dead-man stop
@@ -379,7 +378,6 @@ def test_tc_sw_man_004_01_jog_dead_man_without_gui_beat(lockstep, pdict):
     assert rc.STOP_CAUSE_NAME[_ev(be, m0, "STOPPED")[0].fields["arg"]] == "JOG_DEADMAN"
 
 
-@M2
 @pytest.mark.req("SW-MAN-004", "SW-LIM-001")
 def test_tc_sw_man_004_01_unhomed_jog_capped_and_unbounded(lockstep, pdict):
     """Un-homed jog: v ≤ motion.v_unhomed_um_s and bound = JOG_NO_BOUND (0x80000000, ICD §5.4)."""
@@ -396,7 +394,6 @@ def test_tc_sw_man_004_01_unhomed_jog_capped_and_unbounded(lockstep, pdict):
     assert run and all(abs(w.fields["v_um_s"]) <= vmax and w.fields["bound_um"] == rc.JOG_NO_BOUND for w in run)
 
 
-@M2
 @pytest.mark.req("SW-MAN-005")
 def test_tc_sw_man_005_01_speed_and_accel_caps_refused_with_maximum(lockstep, pdict):
     """Speed 31 mm/s (> v_max_travel 30) and accel > a_max → check() REFUSE / ERROR naming the allowed maximum,
@@ -413,7 +410,6 @@ def test_tc_sw_man_005_01_speed_and_accel_caps_refused_with_maximum(lockstep, pd
     assert not H.tx(be, "MOVE_ABS", since=m0)
 
 
-@M2
 @pytest.mark.req("SW-LIM-001", "IF-009")
 def test_tc_sw_lim_001_01_targets_outside_sw_limits_refused_jog_bound(lockstep):
     """SW travel limits 10…200 mm: move_to(250) refused locally (nothing on the wire); a + jog carries bound_um =
@@ -440,7 +436,6 @@ def test_tc_sw_lim_001_01_targets_outside_sw_limits_refused_jog_bound(lockstep):
     assert d and rc.MOVE_DONE_REASON[d[0].fields["arg"]] == "BOUND" and d[0].fields["value"] == 200_000
 
 
-@M2
 @pytest.mark.req("SW-MAN-006", "SAF-SW-005", "SW-STOP-004", "SW-STOP-003")
 @pytest.mark.parametrize("cond", ["not_enabled", "not_homed", "halt", "paused", "estop", "drv_unpowered", "alm"])
 def test_tc_sw_man_006_02_move_gate_refuses_and_sends_nothing(lockstep, cond):
@@ -471,7 +466,6 @@ def test_tc_sw_man_006_02_move_gate_refuses_and_sends_nothing(lockstep, cond):
     assert not H.tx(be, "MOVE_ABS", since=m0)
 
 
-@M2
 @pytest.mark.req("SAF-SW-004")
 def test_tc_saf_sw_004_02_disable_and_home_need_confirmation(lockstep):
     """disable() without the confirmation → refused, nothing on the wire; home() with the load unknown (no
@@ -491,7 +485,6 @@ def test_tc_saf_sw_004_02_disable_and_home_need_confirmation(lockstep):
     assert len(hm) == 1 and hm[0].fields["flags"] & 1
 
 
-@M2
 @pytest.mark.req("SW-STOP-002", "NFR-003")
 def test_tc_sw_stop_002_02_hotkey_halts_and_repeats_until_confirmed(lockstep):
     """Fake hotkey press (GRQ-F-M2-01) while moving: HALT written at once (priority path), first 3 HALT requests
@@ -580,3 +573,216 @@ def test_tc_sys_008_05_sim_load_limit_regrow(lockstep, pdict):
     H.result(be, H.forced_move_abs(be, int(x) + 20_000, 2_000))
     assert H.until(be, lambda: any(rc.FAULTS[w.fields["arg"]] == "LOAD_LIMIT"
                                        for w in _ev(be, m1, "FAULT_SET")), 20_000)
+
+
+# ============================================================================================ C — M2 gate additions
+
+@pytest.mark.req("SW-STOP-001", "IF-005")
+@pytest.mark.defect("F-MC-4")
+def test_tc_sw_stop_001_05_stop_confirmation_is_not_a_str(vbe):
+    """F-MC-4 (M1 condition): the ``stop.confirmed`` payload is the ``StopConfirmation`` dataclass only — the v0.3
+    str-equality shim is gone (a consumer comparing with "STOP" can no longer pass by accident)."""
+    # Verifies: SW-STOP-001, IF-005
+    t0 = H.now_ns(vbe)
+    assert H.stop(vbe).sent
+    H.advance(vbe, 200)
+    conf = [r.payload for r in H.history(vbe, "stop.confirmed") if r.t_host_ns >= t0]
+    assert conf and conf[-1].cmd == "STOP" and conf[-1].confirmed
+    assert conf[-1] != "STOP" and "STOP" != conf[-1] and not isinstance(conf[-1], str)
+
+
+@pytest.mark.req("SAF-SW-002", "SW-CFG-003")
+def test_tc_saf_sw_002_05_manual_thresholds_h2_safe_verified_and_failure_blocks_motion(lockstep, pdict):
+    """SAF-SW-002 M2 part (ThresholdManager, B4-04): manual raw thresholds → SET_PARAM of the three session values with
+    H2 (load_raw_min < load_raw_max) true after **every** SET, each read back by GET_PARAM, state VERIFIED; an injected
+    store mismatch → FAILED and the motion gates REFUSE (THRESHOLDS_UNVERIFIED), nothing moves."""
+    # Verifies: SAF-SW-002, SW-CFG-003
+    # thresholds chosen BELOW the defaults (−7 022 271 … 7 022 271) so that the H2-safe order matters: max must be
+    # lowered after min (else min ≥ max in between); zero_raw must lie between them (B's rule)
+    be = lockstep()
+    H.m2_ready(be)
+    ids = {p.id: p.key for p in pdict.params}
+    vals = {p.key: p.default for p in pdict.params}
+    m0 = H.wire_mark(be)
+    st = H.result(be, be.limits.set_manual_thresholds_async(-6_000_000, -5_000_000, -5_500_000))
+    assert st.state == "VERIFIED" and st.raw_min == -6_000_000 and st.raw_max == -5_000_000, st
+    st = H.result(be, be.limits.set_manual_thresholds_async(-4_500_000, -4_200_000, -4_300_000))
+    assert st.state == "VERIFIED", st                 # new min > old max → max must be raised first (H2)
+    sets = H.tx(be, "SET_PARAM", since=m0)
+    keys = []
+    for w in sets:
+        k = ids[w.fields["id"]]
+        vals[k] = w.fields["value"]
+        keys.append(k)
+        assert f_ref.rule_ok("H2", vals), (k, vals["safety.load_raw_min"], vals["safety.load_raw_max"])
+    assert {"safety.load_raw_min", "safety.load_raw_max"} <= set(keys)
+    reads = {ids[w.fields["id"]] for w in H.tx(be, "GET_PARAM", since=m0)}
+    assert set(keys) <= reads
+    H.inject_store_mismatch(be, "safety.load_raw_max", -4_000_001)
+    st = H.result(be, be.limits.set_manual_thresholds_async(-6_000_000, -4_000_000, -5_500_000))
+    assert st.state == "FAILED", st
+    H.advance(be, 100)
+    g = H.gate(be, "MOVE")
+    assert not g.ok and "THRESHOLDS_UNVERIFIED" in {str(i.code) for i in g.items}, g
+    m1 = H.wire_mark(be)
+    with pytest.raises(Exception):  # noqa: B017
+        H.result(be, H.move_to(be, 30.0), 2000)
+    assert not H.tx(be, "MOVE_ABS", since=m1)
+
+
+@pytest.mark.rt
+@pytest.mark.req("SW-STOP-002", "NFR-003")
+def test_tc_sw_stop_002_05_hotkey_fake_backend_halts_and_test_mode_does_not(tmp_path):
+    """SW-STOP-002 (C, real clock, fake hotkey backend — the Win32 part is W on the REF PC): status().hotkey active;
+    a key press writes HALT within 50 ms; in test mode (``hotkey_test_start``) the press is only measured (topic
+    ``hotkey.test`` with a delay) and **no** HALT is sent."""
+    # Verifies: SW-STOP-002, NFR-003
+    be = H.realtime_backend(recordings_root=str(tmp_path / "rec"), hotkey="fake")
+    try:
+        H.connect(be, "sim").result(10)
+        assert H.wait_rt(lambda: H.status(be).stream.on, 5)
+        hk = H.status(be).hotkey
+        assert hk.mode in ("REGISTERED", "LL_HOOK"), hk
+        got = []
+        H.subscribe(be, "hotkey.test", lambda rec: got.append(rec))
+        g = be.hotkey_test_start(2.0)
+        assert g.ok, g
+        m0 = H.wire_mark(be)
+        H.hotkey_press(be)
+        assert H.wait_rt(lambda: bool(got), 3)
+        time.sleep(0.2)
+        assert not H.tx(be, "HALT", since=m0)
+        assert H.wait_rt(lambda: not H.status(be).hotkey.test_running, 3)
+        m1 = H.wire_mark(be)
+        t0 = time.monotonic_ns()
+        H.hotkey_press(be)
+        assert H.wait_rt(lambda: bool(H.tx(be, "HALT", since=m1)), 2)
+        assert (H.tx(be, "HALT", since=m1)[0].t_ns - t0) / MS <= 50
+    finally:
+        be.shutdown()
+
+
+@pytest.mark.req("SYS-008", "SAF-SW-005")
+def test_tc_sys_008_07_sim_power_sense_disabled_d41(lockstep):
+    """D-41 / CR-03 preview (no contactor; ``drv.pwr_sense_enable`` default 0 from ICD v0.7): with the sense disabled
+    (reboot-required: write, SAVE, REBOOT) DRV_PWR reads 1, an E-stop with the supply held never latches K1_WELDED
+    and no DRIVER_POWER event is sent; the E-stop itself still stops and disables (SAF-FW-005)."""
+    # Verifies: SYS-008, SAF-SW-005
+    be = lockstep()
+    rep = H.result(be, H.write_verify(be, {"drv.pwr_sense_enable": False}))
+    assert rep.ok or "REBOOT" in str(rep), rep
+    H.result(be, H.save_nvm(be))
+    H.result(be, H.reboot(be), 10_000)
+    H.advance(be, 3000)
+    assert H.config_values(be)["drv.pwr_sense_enable"] in (0, False)
+    m0 = H.wire_mark(be)
+    H.act(be, "estop", open=True, drv_power_follows=False)
+    H.advance(be, 600)
+    assert _ev(be, m0, "ESTOP_SET")
+    assert not [w for w in _ev(be, m0, "FAULT_SET") if rc.FAULTS[w.fields["arg"]] == "K1_WELDED"]
+    assert not _ev(be, m0, "DRIVER_POWER")
+    assert "DRV_PWR" in H.rx(be, "DATA", since=m0)[-1].fields["status"]
+
+
+@pytest.mark.req("SAF-SW-002")
+@pytest.mark.parametrize("k, tare, level, exp_min, exp_max, clamped", [
+    (1 / 3285, 125_000, 2157.463, -6_962_265, 7_151_121, True),      # VV-THR-01 (raw max 7 212 265 → clamp)
+    (-1 / 3285, 125_000, 2157.463, -6_962_265, 7_151_121, True),     # VV-THR-02 (negative K: sides swap)
+    (1 / 3285, 0, 1000.0, -3_284_999, 3_284_999, False),             # VV-THR-03
+], ids=["VV-THR-01", "VV-THR-02", "VV-THR-03"])
+def test_tc_saf_sw_002_01_threshold_vectors(k, tare, level, exp_min, exp_max, clamped, pdict):
+    """TC-SAF-SW-002-01 (U, early at M2): production ``core.safety.calibrated_target`` / ``calc.loadcal`` against
+    F's oracle ``f_ref.fw_raw_limits`` + the dictionary clamp (VV-THR-01…03, plan §4.2); effective pull level of
+    VV-THR-01 = 2138.8496 N."""
+    # Verifies: SAF-SW-002
+    from bend_stand.core.safety import calibrated_target
+
+    lo, hi = f_ref.fw_raw_limits(level, -level, k, tare)
+    rng = {p.key: (p.min, p.max) for p in pdict.params}
+    lo_c = min(max(lo, rng["safety.load_raw_min"][0]), rng["safety.load_raw_min"][1])
+    hi_c = min(max(hi, rng["safety.load_raw_max"][0]), rng["safety.load_raw_max"][1])
+    assert (lo_c, hi_c) == (exp_min, exp_max)
+    t = calibrated_target(k, tare, level)
+    assert (t.raw_min, t.raw_max, t.clamped, t.invalid) == (exp_min, exp_max, clamped, None)
+    if clamped and k > 0:
+        assert t.eff_pull_n == pytest.approx(2138.8496, abs=1e-4)
+
+
+LLV = json.loads((Path(__file__).resolve().parents[3] / "00_System" / "tools" / "vectors" /
+                  "loadlim_vectors.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.req("SYS-008", "IF-010")
+@pytest.mark.parametrize("case", LLV["cases"], ids=lambda c: c["name"])
+def test_tc_sys_008_06_sim_load_limit_equals_loadlim_vectors(case):
+    """Simulator fidelity (rule 3): the simulator's FW load-limit model replays every Integrator ``loadlim_vectors``
+    case (ICD v0.6 §5.5, D-12, SAF-FW-008…011, D-40 d regrow reference): trip per sample, regrow window state,
+    reference at FAULT_CLEAR."""
+    # Verifies: SYS-008, IF-010
+    from bend_stand.io.sim.loadlim import LoadLimit
+
+    i = case["init"]
+    ll = LoadLimit()
+    ll.config(i["load_raw_min"], i["load_raw_max"], i["trip_samples"], i["regrow"])
+    for n, s in enumerate(case["steps"]):
+        if s["op"] == "sample":
+            assert ll.sample(s["raw"]) == s["trip"], (n, s)
+        elif s["op"] == "fault_clear":
+            ll.fault_clear()
+            assert ll.ref == s["ref"], (n, s)
+        else:
+            ll.config(s["load_raw_min"], s["load_raw_max"], s["trip_samples"], s["regrow"])
+        assert ll.window == s["regrow_window"], (n, s)
+
+
+@pytest.mark.req("IF-005", "SW-MAN-002")
+@pytest.mark.parametrize("what", ["response", "request"])
+def test_tc_if_005_02_m2_move_to_verify_never_resent(lockstep, what):
+    """TC-IF-005-02 M2 part through the public API: MOVE_ABS of ``move_to`` with its response lost → the move runs
+    once and the ticket resolves DONE (GET_STATUS shows it executing); with its **request** lost → GET_STATUS shows
+    no move → ticket NOT_EXECUTED; in both cases exactly **one** MOVE_ABS on the wire (VERIFY, never re-sent)."""
+    # Verifies: IF-005, SW-MAN-002
+    be = _ready(lockstep)
+    H.act(be, "inject", fault="drop_next", cmd="MOVE_ABS", what=what, n=1)
+    m0 = H.wire_mark(be)
+    out = H.result(be, H.move_to(be, 20.0), 30_000)
+    H.advance(be, 500)
+    assert len(H.tx(be, "MOVE_ABS", since=m0)) == 1
+    assert H.tx(be, "GET_STATUS", since=m0)
+    if what == "response":
+        assert out.kind == "DONE" and out.done.reason == "TARGET", out
+        assert len(_move_done(be, m0)) == 1
+    else:
+        assert out.kind == "NOT_EXECUTED", out
+        assert not _move_done(be, m0) and not H.motion(be).moving
+
+
+@pytest.mark.req("SW-MAN-002", "SAF-SW-003")
+def test_tc_sw_man_002_03_board_reset_cancels_ticket_no_automatic_motion(lockstep):
+    """FI-23 (M2 part): board reset during a ``move_to`` → ticket CANCELLED; after the reconnect no MOVE_ABS / HOME /
+    ENABLE / JOG is sent automatically (no re-enable, no re-issue)."""
+    # Verifies: SW-MAN-002, SAF-SW-003
+    be = _ready(lockstep)
+    t = H.move_to(be, 150.0)
+    H.advance(be, 300)
+    H.act(be, "reset", cause="pin")
+    out = H.result(be, t, 5000)
+    assert out.kind == "CANCELLED", out
+    m0 = H.wire_mark(be)
+    H.advance(be, 5000)
+    assert not {"MOVE_ABS", "HOME", "ENABLE", "JOG", "MOVE_UNTIL_LOAD"} & {w.name for w in H.tx(be, since=m0)}
+
+
+@pytest.mark.req("SAF-SW-002")
+def test_tc_saf_sw_002_06_threshold_rules_refused_locally():
+    """ThresholdManager input rules (pure, M2): out-of-range raw value → RANGE; raw_min ≥ raw_max → H2; zero outside
+    → refused; a calibration whose rounded thresholds cross (tiny level) → INVALID target, never written."""
+    # Verifies: SAF-SW-002
+    from bend_stand.core.safety import calibrated_target, check_manual
+
+    assert [i.code for i in check_manual(-9_000_000, 1000, 0)] == ["RANGE"]
+    assert [i.code for i in check_manual(1000, 1000, 1000)] == ["H2"]
+    assert [i.code for i in check_manual(-1000, 1000, 5000)] == ["ZERO_OUTSIDE"]
+    assert not check_manual(-1000, 1000, 0)
+    assert calibrated_target(1.0, 0.5, 1e-9).invalid
+    assert calibrated_target(1 / 3285, 8_000_000, 1000.0).invalid       # tare outside the clamped range

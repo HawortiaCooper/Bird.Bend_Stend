@@ -98,7 +98,7 @@ def move_ticks(n_steps: int, f_tick: float, v: float, a: float, d: float) -> int
 
 
 def check_periods(measured: list[int], expected: list[int], tol_each: int = 1) -> tuple[bool, str]:
-    """FW-MOT-003 acceptance: each period ±1 tick, total ±N/1000 ticks (R4 §1.5 float32 note)."""
+    """FW-MOT-003 acceptance: each period ±1 tick, total ±ceil(N/1000) ticks (D-40 b; R4 §1.5 float32 note)."""
     if len(measured) != len(expected):
         return False, f"step count {len(measured)} != {len(expected)}"
     worst = max((abs(m - e), i) for i, (m, e) in enumerate(zip(measured, expected))) if expected else (0, -1)
@@ -106,7 +106,7 @@ def check_periods(measured: list[int], expected: list[int], tol_each: int = 1) -
         i = worst[1]
         return False, f"period {i}: {measured[i]} vs {expected[i]} (> ±{tol_each} tick)"
     tot = abs(sum(measured) - sum(expected))
-    if tot > max(1, len(expected) // 1000):
+    if tot > max(1, math.ceil(len(expected) / 1000)):                # D-40 b: ±ceil(N/1000)
         return False, f"total {sum(measured)} vs {sum(expected)} (> ±N/1000 ticks)"
     return True, f"N={len(expected)} worst={worst[0]} tick total_err={tot} ticks"
 

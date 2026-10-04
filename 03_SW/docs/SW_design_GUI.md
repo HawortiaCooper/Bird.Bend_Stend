@@ -2,7 +2,7 @@
 
 | Doc | SW_design_GUI |
 |---|---|
-| Version | **0.4 — M1 as built (§15.1) + D-38 plot panes (SW-RT-006, §4.7)** |
+| Version | **0.4.1 — M1 as built (§15.1) + D-38 plot panes (SW-RT-006, §4.7) + M2 backend alignment (§11.1d, D-41)** |
 | Date | 2026-10-04 |
 | Owner | Implementer D — GUI (`03_SW/src/bend_stand/gui/**` incl. `gui/__init__.py`, `gui/app.py`; `03_SW/tests/gui/**`; this document) |
 | Binding inputs | `00_System/specs/SRS.md` **v0.4** (SW-*, SAF-SW-*, NFR-*; same IDs as v0.3, D-30…D-33 wording incl. SW-STOP-004 RESUME and the SW-SEQ-005 refusal list), `DECISIONS.md` D-01…D-33 (esp. D-11, D-14, D-23, D-26, D-28, D-29 a/h/i/n, **D-30, D-31, D-32, D-33**; **D-27 closed** per Orchestrator 2026-10-03: driver 4000 p/rev closed loop → nominal 800 steps/mm), `ICD_protocol.md` **v0.4** (RESUME 0x3C, D-31) and the generated name tables `03_SW/src/bend_stand/core/protocol_gen.py` (ICD v0.4, PROTO 1.0, PAYLOAD 1), `params.yaml` (`motion.steps_per_mm` default 800, D-27 closed), R3 §6 (Thrust_Stand GUI solutions, perf defect SWD-PM3-05), R1 §7 (Stefan `stepper_gui` patterns), R4 §5–§8, §10 |
@@ -66,11 +66,11 @@ The backend (link, device, pipeline, engines, recorder, report, simulator, hotke
 | **HALT** | Pause/Break or Ctrl+Break key (system-wide); physical STOP/BREAK button; Sequence [Abort] | hotkey thread → `backend.halt("hotkey")`; Abort → `sequencer.abort()` | latched immediate stop (source KEY / BUTTON / PC) | yes → **Clear stop** (HALT_CLEAR; also clears PAUSED, D-31) | terminated |
 | **PAUSE** | toolbar **Pause**; Sequence [Pause]; physical PAUSE button | `backend.pause(source) → StopResult` (A-01) → FW **PAUSE 0x3B** | controlled stop; **PAUSED latch blocks every new motion start** (D-30); VALID cleared | yes → **Resume** (RESUME 0x3C, clears only PAUSED, D-31) or Clear stop (HALT_CLEAR) | paused (resumable); wizards and tare are terminated (A-15) |
 | **RESUME** | toolbar **Resume**; Sequence [Resume]; physical PAUSE button while PAUSED (EVENT RESUME_REQUEST) | `backend.resume(source) → GateResult` (A-02; RESUME 0x3C per D-31, GF-11) | clears PAUSED; refused while HALT, ESTOP or any fault is latched (E_STATE) | – | sequence: interrupted step re-issued (absolute target / approach + trim); manual: no motion |
-| **E-STOP** | NC mushroom button (hardware power cut via K1 + MCU sense) | – (clear: `estop_clear_async(confirmed=True)`) | ESTOP latched, driver disabled, not homed | yes → **Clear stop** (confirmed, C-03) + ENABLE + HOME | terminated |
+| **E-STOP** | red NC button on the MCU E-stop input (D-41: no power-removal contactor; FW stops the pulses and disables the driver) | – (clear: `estop_clear_async(confirmed=True)`) | ESTOP latched, driver disabled, not homed | yes → **Clear stop** (confirmed, C-03) + ENABLE + HOME | terminated |
 | **Driver power lost** | K1 dropped / PSU off without E-stop (DRV_PWR → 0) | – | motion refused (DRV_UNPOWERED), HOMED cleared (D-29 c) | until power returns; then ENABLE + HOME | terminated |
 | **Fault / limit** | limit switch, FW load limit, AFE stale, link watchdog, step / homing fault, K1_WELDED, HOME_DRIFT, SW limit | (clear: `fault_clear_async()`) | immediate or controlled stop per SRS §3.2 | per type (FAULT_CLEAR) | terminated |
 
-The on-screen button is labelled **STOP**, not "E-STOP". The SRS reserves *E-stop* for the hardware power cut (D-11), and the GUI must not teach operators otherwise (GQ-18, decided).
+The on-screen button is labelled **STOP**, not "E-STOP". The SRS reserves *E-stop* for the red E-stop button (an MCU / FW stop since D-41: pulses off, driver disabled, re-home needed), and the GUI must not teach operators otherwise (GQ-18, decided).
 
 ---
 
@@ -140,7 +140,7 @@ A full-width `QFrame` below the toolbar. It is hidden while no latch is active a
 | `StopResult.sent` (STOP, HALT or PAUSE; event `stop.issued`) | `STOP sent (toolbar, 14:03:12) – axis stopped, driver holding.` / `PAUSE sent (toolbar) – controlled stop, motion blocked until Resume.` (auto-hide 10 s unless a latch follows) | – |
 | `StopResult` not sent | `<STOP/HALT/PAUSE> NOT SENT (toolbar, 14:03:12): <reason> – use the physical STOP/BREAK or E-stop button.` | – |
 | `stop.unconfirmed` (A-23; STOP, HALT or PAUSE) | `<kind> NOT CONFIRMED by the board after 1 s – use the physical STOP/BREAK or E-stop.` | – |
-| `indicators.estop` ON | `E-STOP active – driver power removed, axis NOT homed. <clear_hint>` | [Clear stop] |
+| `indicators.estop` ON | `E-STOP active – pulses stopped, driver disabled, axis NOT homed (load may back-drive). <clear_hint>` (D-41) | [Clear stop] |
 | `indicators.k1_welded` ON | `K1_WELDED: contactor K1 did not drop – driver power still present with the E-stop open. <clear_hint>` | [Clear stop] |
 | `indicators.drv_pwr` OFF (not UNKNOWN) | `Driver power lost – motion refused, axis NOT homed. <clear_hint>` | [Manual tab] |
 | `indicators.halt` ON | `HALT latched – source: <source>, <t>. Motion refused. <clear_hint>` (HALT_CLEAR also clears a PAUSED latch) | [Clear stop] |
@@ -727,7 +727,7 @@ for the inner layout; the dock frame, STOP, float and NO-SPECIMEN tag stay).
 |---|---|---|---|---|---|
 | C-01 | `home` gate CONFIRM: abs(F) ≥ 5 % FS **or** unknown load (B §5.6) | "Load on the specimen: 132.4 N (6.8 % FS > 5 %) / load unknown. Homing moves the axis to the START switch while loaded." | "I accept homing under load" | `motion.home(load_confirmed=True)` | SAF-SW-004, SAF-FW-021, D-15 |
 | C-02 | `disable` gate CONFIRM | "Specimen unloaded? Disabling removes holding torque; the specimen may spring back; the axis will be NOT homed." | "Specimen is unloaded" | `motion.disable(confirmed=True)` | SAF-SW-004 |
-| C-03 | `estop_clear` gate CONFIRM | "Clear E-STOP: button released (input closed ≥ 100 ms) and K1 RESET pressed? After clearing, the driver stays disabled: ENABLE and HOME are required. No motion restarts." | "E-stop button released, K1 reset, area safe" | `estop_clear_async(confirmed=True)` | SAF-SW-004, SAF-FW-006 |
+| C-03 | `estop_clear` gate CONFIRM | "Clear E-STOP: button released (input closed ≥ 100 ms) and the area safe? (D-41: no K1 reset) After clearing, the driver stays disabled: ENABLE and HOME are required. No motion restarts." | "E-stop button released, K1 reset, area safe" | `estop_clear_async(confirmed=True)` | SAF-SW-004, SAF-FW-006 |
 | C-04 | Restore board defaults (GUI-side caution) | "Restore all parameters to defaults (RAM; NVM unchanged until Save). Session load thresholds are re-sent by the PC." | – | `config.defaults_async()` | SW-CFG-004 |
 | C-05 | `travel_cal` `needs_confirmation` (> 20 %: shows the DIP-derived values 800 steps/mm = 4000 p/rev closed loop (current setting, D-27 closed) and 160 steps/mm = 800 p/rev "DIP change not applied"; > 5 %; outside ±20 % of the expected 800) | backend text incl. old → new value and candidates | "Measured value checked" | `travel_cal.continue_(inputs, confirmed=True)` | SW-CAL-003 |
 | C-06 | `load_cal` `needs_confirmation` for a WARN fit (A-15) | NL_span value and residuals | "I accept the WARN linearity" | `load_cal.continue_(confirmed=True)` | SW-CAL-007 |
@@ -1008,7 +1008,7 @@ ConfirmDialog (C-10 example)                                ClearStopDialog
 | switched OFF for this session. The board load limit    |  |          FAULT LOAD_LIMIT (14:03:09)                        |
 | stays active (nominal default ±7 022 271 counts ≈      |  |  HALT+PAUSE gate: REFUSE "STOP button still pressed"         |
 | ±109 % FS). Mount no specimen until a load calibration |  |                                    [Clear HALT + PAUSE]      |
-| and a tare exist.                                      |  |  E-STOP  gate: CONFIRM  [ ] button released, K1 reset, safe  |
+| and a tare exist.                                      |  |  E-STOP  gate: CONFIRM  [ ] button released, area safe        |
 | Board thresholds: DEFAULT_ONLY ✓ verified              |  |                                          [Clear E-STOP]     |
 | [ ] No specimen is mounted                             |  |  Faults  gate: WARN LOAD_LIMIT cause present  [Clear faults] |
 |                                                        |  | After clearing: ENABLE + HOME required; no motion restarts. |
@@ -1325,6 +1325,20 @@ Not automatable or only partly automatable: perceived smoothness and readability
 | B3-20 | `main()` builds the Backend unstarted, `args.endpoint`; `run()` starts / connects / shuts down; `sequencer.start(seq, *, confirmed=False)` | §8.1; C-07 call | §3.6, §8.1 |
 | B3-21 | one name NOT_REACHED; `travel_bound_mm` removed; step error BOUND_NOT_AHEAD | step results | §3.6 |
 
+### 11.1d Adoption of the API delta v0.3.3 → v0.4 (B §15.5d, M2 backend)
+
+| B4 | Change | GUI adoption (this round: existing GUI correct; Manual tab = M3) |
+|---|---|---|
+| B4-01 | real MotionController (tickets, `GateRefused` futures, `disable` CONFIRMATION_REQUIRED, `home` ConfirmationRequired) | no Manual tab yet (M3); the fake keeps the Protocol shape (conformance test) |
+| B4-02 | real motion gates; codes PC_LOAD_LIMITS_OFF (WARN), HOME_LOAD_CONFIRM / DISABLE_CONFIRM (CONFIRM), CONFIRMATION_REQUIRED, TARGET_OUT_OF_RANGE, SPEED_CAP, ACCEL_CAP, BOUND_NOT_AHEAD | gates drive enable states / tooltips unchanged (§2.7); **PC_LOAD_LIMITS_OFF of the `move` gate shown as a notice-strip row** (hidden in no-specimen mode) |
+| B4-03 | `status().motion.jogging` / `home_phase` / `pos_uncertain` | MOV chip: "homing <phase>" / "jogging" / "moving"; HOMED chip keeps POS_UNCERTAIN from the indicator |
+| B4-04 | `limits.set/check`, manual / default thresholds | Safety-limits tab = M3 |
+| B4-05 | feature-dependent indicators UNKNOWN; `stop_btn` gone | chips grey "?", no "driver power lost" banner while DRV_PWR is UNKNOWN; STOP_BTN stays a retired table entry |
+| B4-06 | `StopConfirmation` (no str equality) | banner reads `.cmd` (str still tolerated) — tested with the real type |
+| B4-07 | real hotkey status + test mode | KEY chip / app-shortcut fallback follow `status().hotkey`; sim-backed GUI tests use `hotkey="off"` (no system hook), one test with `hotkey="fake"`; hotkey test dialog = M3 |
+| B4-08 | `ChannelSpec.dimension` | used first for the pane quantity groups (§4.7); GRQ-B-21 closed |
+| B4-09…11 | NVM quiesce, manual speed / accel session defaults, `test_hooks.hotkey_press` | no GUI change in this round |
+
 ### 11.2 Contract used (summary by GUI element)
 | GUI element | Backend API used | B § |
 |---|---|---|
@@ -1353,11 +1367,11 @@ Not automatable or only partly automatable: perceived smoothness and readability
 | ID | Request | Why (GUI element) | MS | Status |
 |---|---|---|---|---|
 | GRQ-B-19 | **Acknowledge a travel-calibration difference** (B §9.3.1 names the operator actions [Keep board value] and [Ignore for this session], but §15 has no call for them): e.g. `calibrations.acknowledge_travel_difference(keep_board: bool) -> GateResult` — `keep_board=True` deletes the restore-pending record (someone else changed the board value on purpose), `False` suppresses the indicator / gate WARN for this session only (no write) | §2.8 notice strip, §3.5 | M3 | **closed** by B3-19 (`resolve_travel_difference_async("restore" / "keep_board" / "ignore_session")`) |
-| GRQ-B-21 | **Quantity of a channel:** add `ChannelSpec.dimension: str` (e.g. "force", "length", "counts", "rate", "bits", "count", "state") so the default pane placement (SW-RT-006) does not have to infer the quantity from the unit / key; the GUI already prefers it when present | §4.7 | M3 | open (non-blocking) |
+| GRQ-B-21 | **Quantity of a channel:** add `ChannelSpec.dimension: str` (e.g. "force", "length", "counts", "rate", "bits", "count", "state") so the default pane placement (SW-RT-006) does not have to infer the quantity from the unit / key; the GUI already prefers it when present | §4.7 | M3 | **closed** by B4-08 (`ChannelSpec.dimension`) |
 
 **Clarifications (v0.2; GF-11, GF-12, GF-14, GF-17) — all answered by B3-01/03/16/17, B3-18, B3-20, B3-21:** `Backend.resume()` sends RESUME 0x3C (D-31) and the `resume` gate REFUSEs also for ESTOP / FAULT latched, with `GateItem.code` = generated `BLOCK_BITS` name; `Indicators` item names = lower-case generated names (`stop_btn`, `pause_btn`); `main()` constructs but does not start the Backend and exposes the endpoint for `run()`; engine `start(..., confirmed=True)` is the kwarg for start-gate CONFIRM items.
 
-**Remaining API gaps:** GRQ-B-21 (non-blocking, quantity field).
+**Remaining API gaps: none.**
 
 ---
 
@@ -1376,7 +1390,7 @@ Legend for "Share": **G** = GUI-owned; **S** = shared (the GUI triggers and disp
 | SAF-SW-001 | Motion-disabled notice (gate REFUSE); SW-trip banner with value; first-use banner | §2.3, §2.7, §3.2 | gating, limits_tab, stop_banner | B | G-19, G-06, G-37 |
 | SAF-SW-002 | THR chip incl. clamped; `ThresholdState` display; re-send | §2.4, §3.2 | indicator_bar, limits_tab | B | G-19, G-28 |
 | SAF-SW-003 | LINK LOST banner and LINK chip; controls disabled | §2.3, §2.4, §5.7 | stop_banner, indicator_bar | B | G-34 |
-| SAF-SW-004 | `ConfirmDialog` (no default, Enter/Space swallowed, confirm `NoFocus`, assertion checkbox, STOP); C-01 HOME under load, C-02 DISABLE, C-03 E-stop clear (K1 reset), **C-10 no-specimen mode** (+ C-04…C-09, C-11, C-12) | §5.5, §5.6 | confirm_dialog, clear_stop_dialog | G | G-04, G-05, G-37 |
+| SAF-SW-004 | `ConfirmDialog` (no default, Enter/Space swallowed, confirm `NoFocus`, assertion checkbox, STOP); C-01 HOME under load, C-02 DISABLE, C-03 E-stop clear (button released, area safe; D-41), **C-10 no-specimen mode** (+ C-04…C-09, C-11, C-12) | §5.5, §5.6 | confirm_dialog, clear_stop_dialog | G | G-04, G-05, G-37 |
 | SAF-SW-005 | `IndicatorBar` over generated names: ESTOP, HALT + source, PAUSED + source, LIM S/E, LOAD, AFE stale/sat/rate/NO_AFE_DATA, WDG, LINK, HOMED/POS_UNCERTAIN, ENA, DRV (DRV_PWR), ALM ("new motion blocked"), PEND, FAULT incl. HOME_DRIFT, K1 (K1_WELDED), CLK (CLK_FALLBACK), NOSPEC + mode banner; `clear_hint` per latch; UNKNOWN grey; 33 ms refresh | §2.3, §2.4, §2.8 | indicator_bar, indicator_map, status_help, mode_banner | S | G-06, G-39, G-44, G-37 |
 | SAF-SW-006 | Speed-margin WARN (Manual fields via `motion.check`, sequence cells) and C-07 at sequence start | §3.4, §3.6, §5.5 | manual_tab, sequence_tab | B | G-15, G-30 |
 | SW-PLT-001 | `gui.app.run(backend, args) -> int`; Windows 10; PySide6 + pyqtgraph; Python 3.14 runtime (D-33 i) | §8, §8.1 | app | G | G-43, D (install) |
@@ -1489,7 +1503,7 @@ Legend for "Share": **G** = GUI-owned; **S** = shared (the GUI triggers and disp
 | GQ-15 | Tare with a large-offset warning | keep, show [Undo tare] (A-16) |
 | GQ-16 | Manual "Go to" field and Enter | Enter commits the value; the move needs a click on [Go] |
 | GQ-17 | Lab PC screen | design target 1600 × 900 at 125 %; usable at 1366 × 768 (scroll areas) |
-| GQ-18 | On-screen button label | **STOP** (E-stop = the hardware power cut) |
+| GQ-18 | On-screen button label | **STOP** (E-stop = the red E-stop button, MCU / FW stop since D-41) |
 | GQ-19 | Additional in-app keyboard STOP key | none: only Pause/Break and Ctrl+Break (HALT, system-wide) |
 | GQ-20 | STOP acts on mouse press or release | on **press** |
 
@@ -1571,5 +1585,6 @@ GUI imports (G-01): `core.api`, `core.protocol_gen`, `calc.units` and — deviat
 | 0.2 | 2026-10-03 | Implementer D | Aligned to SRS v0.3, ICD v0.3 + generated `protocol_gen.py`, `SW_design.md` v0.2 §15 (A-01…A-25 adopted, GRQ-B-01…18 closed) and D-29…D-33. **New:** §0 summary; P8 generated names (indicator map, channel tree, event log, "Clear stop first" codes); Pause → `StopResult`, Resume via RESUME 0x3C (D-31) with "Clear stop first", Clear stop clears HALT + PAUSED, `clear_stop` refused while a sequence is PAUSED, Pause/Resume flow §5.9; no-specimen mode (C-10, mode banner on every tab, tags in floating windows and dialogs, NOSPEC chip, Safety-limits group); travel-calibration restore (TCAL chip, notice strip, `RESTORING` view); indicators as `Indicator` objects with UNKNOWN and new chips DRV, K1, FAULT (incl. HOME_DRIFT), CLK, NO_AFE_DATA in AFE, MOV; ALM text "new motion blocked while powered" (D-28, D-33 c); config `check`, REBOOT_REQUIRED, Save & reboot (C-11), NVM defaulted; engine PHASES / `continue_label` / `continue_moves` / `abort_reason` / `start() → GateResult` (C-12), load-wizard finish-early and re-take, tare undo; `remaining_s`, report list/load, generator schema forms, hotkey test mode (KL-01 text), `channels.changed`, `PlotSnapshot`/`vstate`; entry point `gui.app.run(backend, args) -> int` (§8.1); travel calibration expected 800 steps/mm, 160 only as "DIP change not applied" in C-05 (D-27 closed, SW-CAL-003); sequence start reasons D-33 b; NOT_REACHED (D-32, D-33 d). Tests G-37…G-44 added, G-02…G-36 updated, milestone column. Traceability: 60/60 SW incl. SW-LIM-004, 6/6 SAF-SW, NFR-001…004, SYS-003/008/010, IF-008/011. GQ-01…20 decided (D-32 Q27). GF-01…08, 10 closed; GF-09 open (info); new GF-11…17; new request GRQ-B-19 (only remaining API gap, M3, non-blocking). **M1 work breakdown WP-D0…WP-D8 (§15).** Validator review SWD-P1-05 (a)–(g) addressed. |
 | 0.3 | 2026-10-03 | Implementer D | Final P1 alignment to `SW_design.md` v0.3 §15.5a (B3-01…B3-21, new §11.1a), SRS v0.4 (same IDs) and ICD v0.4: Resume = RESUME + re-issue (manual RESUME only), `resume.ignored` toasts; Clear stop of a paused sequence = new C-13 (`clear_stop_async(confirmed=True)`, end reason CLEARED); `REFUSED_PAUSED` shown as info; sequence-start items DRV_PWR_OFF / ALM / PAUSED / POS_UNCERTAIN / AFE_RATE_MISMATCH; end reasons NOT_REACHED / DRIVER_ALARM / CLEARED, step error BOUND_NOT_AHEAD; travel-bound column removed, LOAD step time hidden; link counters `dup_frames` / `seq_anomalies`; indicator alias table removed (lower-case generated keys); TCAL actions via `resolve_travel_difference_async` (GRQ-B-19 closed); entry contract with `args.endpoint`; `sequencer.start(seq, confirmed=True)`; lockstep test hooks. GF-11…17 closed (GF-15 by SRS v0.4, GF-16 by ICD v0.4). Remaining API gaps: none. |
 | 0.3.1 | 2026-10-03 | Implementer D | M1 implementation WP-D0…WP-D7: as-built table §15.1 (layout deviation banner/indicator toolbars, D-36 texts, B31-01 adopted, `NONE` source display rule, smoke seam, package-root import). |
+| 0.4.1 | 2026-10-04 | Implementer D | **M2 backend alignment (B §15.5d, B4-01…11, new §11.1d) and D-41** (E-stop = MCU / FW stop, no K1 contactor): E-STOP banner, C-03, STOP tooltip and §1.3 / GQ-18 wording; PC_LOAD_LIMITS_OFF notice; MOV homing / jogging; feature-bit UNKNOWN; real `StopConfirmation`; `dimension` for pane grouping (GRQ-B-21 closed); real hotkey status. |
 | 0.4 | 2026-10-04 | Implementer D | **D-38 / SW-RT-006 (M1 add-on):** new §4.7 plot panes (grid 1–4 columns, + Pane, + X-Y pane, plot in / move to pane, drag reorder, move to window, rename / close, D-63 placement rules, X link, persistence, one snapshot per time window, Thrust_Stand rendering fix); §8 module list (plot_pane, pane_grid, quantity; lanes / single time view removed); tests G-45…G-52; traceability SW-RT-006; GRQ-B-21 (`ChannelSpec.dimension`). §4.1 inner layout and §4.5 JSON superseded by §4.7. |
 | 0.3.2 | 2026-10-03 | Implementer D | M1 gate items: SWD-M1-06 (confirmation banner names STOP / HALT / PAUSE from a str or `.cmd` payload), SWD-M1-07 (`Implements:` tags in every GUI module), SWD-M1-10 ("LINK LOST – STOP sent" only after a sent STOP within 5 s, else "LINK LOST – reconnecting…"); D-36 wording test for GUI-owned texts; GF-19 (backend HALT clear hint) stays with B. |

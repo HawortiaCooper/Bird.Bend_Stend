@@ -98,11 +98,12 @@ def banner_rows(status: Any, recent: RecentStop | None, now: float) -> list[Bann
                                               f"{E_STOP_HINT}.", key="recent"))
     if ind is not None:
         if (it := _on(ind, "estop")) is not None:
-            rows.append(BannerRow(1, "alarm", "E-STOP active – driver power removed, axis NOT homed." + _hint(it),
+            rows.append(BannerRow(1, "alarm", "E-STOP active – pulses stopped, driver disabled, axis NOT homed (load "
+                                              "may back-drive)." + _hint(it),
                                   "clear", "estop"))
         if (it := _on(ind, "k1_welded")) is not None:
-            rows.append(BannerRow(2, "alarm", "K1_WELDED: contactor K1 did not drop – driver power still present "
-                                              "with the E-stop open." + _hint(it), "clear", "k1_welded"))
+            rows.append(BannerRow(2, "alarm", f"K1_WELDED: {pg.FAULTS_DESC.get('K1_WELDED', '')}." + _hint(it),
+                                  "clear", "k1_welded"))
         drv = ind.get("drv_pwr") if hasattr(ind, "get") else None
         if drv is not None and getattr(drv, "state", None) == "OFF":
             rows.append(BannerRow(3, "alarm", "Driver power lost – motion refused, axis NOT homed." + _hint(drv),

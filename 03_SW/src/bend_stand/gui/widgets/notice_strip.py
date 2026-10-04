@@ -3,7 +3,8 @@ hash mismatch, NVM defaulted, reboot pending, travel-calibration difference. Row
 of notices changes.
 
 Implements: IF-008 (read-only notices), SW-CFG-003 (reboot pending → Save & reboot), SW-CFG-004 (NVM defaulted),
-SW-CAL-001 (travel-calibration difference, M3 buttons from ``travel_diff.actions``)
+SW-CAL-001 (travel-calibration difference, M3 buttons from ``travel_diff.actions``), SAF-SW-001 (PC load limits
+not active yet: WARN ``PC_LOAD_LIMITS_OFF`` of the motion gates shown, B4-02)
 """
 from __future__ import annotations
 
@@ -13,6 +14,8 @@ from typing import Any
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from bend_stand.core.api import GateId
+from bend_stand.gui import gating
 from bend_stand.gui.theme import BANNER_STYLE
 
 
@@ -44,6 +47,10 @@ def notices(status: Any) -> list[Notice]:
     if getattr(status, "reboot_pending", None):
         out.append(Notice("reboot_pending", "Reboot-required parameter changed – effective after Save to NVM + "
                                             "Reboot.", (("save_reboot", "Save & reboot…"),)))
+    move = gating.gate_of(status, GateId.MOVE)
+    warn = next((i for i in (move.warnings if move is not None else ()) if i.code == "PC_LOAD_LIMITS_OFF"), None)
+    if warn is not None and not getattr(getattr(status, "safety", None), "no_specimen_mode", False):
+        out.append(Notice("pc_load_limits_off", warn.text + (f" – {warn.clear_hint}" if warn.clear_hint else ""), ()))
     cal = getattr(status, "calibration", None)
     if getattr(cal, "travel_cal_differs", False):
         diff = getattr(cal, "travel_diff", None)

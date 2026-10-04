@@ -6,7 +6,7 @@
  * Oracle: vectors/motion_vectors.json (Integrator, read in place by val_oracles/gen_val_vectors.py into
  * motion.txt; that script refuses to write the file unless the validator's independent oracle
  * val_oracles/ramp_ref.py reproduces every vector period exactly). Tolerances: each period ±1 tick, the
- * sum ±floor(N/1000) ticks (SRS FW-MOT-003 literal; OBS-E-M2-02), period count exact.
+ * sum ±ceil(N/1000) ticks (D-40 b), period count exact.
  *
  * Event mapping (motion_vectors.json `events`, after_step = steps already emitted; A's API of 2026-10-04):
  *   controlled_stop      -> ramp_stop(alpha_stop, extra 0, floor 0 = c_last)

@@ -173,6 +173,12 @@ static void req_fields_check(uint8_t type, const cmd_req_t *r, const uint32_t *x
         TEST_ASSERT_EQUAL_INT32_MESSAGE((int32_t)x[3], r->u.mul.raw_stop, name);
         TEST_ASSERT_EQUAL_UINT8_MESSAGE(x[4], r->u.mul.cmp, name);
         break;
+    case CMD_DIAG_MEAS:                                   /* ICD v0.6 Appendix C (HW_MEAS builds) */
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(x[0], r->u.meas.op, name);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(x[1], r->u.meas.sel, name);
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(x[2], r->u.meas.a, name);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(x[3], r->u.meas.b, name);
+        break;
     default:
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, nv, name);   /* LEN-0 commands carry no fields */
         break;
@@ -312,6 +318,16 @@ static void test_frame_vectors(void)
                 le_put16(out, (uint16_t)x[0]);
                 TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(&pl[1], out, 2u, name);
                 break;
+            case 9u: {                                  /* DIAG_MEAS OK body: 16 x u32 LE */
+                uint32_t k2;
+                TEST_ASSERT_EQUAL_UINT16_MESSAGE(1u + 64u, npl, name);
+                TEST_ASSERT_EQUAL_UINT32_MESSAGE(16u, nv, name);
+                for (k2 = 0u; k2 < 16u; k2++) {
+                    le_put32(out, x[k2]);
+                    TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(out, &pl[1u + 4u * k2], 4u, name);
+                }
+                break;
+            }
             default:
                 break;                                  /* 8: raw frame, (1)+(2) only */
             }

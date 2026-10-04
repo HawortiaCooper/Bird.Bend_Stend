@@ -330,6 +330,58 @@ def s13() -> None:
           f"(missing {missing or 'none'}); M1 TCs in plan {len(m1_tcs)}, referenced by validator suites "
           f"{len(m1_tcs) - len(unref)} (S/A-only: {unref or 'none'})")
 
+# --------------------------------------------------------------------------------------------- M2 (plan v0.4)
+def _strip_comments(t: str) -> str:
+    t = re.sub(r"/\*.*?\*/", "", t, flags=re.S)
+    return re.sub(r"//[^\n]*", "", t)
+
+
+def s14() -> None:
+    """CR-01 (D-36) in the code: no EXTI line 7 / PC7 input, no io.stop_active_level, the retired codes
+    (DS/IO STOP_BTN, EV_STOP_BUTTON, SC_STOP_BUTTON, SRC_BUTTON as HALT source) never emitted."""
+    errs = []
+    for f in src_files():
+        t = _strip_comments(f.read_text(encoding="utf-8", errors="ignore"))
+        rel = f.relative_to(FW).as_posix()
+        if rel.startswith("src/gen/"):
+            continue
+        for pat in (r"\bDS_STOP_BTN\b", r"\bIO_STOP_BTN\b", r"\bEV_STOP_BUTTON\b", r"\bSC_STOP_BUTTON\b",
+                    r"stop_active_level", r"\bPIN_STOP_", r"\(1u << 7\)\s*/\*\s*L_STOP"):
+            if re.search(pat, t):
+                errs.append(f"{rel}: {pat}")
+        if re.search(r"latch_halt\([^)]*SRC_BUTTON", t):
+            errs.append(f"{rel}: HALT source BUTTON")
+    ex = (FW / "src" / "hal" / "f446" / "exti.c").read_text(encoding="utf-8")
+    lines = sorted(set(int(x) for x in re.findall(r"#define L_\w+\s+\(1u << (\d+)\)", ex)))
+    ok = not errs and lines == [0, 1, 6, 10]
+    check("S-14", ok, f"retired STOP-button identifiers in src: {errs or 'none'}; EXTI lines enabled {lines} "
+                      f"(want [0, 1, 6, 10])")
+
+
+def s15() -> None:
+    """SAF-FW-007-01 / SAF-FW-008-03 / SYS-002-02: fixed polarity of E-stop, limits, DRV_PWR (no parameter);
+    no parameter / flag disables the load check; loadlim_check called unconditionally first in the sample
+    callback; no force scaling in the FW."""
+    keys = [p.key for p in gen_params.load().params]
+    pol = [k for k in keys if re.search(r"(\.estop|\.limit|\.start_|\.end_|\.pwr|drv_power)\w*(level|invert|polarity)", k)]
+    dis = [k for k in keys if re.search(r"load.*(enable|disable)|loadlim", k)]
+    afe = _strip_comments((FW / "src" / "core" / "afe.c").read_text(encoding="utf-8"))
+    body = afe[afe.index("void on_afe_sample"):]
+    body = body[:body.index("\n}\n")]
+    first_if = body[body.index("{") + 1:]
+    unconditional = re.search(r"^\s*afe_state_t[^;]*;\s*bool[^;]*;\s*bool[^;]*;\s*if \(loadlim_check\(", first_if,
+                              re.S) is not None
+    cond = re.findall(r"#\s*if[^\n]*\n[^#]*loadlim_check", afe)
+    scaling = []
+    for f in src_files():
+        t = _strip_comments(f.read_text(encoding="utf-8", errors="ignore"))
+        if re.search(r"\b(newton|kgf|tare|calib_k|counts_per_n|load_kg)\b", t, re.I):
+            scaling.append(f.relative_to(FW).as_posix())
+    ok = not pol and not dis and unconditional and not cond and not scaling
+    check("S-15", ok, f"polarity params for fixed inputs {pol or 'none'}; load-check disable params {dis or 'none'}; "
+                      f"loadlim_check first + unconditional in on_afe_sample {unconditional}; #if around it "
+                      f"{cond or 'none'}; force scaling in FW {scaling or 'none'}")
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -346,6 +398,8 @@ def main() -> int:
     s11()
     s12()
     s13()
+    s14()
+    s15()
     fails = [c for c, ok, _ in RESULTS if not ok]
     print(f"check_static: {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS" + (f"; FAIL {fails}" if fails else ""))
     return 1 if fails else 0

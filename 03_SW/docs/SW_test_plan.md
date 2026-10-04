@@ -2,11 +2,12 @@
 
 | Doc | SW_test_plan |
 |---|---|
-| Version | **0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
+| Version | **0.3.1 — M2 gate execution (armed §3.14, D-41/D-42)** · 0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
 | Date | 2026-10-04 |
 | Owner | Validator F — SW (`03_SW/docs/SW_test_plan.md`, `03_SW/docs/SW_test_report*.md`, `03_SW/tests/validation/**`) |
 | Verifies | SRS **v0.5.1**: SW-* (61, incl. new SW-RT-006), SAF-SW-* (6), NFR-001…004, the SW side of IF-001…012, SYS-003, SYS-008, SYS-010 (**86 requirements**; v0.2: 85 of SRS v0.3) |
 | Binding inputs | `DECISIONS.md` D-01…**D-39** (v0.3: D-36 one red button = E-stop, CR-01; D-37 M1-gate interface decisions a–d; D-38 plot panes; D-39 M2 start). Earlier: D-30: PAUSED blocks motion. **D-31: dedicated RESUME command 0x3C**, clears only PAUSED, refused while HALT/ESTOP/fault latched; HALT_CLEAR clears HALT and PAUSED. **D-32 (PO Q26)**: a load step that does not reach its target travels to the soft limit in the step direction and stops there, the step is NOT_REACHED and the sequence stops; the approach bound is that soft limit; the timeout must not abort earlier; BREAK_DETECTED still aborts. PO accepted the GUI defaults GQ-01…20 and KL-01. |
+| M2 gate (v0.3.1) | commit **099af88** (M2 implementation, ICD v0.6 incl. DIAG_MEAS 0x3D, `loadlim_vectors.json`) + D's GUI alignment B4-01…11 (SW_design_GUI v0.4.1); SW_design **v0.4** (§22a, §15.5d); DECISIONS **D-41** (no power-removal contactor: E-stop MCU/FW only; `drv.pwr_sense_enable` default 0 with CR-03 / ICD v0.7) and **D-42** (hardwired ENA-disable NO contact on the E-stop) |
 | M2 baseline (v0.3) | SRS **v0.5.1** (CR-01: SAF-FW-022 withdrawn, KL-07; D-37 in SW-CFG-004, SAF-SW-005, IF-011, SW-STOP-001/002; new SW-RT-006), ICD **v0.5** (PROTO 1.0, PAYLOAD 1; `params.yaml` dict_version **4**, **47** parameters, PARAM_DICT_HASH **0xFCC54C90**; STOP_BTN / STOP_BUTTON retired; `*_FEATURE` validity; units vectors with int32 saturation; new `motion_vectors.json` + `ref_motion.py`), DECISIONS D-36…**D-40** (D-40 a: LIMIT_WIRING FAULT_CLEAR once the inputs are no longer both active; b: ramp sum tolerance ±ceil(N/1000) ticks — FW only, the SW simulator reproduces `motion_vectors.json` exactly; d: regrow reference until back inside the thresholds or the next FAULT_CLEAR), SW_design v0.3.3 + B's M2 work in progress (WP-B12 simulator rewritten: exact ramps, homing back-off, K1 timer, idle disable, regrow), SW_design_GUI **v0.4** §4.7 (plot panes, G-45…G-52) |
 | M1 baseline (v0.2) | SRS **v0.4.1**, ICD **v0.4.1** (164 frame vectors, 11 streams, 509 check vectors, `units_vectors.json`), `params.yaml` dict_version 3 (PARAM_DICT_HASH **0xF0376293**), SW_design **v0.3.2** (as-built), SW_design_GUI **v0.3.1** (§15.1 as-built), FW host twin (A's firmware) — the M1 corrections of §10a apply |
 | Specs and tools (P1) | `ICD_protocol.md` **v0.3** (RESUME not yet in it, see SWD-P1-02), `protocol.yaml`, `params.yaml` dict_version 2 (PARAM_DICT_HASH 0xB046DD01), `00_System/tools/{ref_codec.py, ref_cmdcheck.py, vectors/}` (check vectors: 486 at ICD 0.3), R4 §12, `SW_design.md` **v0.2** (§15 API, §19 hooks, §22 M1 breakdown), `SW_design_GUI.md` v0.1 (G-01…G-36, P-01…P-05, §10.4 demonstrations, GF-09) |
@@ -170,7 +171,7 @@ Independence rules (binding for `tests/validation/**`):
 | TC-SAF-SW-003-02 | C | DEV | M3 | sequence running a travel step | FI-06: FW→PC silence 600 ms | STOP within 500 ms + 1 tick of the last DATA; sequence ABORTED; LINK LOST indicator; after recovery no motion command for 5 s (AC) |
 | TC-SAF-SW-003-03 | C | DEV | M3 | jog moving | `stall_thread("pipeline", 1500)`, then `("reader", 1500)` | heartbeat stops (wire gap > 1 s) → simulator LINK_WDG controlled stop; supervisor STOP while moving; liveness event (AC: heartbeat only while the pipeline is alive) |
 | TC-SAF-SW-003-04 | C | DEV | M3 | moving / idle | 400 ms DATA gap while moving; 600 ms gap while idle | no STOP in either case; DEGRADED only (negative test) |
-| TC-SAF-SW-004-01 | G | DEV | M3 | sim: load 6 % FS; then load unknown | HOME (C-01), DISABLE (C-02), E-stop clear (C-03), enter no-specimen mode (C-10) | each dialog appears under its condition; Return/Enter/Space with focus on every focusable widget never confirm; Esc cancels; a mouse click confirms; the wire shows HOME flags bit0 = 1 only after confirmation; STOP button present and functional in each dialog (AC) |
+| TC-SAF-SW-004-01 (v0.3.1: C-03 E-stop clear text per D-41 / D-42 — red button released, no K1 / RESET step; the driver stays disabled: Enable and re-home) | G | DEV | M3 | sim: load 6 % FS; then load unknown | HOME (C-01), DISABLE (C-02), E-stop clear (C-03), enter no-specimen mode (C-10) | each dialog appears under its condition; Return/Enter/Space with focus on every focusable widget never confirm; Esc cancels; a mouse click confirms; the wire shows HOME flags bit0 = 1 only after confirmation; STOP button present and functional in each dialog (AC) |
 | TC-SAF-SW-004-02 | C | DEV | M3 | same conditions | call the actions through the API without the confirmation token | `ConfirmationRequired`; nothing on the wire |
 | TC-SAF-SW-005-01 | C rt | DEV | M3 | std | Real cause per indicator via `SimControl` (FI table §5): ESTOP; HALT (v0.3, CR-01: source PC only — Pause/Break key or PC HALT; source BUTTON retired); PAUSED with source PC / BUTTON; LIMIT_START/END; LOAD_LIMIT; AFE stale / saturated / rate mismatch; LINK_WDG; link state; HOMED; POS_UNCERTAIN; ENABLED; DRV_PWR; ALM (+ gate text "new motion blocked"); PEND; K1_WELDED; HOME_DRIFT; CLK_FALLBACK (`emit_event` + STATUS); no-specimen banner | `status().indicators.<item>` changes **≤ 200 ms** after the carrier frame (DATA, EVENT or STATUS response, Reader stamp); the source is correct; each latched item has a non-empty `clear_hint` that matches its clear procedure (AC) |
 | TC-SAF-SW-005-03 [D-37 b] | C | DEV | **M2 entry** | F-board with a selectable GET_INFO feature mask | FEAT_DRV_SIGNALS = 0 and FEAT_BUTTONS = 0 while DATA / STATUS carry DRV_PWR, ALM, PAUSE_BTN = 1 (non-conforming FW); contrast case FEAT_DRV_SIGNALS = 1 | indicators `alm`, `pend`, `drv_pwr`, `pause_btn` = UNKNOWN; the `enable` / motion gates carry no DRV_UNPOWERED / DRIVER_ALARM item from invalid bits; contrast: DRV_PWR 1 → ON, ALM 1 → ON, PEND 0 → OFF (AC SAF-SW-005 v0.5). Also X: the M1-mask twin (FEAT_DRV_SIGNALS = 0) shows UNKNOWN, not 'driver power lost' (IF-C-M1-02) |
@@ -403,7 +404,7 @@ Independence rules (binding for `tests/validation/**`):
 
 ### 3.14 M2 SW early acceptance (v0.3; backend B builds in M2, D-39)
 
-The SRS assigns no SW requirement to M2, but B builds the motion backend (MotionController, motion gates, simulator WP-B12) and D-39 folds the M1 close-out items into M2. These TCs are accepted at the **M2 gate** (early acceptance; they are re-run at M3 where their requirement's MS lies). **Run** = column "now": ✓ = runs against the current simulator / F-board (forced wire path where the M2 API is not there yet); P = pre-written, `pending("M2")`, armed at the M2 verification (§2.4a). Simulator-fidelity cases check B's test environment against the ICD / SRS §3.2 / `params.yaml` / `ref_motion` (rule 3); each is also an X case against the twin once A's M2 motion is in it.
+The SRS assigns no SW requirement to M2, but B builds the motion backend (MotionController, motion gates, simulator WP-B12) and D-39 folds the M1 close-out items into M2. **v0.3.1: armed at the M2 gate** (the `pending("M2")` markers are removed; every P row below runs in the gate suite). These TCs are accepted at the **M2 gate** (early acceptance; they are re-run at M3 where their requirement's MS lies). **Run** = column "now": ✓ = runs against the current simulator / F-board (forced wire path where the M2 API is not there yet); P = pre-written, `pending("M2")`, armed at the M2 verification (§2.4a). Simulator-fidelity cases check B's test environment against the ICD / SRS §3.2 / `params.yaml` / `ref_motion` (rule 3); each is also an X case against the twin once A's M2 motion is in it.
 
 | TC | Run | Lvl | Pre | Stimulus | Expected |
 |---|---|---|---|---|---|
@@ -419,6 +420,12 @@ The SRS assigns no SW requirement to M2, but B builds the motion backend (Motion
 | TC-SAF-SW-004-02 | P | C | enabled, not homed, load unknown | `disable()` / `home()` without confirmation; `home(load_confirmed=True)` | refused, nothing on the wire; HOME flags bit0 = 1 |
 | TC-SW-STOP-002-02 | P | C | fake hotkey, moving | hotkey press, 3 HALT requests lost | as §3.8 |
 | TC-SW-STOP-001-04, TC-SW-STOP-002-04, TC-SW-CFG-004-02, TC-SAF-SW-005-03/-04, TC-IF-001-02 | ✓ (strict xfail while open) | C / I | – | §3.2–§3.8 | M2 **entry** items (D-37, CR-01; STATUS E-C3, E-C4, F-MC-4) |
+| TC-SYS-008-06 (load limit) | ✓ | P | – | `loadlim_vectors.json` (ICD v0.6 §5.5, Integrator) replayed through the simulator's FW load-limit model | trip per sample, regrow window, FAULT_CLEAR reference = every vector (D-12, SAF-FW-008…011, D-40 d) |
+| TC-SYS-008-07 [D-41] | ✓ | C | `drv.pwr_sense_enable` = 0 (write, SAVE, REBOOT — the CR-03 default) | E-stop with the supply held | ESTOP_SET; no K1_WELDED; no DRIVER_POWER event; DRV_PWR reads 1 (the E-stop reaction is independent of the contactor) |
+| TC-SAF-SW-002-01 (early) | ✓ | U | – | VV-THR-01…03 on production `core.safety.calibrated_target` | (−6 962 265, 7 151 121) clamped + 2138.8496 N; negative K same clamp; (−3 284 999, 3 284 999) |
+| TC-SAF-SW-002-05 | ✓ | C | enabled + homed | `limits.set_manual_thresholds_async` twice (second pair entirely above the first) and once with an injected store mismatch | every intermediate SET keeps H2 (oracle `f_ref.rule_ok`), all values read back by GET_PARAM, VERIFIED; mismatch → FAILED, `move` gate REFUSE THRESHOLDS_UNVERIFIED, no MOVE_ABS |
+| TC-SW-STOP-001-05 [F-MC-4] | ✓ | C | – | STOP | `stop.confirmed` payload is a `StopConfirmation` that does not compare equal to "STOP" |
+| TC-SW-STOP-002-05 | ✓ (rt) | C | real clock, `hotkey="fake"` | hotkey test window + press; then a press outside it | `status().hotkey` active; test press → topic `hotkey.test`, **no HALT**; real press → HALT ≤ 50 ms |
 | TC-SYS-008-02 (X motion subset) | at M2 | X | twin with A's M2 motion | TC-SYS-008-04 (a)–(h) + TC-SYS-008-05 on sim and twin | identical EVENT sequences / verdicts; positions ± 1 step (Integrator's `test_sim_vs_twin.py` + F's `test_v_twin.py`) |
 
 ---
@@ -508,7 +515,7 @@ Every scenario asserts the wire (`wire_log`), the world (`query`), `status()` an
 | FI-11 | AFE rate mismatch (`rate_error 0.1`) | indicator; frames excluded from windows; sequence-start WARN | SAF-SW-005-01, REP-002-01 |
 | FI-12 | Spikes (p = 1e-3 / 3 %) | MAD rejection; > 2 % → point invalid | CAL-006-02, TARE-003-01 |
 | FI-13 | Drift (+200 counts/min) | drift rule rejects the tare / point | CAL-006-02, TARE-003-01 |
-| FI-14 | **K1 weld**: `estop open` with `drv_power` kept on > 200 ms | ESTOP handling + K1_WELDED indicator with clear hint; FAULT_CLEAR refused while the cause persists | SAF-SW-005-01, STOP-003-01 |
+| FI-14 | (v0.3.1, D-41: no contactor — kept for the optional 48 V presence sense with `drv.pwr_sense_enable` = 1; the default case is TC-SYS-008-07) **K1 weld**: `estop open` with `drv_power` kept on > 200 ms | ESTOP handling + K1_WELDED indicator with clear hint; FAULT_CLEAR refused while the cause persists | SAF-SW-005-01, STOP-003-01 |
 | FI-15 | **DRV_PWR loss** with the E-stop closed, during a jog and a sequence | DRIVER_POWER 0 → operation terminated, HOMED lost, gates REFUSE DRV_UNPOWERED; after return: hint "Enable, then Home", no automatic enable | STOP-003-01, SEQ-005-01 |
 | FI-16 | **ALM** active (powered), idle and during a move | indicator "new motion blocked"; running move completes; new motion / sequence start refused | SAF-SW-005-01, SEQ-005-01, SEQ-007-03 |
 | FI-17 | **PAUSE** (button / PC) during a manual move, jog, travel/load step (approach, trim, settle, capture, hold, home), travel wizard, load-cal capture, tare; plus the in-flight races | D-30/D-31 behaviour of §3.8 | STOP-004-01…13 |
@@ -536,7 +543,7 @@ Every scenario asserts the wire (`wire_log`), the world (`query`), `status()` an
 
 | Run | TCs | Duration | Needs |
 |---|---|---|---|
-| PR-1 plot refresh | TC-NFR-001-01 (P-01), -03 (P-04) | 10 min each | real display, out-of-process sim, recording |
+| PR-1 plot refresh | TC-NFR-001-01 (P-01), -03 (P-04), -04 (4 panes, v0.3) | 10 min each | real display, out-of-process sim, recording |
 | PR-2 STOP latency | TC-NFR-002-01 (P-02) | 100 clicks | sim-server `wire_log` (TCP) |
 | PR-3 Pause/Break latency | TC-NFR-003-01 (P-03), TC-SW-STOP-002-01 | 100 presses | interactive desktop, `SendInput`, another application focused |
 | PR-4 soak | TC-NFR-004-01 (P-05), TC-SW-ACQ-002-02 | 1 h | recording on, memory sampler (ctypes `GetProcessMemoryInfo`) |
@@ -556,6 +563,7 @@ Every scenario asserts the wire (`wire_log`), the world (`query`), `status()` an
 | DM-08 | Sequence chart: planned path, labels, live marker smoothness | SW-SCH-001/002 |
 | DM-09 | Pause / Resume, and the Resume refusal with HALT latched ("Clear stop first") [D-31] | SW-STOP-004 |
 | DM-10 | HTML report opened in a browser | SW-REP-001 |
+| DM-11 | SW-RT-006 plot panes on the REF PC (D's request): Plot 2 floating on the **second monitor** with 4 panes in 2 columns + an X-Y pane, drag-reorder, move a pane between windows; restart → layout restored on the same monitor; **4-pane smoothness** during a 10 min stream (judged by the PO together with PR-1 / TC-NFR-001-04 numbers) | SW-RT-006, SW-RT-001, NFR-001 |
 
 ---
 
@@ -673,20 +681,20 @@ Conditions:
 
 | Group | Requirements | TCs | Of which REF / TGT / D |
 |---|---|---|---|
-| SYS (SW side: 003, 008, 010) | 3 | 9 | 1 D |
-| SAF-SW-001…006 | 6 | 20 | SAF-SW-001-01 also on REF |
+| SYS (SW side: 003, 008, 010) | 3 | 10 | 1 D |
+| SAF-SW-001…006 | 6 | 21 | SAF-SW-001-01 also on REF |
 | IF-001…012 (SW side) | 12 | 21 | IF-002-02 TGT |
 | SW-PLT / SW-CFG | 7 | 13 | PLT-001 REF, CFG-004 D |
 | SW-LIM / SW-META | 6 | 8 | — |
 | SW-RT | 6 | 21 | RT-001-02, RT-003, RT-005 D |
 | SW-MAN | 6 | 10 | MAN-006 D |
-| SW-STOP | 4 | 23 | STOP-002-01 W (REF), STOP-002-03 D |
+| SW-STOP | 4 | 25 | STOP-002-01 W (REF), STOP-002-03 D |
 | SW-ACQ | 4 | 9 | ACQ-002-02 REF |
 | SW-CAL / SW-TARE | 12 | 20 | — |
 | SW-SEQ / SW-WIZ / SW-SEQF / SW-SCH | 12 | 22 | SCH-001-02, SCH-002-02 D |
 | SW-REP | 4 | 6 | REP-001-02 D |
 | NFR-001…004 | 4 | 11 | 7 REF, 2 TGT |
-| **Total** | **86** | **193** (v0.2: 167) | REF-dependent 11, TGT 3, D 10 |
+| **Total** | **86** | **197** (v0.3: 193, v0.2: 167) | REF-dependent 11, TGT 3, D 10 |
 
 Every requirement in scope is covered (counts = distinct `TC-<REQ>-nn` ids of this plan, computed 2026-10-04).
 
@@ -716,6 +724,7 @@ Validation suite layout (M1): `tests/validation/{conftest.py, harness.py, oracle
 | M2-C5 | TC-IF-010-01, TC-IF-005-01/03, TC-IF-004-02 | parameter count and dictionary hash taken from `params.yaml` (oracle), no literals | dict_version 4 (47 params, 0xFCC54C90) |
 | M2-C6 | TC-IF-005-02 (M1 part "no motion from the M1 API") | retired | motion exists in M2; superseded by TC-SW-MAN-006-02 and TC-SYS-008-04 (h) |
 | M2-C7 | TC-SW-RT-006-01…14, TC-NFR-001-04 | new | SW-RT-006 (D-38), GUI design v0.4 §4.7 |
+| M2-C9 | §3.14, §6.2 | armed at the M2 gate; + TC-SYS-008-06 (load-limit vectors), -07 (D-41), TC-SAF-SW-002-01 (early), -05, TC-SW-STOP-001-05, -002-05; DM-11 | M2 gate (v0.3.1) |
 | M2-C8 | §3.14 | M2 SW early-acceptance set; simulator-fidelity TC-SYS-008-04/05/06; `pending("M2")` mechanism (§2.4a) | D-39, WP-B12 |
 
 Validation suite (v0.3): `test_v_d37.py` (C: D-37 a/b/d), `test_v_motion.py` (C: simulator motion + WP-B12 items
@@ -730,5 +739,6 @@ M2 verbs, `until()`; `conftest.py`: `--arm`, `pending` marker, TC id in `trace.j
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 0.1 | 2026-10-03 | Validator F | First plan for the P1 gate: strategy and levels, 167 TCs for 85 requirements, R4 + VV vectors (R4 §12 independently verified 22/22 × 3 runs), 29 fault-injection scenarios, REF runs PR-1…5, demonstrations DM-01…10, milestone criteria, findings SWD-P1-01…18, P1 verdict YES WITH CONDITIONS (C1…C7). Includes D-30, D-31 (RESUME 0x3C) and D-32 (load step travels to the soft limit, NOT_REACHED) per Orchestrator messages. |
+| 0.3.1 | 2026-10-04 | Validator F | M2 gate execution: §3.14 armed; new TC-SYS-008-06 (loadlim vectors) / -07 (D-41), TC-SAF-SW-002-01 early / -05, TC-SW-STOP-001-05 (F-MC-4), -002-05 (hotkey); D-41 / D-42 effects (FI-14, C-03 text); DM-11 (SW-RT-006 on REF, D's request). Results: `SW_test_report_M2.md`. |
 | 0.3 | 2026-10-04 | Validator F | M2 plan: baseline SRS v0.5.1 / ICD v0.5 (dict 4, 47 params, 0xFCC54C90) / D-36…D-40 / GUI design v0.4; CR-01 (physical STOP-button cases removed, HALT source PC only), D-37 a–d TCs incl. OBS-M1-R1, SW-RT-006 TCs (14 + NFR-001 4-pane smoke), §3.14 M2 SW early acceptance (simulator fidelity incl. WP-B12, MotionController, gates, hotkey), pre-written tests with `pending` / `--arm` (§2.4a), FI-30…32, D-40 (LIMIT_WIRING clear rule, TC-SYS-008-04 (i)), §8a M2-entry review (OI-F-M2-01…06), §10b corrections M2-C1…C8; 86 requirements → 193 TCs. |
 | 0.2 | 2026-10-03 | Validator F | M1 execution: baseline SRS/ICD v0.4.1, dict 3, SW_design v0.3.2, GUI v0.3.1, twin; TC corrections M1-C1…C7 (§10a: F-board for IF-008 / link-attributed gaps / duplicates / frame errors, IF-011 queue condition, Python 3.14 only, forced motion path, heartbeat lock-step part, strict-xfail open defects, M1-C8 RESUME on the CONTROL lane); validation suite layout. Results: `SW_test_report_M1.md` (incl. re-test). |

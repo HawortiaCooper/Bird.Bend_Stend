@@ -35,7 +35,7 @@ def need(v: V, *feats: str) -> None:
 
 
 # ------------------------------------------------------------------------------ waits
-KEEPALIVE_MS = 200.0     # PC heartbeat while waiting (SAF-FW-015 link watchdog trips after 1 s of silence)
+KEEPALIVE_MS = 100.0     # PC heartbeat while waiting (SAF-FW-015 link watchdog trips after 1 s of silence)
 
 
 def wait_until(v: V, pred, timeout_ms: float, step_ms: float = 1.0, keepalive: bool = True) -> bool:
@@ -58,15 +58,27 @@ def run(v: V, ms: float, step_ms: float = 1.0) -> None:
     wait_until(v, lambda: False, ms, step_ms)
 
 
-def events_since(v: V, n0: int, code: str | None = None) -> list[dict]:
+def _events(v: V) -> list[dict]:
+    """Decoded EVENTs received so far, decoded incrementally (TwinLink.events() re-decodes every frame per call,
+    which is O(n^2) over a 10 000-stop run)."""
     v.link.poll()
-    ev = v.link.events()[n0:]
+    cache = v.__dict__.setdefault("_ev_cache", [])
+    k = v.__dict__.get("_ev_seen", 0)
+    frames = v.link.frames
+    for f in frames[k:]:
+        if f.type == rc.ASYNC["EVENT"]:
+            cache.append(rc.decode_event(f.payload))
+    v._ev_seen = len(frames)
+    return cache
+
+
+def events_since(v: V, n0: int, code: str | None = None) -> list[dict]:
+    ev = _events(v)[n0:]
     return [e for e in ev if code is None or e["code"] == code]
 
 
 def n_events(v: V) -> int:
-    v.link.poll()
-    return len(v.link.events())
+    return len(_events(v))
 
 
 def wait_event(v: V, code: str, n0: int, timeout_ms: float, step_ms: float = 2.0) -> dict:

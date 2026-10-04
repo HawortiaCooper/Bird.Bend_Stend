@@ -85,6 +85,7 @@ REQ_FIELDS = {   # decoded keys in the order of the C cmd_req_t member
     "MOVE_ABS": ["target_um", "v_um_s", "a_um_s2"],
     "JOG": ["v_um_s", "a_um_s2", "bound_um"],
     "MOVE_UNTIL_LOAD": ["bound_um", "v_um_s", "a_um_s2", "raw_stop", "cmp"],
+    "DIAG_MEAS": ["op", "sel", "a", "b"],                 # ICD v0.6 Appendix C
 }
 
 
@@ -170,6 +171,8 @@ def frames_lines(pv: dict) -> list[str]:
                 code, vals = 7, [d["settle_ms"]]
             elif tn == "FAULT_CLEAR":
                 code, vals = 7, [rc.names_to_bits(d["cleared"], rc.FAULTS)]
+            elif tn == "DIAG_MEAS":
+                code, vals = 9, [u32(w) for w in d["w"]]  # 16 LE u32 words (ICD v0.6 Appendix C)
             else:
                 code, vals = 0, []
             canon = f.get("canonical_payload_hex") if f.get("reencode") is False else None
@@ -377,7 +380,9 @@ def motion_lines(mv: dict) -> list[str]:
         for e in c["events"]:
             kind = {"controlled_stop": "S", "jog": "J"}[e["event"]]
             ev += [kind, str(e["after_step"]), str(e.get("v_um_s", 0))]
-        sum_tol = max(1, c["n_periods"] // 1000)          # SRS literal ±N/1000 (OBS-E-M2-02: vectors use ceil)
+        sum_tol = max(1, math.ceil(c["n_periods"] / 1000))  # D-40 b: ±ceil(N/1000) (= tolerance.sum_ticks)
+        if sum_tol != c["tolerance"]["sum_ticks"]:
+            die(f"motion_vectors {c['name']}: sum tolerance {c['tolerance']['sum_ticks']} != ceil(N/1000)")
         out.append(" ".join(["C", c["name"], str(c["f_tick"]), spm_hex, str(c["v_um_s"]), str(c["a_um_s2"]),
                              str(c["d_um_s2"]), str(c["a_stop_um_s2"] or 0), str(c["n_steps"]),
                              str(len(c["events"]))] + ev +
@@ -387,6 +392,142 @@ def motion_lines(mv: dict) -> list[str]:
     for r in mv["ctrl_stop_paths"]:
         spm_hex = f"{struct.unpack('<I', struct.pack('<f', r['steps_per_mm']))[0]:08X}"
         out.append(f"S {r['p_ticks']} {spm_hex} {r['a_stop_um_s2']} {code[r['path']]}")
+    return out
+
+
+def loadlim_lines(lv: dict) -> list[str]:
+    """loadlim_vectors.json (ICD v0.6, D-40 d) -> test_val_loadlim lines; refused unless the validator's
+    independent LoadLimit (latch_ref) reproduces every step.
+    L name min max trip_samples regrow n_steps then per step: S raw trip win | C win | G min max ts regrow win"""
+    import latch_ref as lr
+    out = []
+    for c in lv["cases"]:
+        mine = lr.run_loadlim_case(c)
+        toks = []
+        for st, (trip, win) in zip(c["steps"], mine):
+            if win != st["regrow_window"] or (st["op"] == "sample" and trip != st["trip"]):
+                die(f"loadlim_vectors {c['name']}: validator oracle disagrees")
+            if st["op"] == "sample":
+                toks += ["S", str(st["raw"]), str(int(st["trip"])), str(int(st["regrow_window"]))]
+            elif st["op"] == "fault_clear":
+                toks += ["C", str(int(st["regrow_window"]))]
+            else:
+                toks += ["G", str(st["load_raw_min"]), str(st["load_raw_max"]), str(st["trip_samples"]),
+                         str(st["regrow"]), str(int(st["regrow_window"]))]
+        i = c["init"]
+        out.append(" ".join(["L", c["name"], str(i["load_raw_min"]), str(i["load_raw_max"]), str(i["trip_samples"]),
+                             str(i["regrow"]), str(len(c["steps"]))] + toks))
+    return out
+
+
+SNIFFED = ("STOP", "HALT", "PAUSE")
+
+
+def sniff_oracle(stream: bytes) -> list[tuple[int, int, int, int]]:
+    """Validator oracle of the stop sniffer (ICD §2 / FW_design §5.9.3, written from the spec): every position
+    where a complete CRC-valid STOP (mode <= 1) / HALT / PAUSE frame with its fixed LEN starts -> (pos, type,
+    seq, mode). Embedded frames count too (a false stop is safe-side)."""
+    out = []
+    for i in range(len(stream) - 7):
+        if stream[i] != rc.SYNC0 or stream[i + 1] != rc.SYNC1:
+            continue
+        t = stream[i + 2]
+        name = rc.CMD_NAME.get(t)
+        if name not in SNIFFED:
+            continue
+        ln = stream[i + 4] | (stream[i + 5] << 8)
+        if ln != rc.REQ_LEN[name] or i + 8 + ln > len(stream):
+            continue
+        body = stream[i + 2: i + 6 + ln]
+        crc = stream[i + 6 + ln] | (stream[i + 7 + ln] << 8)
+        if rc.crc16_ccitt(body) != crc:
+            continue
+        mode = stream[i + 6] if name == "STOP" else 0
+        if name == "STOP" and mode > 1:
+            continue
+        out.append((i, t, stream[i + 3], mode))
+    return out
+
+
+def sniff_lines(n: int, seed: int) -> list[str]:
+    """SN <stream hex> <n_chunks> <chunk sizes...> <n_hits> (pos type seq mode)*"""
+    import random
+    rnd = random.Random(seed)
+    out = []
+    for k in range(n):
+        parts = []
+        for _ in range(rnd.randint(1, 8)):
+            c = rnd.random()
+            seq = rnd.randrange(256)
+            if c < 0.15:
+                parts.append(rc.make_frame("STOP", seq, {"mode": rnd.choice([0, 1, 2])}))
+            elif c < 0.25:
+                parts.append(rc.make_frame("HALT", seq, {}))
+            elif c < 0.35:
+                parts.append(rc.make_frame("PAUSE", seq, {}))
+            elif c < 0.42:
+                parts.append(rc.make_frame("RESUME", seq, {}))
+            elif c < 0.50:
+                parts.append(rc.make_frame("PING", seq, {}))
+            elif c < 0.58:                            # bad CRC STOP / HALT
+                b = bytearray(rc.make_frame("STOP", seq, {"mode": 0}) if rnd.random() < 0.5
+                              else rc.make_frame("HALT", seq, {}))
+                b[-1] ^= 0x5A
+                parts.append(bytes(b))
+            elif c < 0.64:                            # wrong LEN: STOP header with LEN 2
+                body = bytes([rc.CMD["STOP"], seq, 2, 0, 0, 0])
+                crc = rc.crc16_ccitt(body)
+                parts.append(bytes([rc.SYNC0, rc.SYNC1]) + body + bytes([crc & 0xFF, crc >> 8]))
+            elif c < 0.72:                            # a HALT frame embedded in a MOVE_ABS payload (12 B)
+                h = rc.make_frame("HALT", seq, {})
+                pl = h + bytes(rnd.randrange(256) for _ in range(12 - len(h)))
+                body = bytes([rc.CMD["MOVE_ABS"], rnd.randrange(256), 12, 0]) + pl
+                crc = rc.crc16_ccitt(body)
+                parts.append(bytes([rc.SYNC0, rc.SYNC1]) + body + bytes([crc & 0xFF, crc >> 8]))
+            else:
+                parts.append(bytes(rnd.choice([rc.SYNC0, rc.SYNC1, rnd.randrange(256)])
+                                   for _ in range(rnd.randint(1, 12))))
+        s = b"".join(parts)
+        if k < 40:                                    # exhaustive split points for short streams: 1-byte chunks
+            sizes = [1] * len(s) if k % 2 == 0 else [len(s)]
+        else:
+            sizes, left = [], len(s)
+            while left:
+                c = min(left, rnd.randint(1, 20))
+                sizes.append(c)
+                left -= c
+        hits = sniff_oracle(s)
+        out.append(f"SN {s.hex().upper() or '-'} {len(sizes)} " + " ".join(map(str, sizes)) + f" {len(hits)} "
+                   + " ".join(f"{p} {t} {q} {m}" for p, t, q, m in hits))
+    return out
+
+
+def rate_lines(n: int, seed: int) -> list[str]:
+    """AR <nominal_sps> <tol_pct> <count> <t_us...> <expect_dsps> <expect_mismatch>   (FW-AFE-004 oracle:
+    median of the last 16 periods, 1e7/median rounded, mismatch when |dsps - 10*nominal| > tol% of it;
+    timestamps wrap modulo 2^32)."""
+    import random
+    import statistics
+    rnd = random.Random(seed)
+    out = []
+    for k in range(n):
+        nom = rnd.choice([10, 80])
+        true_sps = nom * rnd.choice([1.0, 1.02, 0.98, 0.75, 1.25, 0.81, 1.19, 0.125, 8.0])
+        per = 1e6 / true_sps
+        t = rnd.choice([0, 2**32 - 5_000_000, rnd.randrange(2**32)])
+        ts = []
+        for i in range(rnd.randint(17, 40)):
+            ts.append(t % 2**32)
+            d = per * (1 + rnd.gauss(0, 0.002))
+            if rnd.random() < 0.08:
+                d *= rnd.choice([0.3, 2.0, 3.0])     # outliers (missed edge, double edge)
+            t += int(round(d))
+        p = [(ts[i + 1] - ts[i]) % 2**32 for i in range(len(ts) - 1)][-16:]
+        med = statistics.median(p)
+        dsps = int(1e7 / med + 0.5)
+        tol = 20
+        mm = int(abs(dsps - 10 * nom) * 100 > tol * 10 * nom)
+        out.append(f"AR {nom} {tol} {len(ts)} " + " ".join(map(str, ts)) + f" {dsps} {mm}")
     return out
 
 
@@ -428,6 +569,8 @@ def main() -> int:
         "units.txt": units_lines(uv),
         "corpus.txt": corpus_lines(CORPUS_N, CORPUS_SEED),
         "bits.txt": bits_lines(),
+        "sniff.txt": sniff_lines(2000, 4242),
+        "rate.txt": rate_lines(500, 4343),
     }
     mvf = VEC / "motion_vectors.json"                  # M2 (OI-FW-20); absent before M2 -> no motion.txt
     if mvf.exists():
@@ -437,6 +580,13 @@ def main() -> int:
         sys.path.insert(0, str(HERE))
         files["motion.txt"] = motion_lines(mv)
         jsons["motion_vectors"] = mv
+    llf = VEC / "loadlim_vectors.json"                 # ICD v0.6 (D-40 d)
+    if llf.exists():
+        lv = json.loads(llf.read_text(encoding="utf-8"))
+        if lv["icd_version"] != icd or int(lv["param_dict_hash"], 16) != h:
+            die(f"loadlim_vectors.json ({lv['icd_version']}, {lv['param_dict_hash']}) != FW headers")
+        sys.path.insert(0, str(HERE))
+        files["loadlim.txt"] = loadlim_lines(lv)
     counts = {}
     for name, lines in files.items():
         hdr = [f"H {icd} {h}", f"N {len(lines)}"]

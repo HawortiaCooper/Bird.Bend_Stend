@@ -94,25 +94,30 @@ def test_limit_hit_latch_and_release(v):
     v.tw.act("limit", name="end")                                  # back to the position model
 
 
-@pytest.mark.xfail(strict=True, reason="OBS-E-M2-08: SRS SAF-FW-014 'motion refused until both inputs are "
-                   "released and FAULT_CLEAR' vs ICD v0.5 §5.5 cause 'both limit inputs active' (A's build follows the "
-                   "ICD: clearable with one input released) - Orchestrator decision pending; test follows the SRS")
 def test_both_limits_wiring_fault(v):
-    """TC-SAF-FW-014-01: both active -> LIMIT_WIRING; FAULT_CLEAR E_CAUSE_ACTIVE until both released."""
-    m.need(v, "MOTION")
-    m.enable(v)
+    """TC-SAF-FW-014-01 (D-40 a): both active -> LIMIT_WIRING + motion refused; FAULT_CLEAR E_CAUSE_ACTIVE while
+    BOTH are active, accepted once they are no longer both active; the input still active keeps acting as a
+    normal limit latch (motion toward it refused, away accepted)."""
+    m.need(v, "MOTION", "HOMING")
+    m.ready(v, x_um=100_000)
     v.tw.act("limit", name="start", active=True)
     v.tw.act("limit", name="end", active=True)
     v.advance(5)
     assert "LIMIT_WIRING" in v.status()["faults"]
+    r = m.jog(v, 1_000)
+    assert r["status"] == "E_STATE" and r["detail"] & (1 << rc.BLOCK.index("FAULT")), r
     r = v.cmd("FAULT_CLEAR")
     assert r["status"] == "E_CAUSE_ACTIVE" and r["detail"] == 1 << rc.FAULTS.index("LIMIT_WIRING")
     v.tw.act("limit", name="end", active=False)
     v.advance(30)
-    assert v.cmd("FAULT_CLEAR")["status"] == "E_CAUSE_ACTIVE"
+    assert v.ok("FAULT_CLEAR")["cleared"] == ["LIMIT_WIRING"]            # D-40 a: no longer both active
+    r = m.jog(v, -1_000)                                                   # toward the still active START
+    assert r["status"] == "E_STATE" and r["detail"] & (1 << rc.BLOCK.index("LIMIT")), r
+    assert m.jog(v, 1_000)["status"] == "OK"                               # away from it
+    v.ok("STOP", {"mode": 0})
     v.tw.act("limit", name="start", active=False)
-    v.advance(30)
-    assert v.ok("FAULT_CLEAR")["cleared"] == ["LIMIT_WIRING"]
+    v.tw.act("limit", name="start")
+    v.tw.act("limit", name="end")
 
 
 def test_drv_power_loss_while_jogging(v):

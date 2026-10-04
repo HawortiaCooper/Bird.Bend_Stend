@@ -151,6 +151,8 @@ def test_random_stops_count_integrity(v):
     rng = random.Random(int(os.environ.get("VAL_SEED", "1") or 1))
     pt = rr.pulse_timing(10_000, 10_000, 50_000, 20)
     for i in range(STOPS):
+        v.tw.act("query", what="edges", clear=True)          # keep the per-stop scans O(1) (10 000-stop gate run)
+        v.tw.act("query", what="seam_log", clear=True)
         s0 = v.status()["pos_steps"]
         t0 = v.tw.now_us
         target = 50_000 + rng.choice([-1, 1]) * 30_000

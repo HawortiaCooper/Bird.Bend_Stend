@@ -29,8 +29,9 @@ T_CONNECT_MS = 10000
 
 @pytest.fixture
 def sim_backend(tmp_path):
+    # hotkey "off": no system-wide key hook in GUI tests; the GUI then uses its app-level shortcut (§5.3)
     be = backend_mod.Backend(backend_mod.BackendSettings(sim_nvm_path=str(tmp_path / "nvm.json"),
-                                                         recordings_root=str(tmp_path / "rec")))
+                                                         recordings_root=str(tmp_path / "rec"), hotkey="off"))
     assert isinstance(be, BackendAPI)
     be.start()
     yield be
@@ -186,7 +187,7 @@ def test_stop_pause_resume_clear_on_simulator(sim_window, sim_backend, qtbot) ->
     assert win.indicator_bar.chip("PAUSED").level == "warn"
     qtbot.mouseClick(win.pause_button, Qt.MouseButton.LeftButton)
     qtbot.waitUntil(lambda: win.pause_button.text() == "‖ Pause", timeout=5000)
-    assert win.app_shortcuts(), "M1 backend reports the global hotkey UNAVAILABLE → app shortcut expected"
+    assert win.app_shortcuts(), "hotkey off → UNAVAILABLE → app shortcut expected (§5.3)"
     win.app_shortcuts()[0].activated.emit()
     qtbot.waitUntil(lambda: win.indicator_bar.chip("HALT").level == "alarm", timeout=5000)
     assert "HALT latched" in " ".join(r.text for r in win.stop_banner.rows)
@@ -226,3 +227,22 @@ def test_perf_smoke_on_simulator(sim_window, qtbot, capsys) -> None:
     assert ps["ticks"] - start > 50 and ps["errors"] == {}
     assert win.snapshot_calls - n0 <= ps["ticks"] - start          # one snapshot per refresh for all panes
     assert sim_window.backend.status().gates[GateId.STREAM_STOP].ok
+
+
+@pytest.mark.req("SW-STOP-002")
+def test_real_hotkey_status_shown(make_window, tmp_path, qtbot) -> None:
+    """Verifies: SW-STOP-002 (B4-07) — the KEY chip follows the backend's real hotkey status; with the key active
+    (fake hook) the GUI installs no app-level Pause shortcut (never a double path, GQ-19)."""
+    be = backend_mod.Backend(backend_mod.BackendSettings(sim_nvm_path=str(tmp_path / "nvm.json"),
+                                                         recordings_root=str(tmp_path / "rec"), hotkey="fake"))
+    be.start()
+    try:
+        win = make_window(be)
+        tick(win)
+        hk = be.status().hotkey
+        chip = win.indicator_bar.chip("KEY")
+        assert chip.value.text() in (hk.mode, "test running") and "KL-01" in chip.toolTip()
+        assert bool(win.app_shortcuts()) == (hk.mode == "UNAVAILABLE")
+        assert hk.mode in ("REGISTERED", "LL_HOOK")
+    finally:
+        be.shutdown()

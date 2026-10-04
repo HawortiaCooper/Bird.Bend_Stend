@@ -46,9 +46,9 @@ OUTCOMES = ("pending", "confirmed", "cancelled", "not_needed", "refused", "stopp
 #: use these only as fallback titles). (title, text, confirm label, assertion or None)
 TEXTS: dict[str, tuple[str, str, str, str | None]] = {
     "C-03": ("Clear E-STOP",
-             "Clear E-STOP: red E-stop button released (input closed ≥ 100 ms) and K1 RESET pressed? After "
+             "Clear E-STOP: red E-stop button released (input closed ≥ 100 ms) and the area safe? After "
              "clearing, the driver stays disabled: ENABLE and HOME are required. No motion restarts.",
-             "Clear E-STOP", "E-stop button released, K1 reset, area safe"),
+             "Clear E-STOP", "E-stop button released, area safe"),
     "C-04": ("Restore defaults",
              "Restore all parameters to defaults (RAM; NVM unchanged until Save to NVM). Session load thresholds "
              "are re-sent by the PC.", "Restore defaults", None),

@@ -94,44 +94,66 @@ def k1_cause_present(estop_open: bool, drv_pwr_present: bool, sense_enabled: boo
 # ------------------------------------------------------------ load limit (SAF-FW-008/009/011)
 @dataclass
 class LoadLimit:
+    """SAF-FW-008/009/011 per ICD v0.6 §5.5 "FW load limit" (normative since D-40 d), written from the text:
+    violation = raw > max, raw < min or a rail sample; trip after trip_samples consecutive violations; FAULT_CLEAR
+    takes the LAST sample as reference and opens the regrow window if that sample violates; inside the window a
+    violating sample re-trips at once only if it is more than regrow beyond the reference on its side, other
+    violations are ignored (unloading); the window ends with the first in-range sample or the next FAULT_CLEAR;
+    a threshold change keeps the count and the window."""
     raw_min: int = -7022271
     raw_max: int = 7022271
     trip_samples: int = 1
     regrow_raw: int = 128849
     _run: int = 0
-    _hi_eff: int | None = None          # regrow window after FAULT_CLEAR (ASSUMED end: first in-range sample)
-    _lo_eff: int | None = None
+    _window: bool = False
+    _ref: int = 0
+    _last: int = 0
     tripped: bool = False
     trips: list[int] = field(default_factory=list)
 
     def violates(self, raw: int) -> bool:
-        if raw >= RAIL_HI or raw <= RAIL_LO:           # SAF-FW-009: rails always count
+        return raw >= RAIL_HI or raw <= RAIL_LO or raw > self.raw_max or raw < self.raw_min
+
+    @property
+    def window(self) -> bool:
+        return self._window
+
+    def config(self, raw_min: int, raw_max: int, trip_samples: int, regrow_raw: int) -> None:
+        self.raw_min, self.raw_max, self.trip_samples, self.regrow_raw = raw_min, raw_max, trip_samples, regrow_raw
+
+    def sample(self, raw: int) -> bool:
+        """One sample; True = this sample trips (immediate stop + LOAD_LIMIT)."""
+        self._last = raw
+        if not self.violates(raw):
+            self._run, self._window = 0, False
+            return False
+        if self._window:
+            grew = (raw > self.raw_max and raw > self._ref + self.regrow_raw) or                    (raw < self.raw_min and raw < self._ref - self.regrow_raw)
+            if not grew:
+                self._run = 0
+                return False
+            self._window = False
+            self._run = self.trip_samples
             return True
-        hi = self._hi_eff if self._hi_eff is not None else self.raw_max
-        lo = self._lo_eff if self._lo_eff is not None else self.raw_min
-        return raw > hi or raw < lo                     # strict: raw_max itself does not trip
+        self._run += 1
+        return self._run >= self.trip_samples
 
     def feed(self, i: int, raw: int) -> bool:
-        """Sample i with value raw; returns True when this sample trips (latches LOAD_LIMIT)."""
-        if self.raw_min <= raw <= self.raw_max:
-            self._hi_eff = self._lo_eff = None          # ASSUMED: regrow window ends inside the band
-        if self.violates(raw):
-            self._run += 1
-        else:
-            self._run = 0
-        if not self.tripped and self._run >= self.trip_samples:
+        """Like sample(), but reports only the first trip of a latched episode (records its index)."""
+        t = self.sample(raw)
+        if t and not self.tripped:
             self.tripped = True
             self.trips.append(i)
             return True
         return False
 
-    def fault_clear(self, raw_at_clear: int) -> None:
-        """FAULT_CLEAR always clears LOAD_LIMIT; re-trip only if the violation grows by > regrow."""
+    def fault_clear(self, raw_at_clear: int | None = None) -> None:
+        """Reference = the last sample (or raw_at_clear when given); window opens if it violates."""
+        if raw_at_clear is not None:
+            self._last = raw_at_clear
         self.tripped, self._run = False, 0
-        if raw_at_clear > self.raw_max:
-            self._hi_eff = raw_at_clear + self.regrow_raw
-        elif raw_at_clear < self.raw_min:
-            self._lo_eff = raw_at_clear - self.regrow_raw
+        self._ref = self._last
+        self._window = self.violates(self._last)
 
 
 def first_trip(samples: list[int], **kw) -> int | None:
@@ -140,6 +162,25 @@ def first_trip(samples: list[int], **kw) -> int | None:
         if ll.feed(i, r):
             return i
     return None
+
+
+def run_loadlim_case(case: dict) -> list[tuple[bool | None, bool]]:
+    """Replay one loadlim_vectors.json case -> [(trip, window_after)] per step (trip None for non-samples)."""
+    ini = case["init"]
+    ll = LoadLimit(ini["load_raw_min"], ini["load_raw_max"], ini["trip_samples"], ini["regrow"])
+    out = []
+    for st in case["steps"]:
+        if st["op"] == "sample":
+            out.append((ll.sample(st["raw"]), ll.window))
+        elif st["op"] == "fault_clear":
+            ll.fault_clear()
+            out.append((None, ll.window))
+        elif st["op"] == "config":
+            ll.config(st["load_raw_min"], st["load_raw_max"], st["trip_samples"], st["regrow"])
+            out.append((None, ll.window))
+        else:
+            raise ValueError(st["op"])
+    return out
 
 
 # -------------------------------------------------------------- stale AFE (SAF-FW-012)

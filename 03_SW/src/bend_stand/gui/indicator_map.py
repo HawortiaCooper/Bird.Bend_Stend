@@ -310,7 +310,7 @@ def _eval_load(chip: str, status: Any, ind: Any) -> ChipView:
 def _eval_drv(chip: str, status: Any, ind: Any) -> ChipView:
     level, text, tip = _generic(chip, ind, ok_text="on")
     if level == "alarm":
-        text = "OFF – position lost"
+        text = "OFF – position lost"            # optional 48 V presence sense (D-41)
     return _view(chip, level, text, tip)
 
 
@@ -352,8 +352,16 @@ def _eval_ena(chip: str, status: Any, ind: Any) -> ChipView:
 
 
 def _eval_mov(chip: str, status: Any, ind: Any) -> ChipView:
-    level, text, tip = _generic(chip, ind, ok_text="standing", on_text=lambda on: "moving")
-    ms = getattr(getattr(status, "motion", None), "motion_state", None)
+    motion = getattr(status, "motion", None)
+    phase = getattr(motion, "home_phase", None)
+    homing = bool(phase) and phase not in ("NONE", "DONE")
+
+    def moving_text(_on: list[str]) -> str:
+        if homing:
+            return f"homing {phase}"
+        return "jogging" if getattr(motion, "jogging", False) else "moving"
+    level, text, tip = _generic(chip, ind, ok_text="standing", on_text=moving_text)
+    ms = getattr(motion, "motion_state", None)
     if ms:
         tip += f"\nmotion state {ms}: {pg.MOTION_STATE_DESC.get(ms, '')}"
     return _view(chip, level, text, tip)

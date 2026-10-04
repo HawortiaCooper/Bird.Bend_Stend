@@ -400,17 +400,10 @@ def test_link_widget(window, connected_fake, qtbot) -> None:
 def test_confirmation_banner_names_the_command(window, connected_fake, qtbot, shape, cmd) -> None:
     """Verifies: SW-STOP-002, SAF-SW-005 (SWD-M1-06) — stop.confirmed / stop.unconfirmed name the command actually
     sent, whether the payload is the bare command name (M1 backend) or an object with ``.cmd``."""
-    from dataclasses import dataclass
-
-    @dataclass(frozen=True)
-    class Confirmation:                      # shape of B's announced dataclass (cmd, source, attempts, t_ns)
-        cmd: str
-        source: str
-        attempts: int
-        t_ns: int
+    from bend_stand.core.api import StopConfirmation      # B4-06: no str equality any more
 
     def payload():
-        return cmd if shape == "str" else Confirmation(cmd, "app-shortcut", 3, 0)
+        return cmd if shape == "str" else StopConfirmation(cmd, "app-shortcut", 3, 0, True)
 
     if cmd == "HALT":
         window._on_app_halt()
@@ -445,6 +438,34 @@ def test_link_lost_says_stop_sent_only_after_a_sent_stop(window, connected_fake,
     assert any(r.text.startswith("LINK LOST – STOP sent") for r in window.stop_banner.rows)
 
 
+@pytest.mark.req("SAF-SW-001", "SAF-SW-005")
+def test_m2_gate_warning_and_feature_bits(window, connected_fake) -> None:
+    """Verifies: SAF-SW-001, SAF-SW-005 (B4-02, B4-05) — the motion gates' WARN PC_LOAD_LIMITS_OFF is shown as a
+    notice (hidden in no-specimen mode); feature-dependent items UNKNOWN → grey "?" chips and no "driver power
+    lost" banner; MOV shows homing phase / jogging (B4-03)."""
+    import dataclasses
+
+    from bend_stand.core.api import MotionStatus
+    connected_fake.set_gate(GateId.MOVE, warn("PC_LOAD_LIMITS_OFF", "PC load limits not active until M3"))
+    tick(window)
+    assert "pc_load_limits_off" in window.notice_strip.keys()
+    connected_fake.set_indicators(drv_pwr=ind("UNKNOWN"), alm=ind("UNKNOWN"), pend=ind("UNKNOWN"),
+                                  pause_btn=ind("UNKNOWN"), moving=ind("ON"))
+    connected_fake.set_status(motion=MotionStatus(moving=True, home_phase="FAST_SEEK"))
+    tick(window)
+    for chip in ("DRV", "ALM", "PEND", "BTN"):
+        assert window.indicator_bar.chip(chip).level == "unknown", chip
+    assert not any("Driver power lost" in r.text for r in window.stop_banner.rows)
+    assert window.indicator_bar.chip("MOV").value.text() == "homing FAST_SEEK"
+    connected_fake.set_status(motion=dataclasses.replace(connected_fake.status().motion, home_phase="DONE",
+                                                         jogging=True))
+    tick(window)
+    assert window.indicator_bar.chip("MOV").value.text() == "jogging"
+    connected_fake.limits.set_no_specimen_mode(True, confirmed=True)
+    tick(window)
+    assert "pc_load_limits_off" not in window.notice_strip.keys()
+
+
 @pytest.mark.req("SW-STOP-001", "SAF-SW-005")
 def test_gui_texts_name_no_physical_stop_button(window, connected_fake) -> None:
     """Verifies: SW-STOP-001, SAF-SW-005 (D-36 / CR-01) — GUI-owned operator texts point to the red E-stop, never to
@@ -455,8 +476,15 @@ def test_gui_texts_name_no_physical_stop_button(window, connected_fake) -> None:
     from bend_stand.gui.widgets.stop_button import STOP_TOOLTIP
     texts = [STOP_TOOLTIP, imap.KL01_TEXT, E_STOP_HINT, link_lost_text(None, 0.0)]
     texts += [t for v in TEXTS.values() for t in v if t]
+    from bend_stand.core.api import BackendStatus, Indicators
+    from bend_stand.gui.widgets.stop_banner import banner_rows
+    st = BackendStatus(indicators=Indicators().replace(estop=ind("ON"), k1_welded=ind("ON")))
+    texts += [r.text for r in banner_rows(st, None, 0.0)]
     for t in texts:
         import re
         low = t.lower()
         assert "stop/break" not in low and "physical stop" not in low, t
+        # D-41: no power-removal contactor — the E-stop is an MCU / FW stop
+        assert "power cut" not in low and "power removed" not in low and "k1 reset" not in low, t
+        assert "contactor" not in low, t
         assert not re.search(r"(?<!e-)stop button", low), t          # "E-stop button" is the D-36 path

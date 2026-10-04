@@ -26,7 +26,8 @@ QPushButton#stopButton:pressed {{ background-color: #800000; }}
 """
 
 STOP_TOOLTIP = ("STOP: immediate stop, driver keeps holding, sequence terminated.\n"
-                "Keyboard: Pause/Break (HALT, latched). Hardware: the red E-stop button (power cut).")
+                "Keyboard: Pause/Break (HALT, latched). Hardware: the red E-stop button (MCU stop: pulses off, "
+                "driver disabled, re-home needed).")
 
 
 class StopButton(QPushButton):

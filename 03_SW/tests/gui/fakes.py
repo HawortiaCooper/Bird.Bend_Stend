@@ -225,13 +225,15 @@ class FakeConfig:
 # --------------------------------------------------------------------------------------------- data
 
 def default_channels() -> list[ChannelSpec]:
-    specs = [ChannelSpec("raw", "raw", "counts", "DATA"), ChannelSpec("setpoint_um", "setpoint", "µm", "DATA"),
-             ChannelSpec("rate_sps", "sample rate", "SPS", "DATA"), ChannelSpec("lost_frames", "seq gaps", "",
-                                                                                 "DATA")]
+    """Registry like B's ``core.channels`` (B4-08: ``dimension`` filled; status bits ``bit.<name>``)."""
+    specs = [ChannelSpec("raw", "raw", "counts", "DATA", dimension="counts"),
+             ChannelSpec("setpoint_um", "setpoint", "µm", "DATA", dimension="length"),
+             ChannelSpec("rate_sps", "sample rate", "SPS", "DATA", dimension="rate"),
+             ChannelSpec("lost_frames", "seq gaps", "", "DATA", dimension="count")]
     for n in (*pg.DATA_FLAGS_BITS, *pg.DATA_STATUS_BITS):
         if n:
-            specs.append(ChannelSpec(f"bit.{n.lower()}", n, "", "Status bits"))
-    specs.append(ChannelSpec("F_N", "force", "N", "Force", False, "needs load calibration + tare"))
+            specs.append(ChannelSpec(f"bit.{n.lower()}", n, "", "Status bits", dimension="bits"))
+    specs.append(ChannelSpec("F_N", "force", "N", "Force", False, "needs load calibration + tare", dimension="force"))
     return specs
 
 

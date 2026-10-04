@@ -6,7 +6,8 @@ the GUI thread** (B §15.4 rule 7, non-blocking ≤ 5 ms, priority TX path). The
 not use this path (backend hotkey thread, §5.3).
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/gui/estop.py @37c87471 (renamed E-STOP → STOP: on this stand the
-on-screen button is an operational stop, the E-stop is the hardware power cut, GQ-18 / D-36).
+on-screen button is an operational stop, the E-stop is the red button on the MCU E-stop input, GQ-18 / D-36 /
+D-41).
 
 Implements: SW-STOP-001 (on-screen STOP path), IF-011 (GUI part: synchronous, never queued)
 """

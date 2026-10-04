@@ -116,11 +116,12 @@ def test_corrupted_frames_no_action(v: V):
 
 
 def test_every_defined_command_known(v: V):
-    """TC-IF-012-01: each of the 26 commands -> no E_UNKNOWN_CMD; M1 motion -> E_STATE / E_INTERNAL 1."""
+    """TC-IF-012-01: each of the 27 commands (ICD v0.6: + DIAG_MEAS 0x3D) -> no E_UNKNOWN_CMD; motion -> E_STATE /
+    E_INTERNAL 1; DIAG_MEAS in a build without FEAT_HW_MEAS -> E_INTERNAL NOT_IN_BUILD (OI-FW-36)."""
     # Verifies: IF-012, FW-CMD-001
     # TC: TC-IF-012-01
     rnd = random.Random(1)
-    assert len(rc.CMD) == 26
+    assert len(rc.CMD) == 27 and rc.CMD.get("DIAG_MEAS") == 0x3D
     for name in rc.CMD:
         if name == "REBOOT":
             continue
@@ -133,8 +134,13 @@ def test_every_defined_command_known(v: V):
             f = {"mode": 0}
         if name == "GET_PARAM":
             f = {"id": PBYKEY["stream.fallback_hz"].id}
+        if name == "DIAG_MEAS":
+            f = {"op": 0, "sel": 0, "a": 0, "b": 0}
         r = v.cmd(name, f)
         assert r["status"] != "E_UNKNOWN_CMD", name
+        if name == "DIAG_MEAS":                                 # twin without --hw-meas = no FEAT_HW_MEAS
+            assert "HW_MEAS" not in v.info()["features"]
+            assert (r["status"], r["detail"]) == ("E_INTERNAL", 1), r
         if name in ("ENABLE", "MOVE_ABS", "JOG", "HOME", "MOVE_UNTIL_LOAD", "DISABLE") and r["status"] != "OK":
             assert r["status"] in ("E_STATE", "E_INTERNAL", "E_RANGE"), (name, r)
     assert v.reboot()["status"] == "OK"
