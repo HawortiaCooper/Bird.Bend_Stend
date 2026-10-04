@@ -450,3 +450,35 @@ def test_diag_meas_model_counter_and_stamps(probe_exe, tmp_path):
         assert r["w"][0] == 50
         s = link.cmd("DIAG_MEAS", {"op": 4, "sel": 1, "a": 0, "b": 0})["w"]
         assert s[0] == 50 and s[2] > s[3] > 0
+
+
+def test_diag_meas_noinit_and_info_match_target_v07(probe_exe, tmp_path):
+    """REQ-C-M2-12 / OI-FW-38 (ICD v0.7 App. C): NOINIT magic valid from the first read (set at boot), w2 = the
+    10 kHz heartbeat (not the time of the read), survives a reset; INFO ring 2048 / stimulus 10 MHz; PROBE_READ
+    w5 = PUL stamps since arming."""
+    with Twin("lockstep", exe=probe_exe, run_dir=tmp_path, hw_meas=True) as t:
+        link = TwinLink(t)
+        t.advance_ms(2)
+        r = link.cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})
+        if r["status"] != "OK":
+            pytest.skip(f"probe core does not forward DIAG_MEAS ({r})")
+        w = r["w"]
+        assert w[0] == 0x4D454153 and w[1] == 0 and w[3] == 0
+        assert w[2] % 100 == 0 and 0 < w[2]
+        info = link.cmd("DIAG_MEAS", {"op": 0, "sel": 0, "a": 0, "b": 0})["w"]
+        assert info[4] == 2048 and info[7] == 10_000_000
+        _train(t, link, 5, 9000)
+        t.advance_ms(2)
+        assert link.cmd("DIAG_MEAS", {"op": 1, "sel": 0, "a": 0, "b": 0})["status"] == "OK"   # arm, EVT source
+        _train(t, link, 30, 9000)
+        t.advance_ms(10)
+        pr = link.cmd("DIAG_MEAS", {"op": 2, "sel": 0, "a": 0, "b": 0})["w"]
+        assert pr[1] == 0 and pr[5] == 30                                  # since arming, not since the event
+        last = link.cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"][1]
+        assert last > 0
+        t.act("reset", cause="iwdg")
+        t.advance_ms(5)
+        w2 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 1, "a": 0, "b": 0})["w"]
+        assert w2[0] == 0x4D454153 and w2[1] == last                    # kept over the reset, then cleared
+        w3 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"]
+        assert w3[0] == 0x4D454153 and w3[1] == 0

@@ -143,15 +143,28 @@ def test_icd_generated_tables_present() -> None:
 # ---------------------------------------------------------------------------- dictionary (D-29)
 def test_dictionary_d29_d33_d27() -> None:
     keys = {p.key: p for p in PD.params}
-    assert PD.dict_version == 4
+    assert PD.dict_version == 5
     assert "io.stop_active_level" not in keys and all(p.id != 0x0603 for p in PD.params)   # D-36
-    assert len(PD.params) == 47
+    assert len(PD.params) == 48
     to = keys["afe.timeout_ms"]
     assert (to.default, to.min, to.max) == (250, 25, 1000)                     # D-33a
     assert keys["motion.steps_per_mm"].default == 800.0                        # D-27 closed
     assert "home.ref_switch" not in keys and all(p.id != 0x0401 for p in PD.params)
     k1 = keys["drv.k1_weld_ms"]
     assert (k1.id, k1.type, k1.default, k1.min, k1.max) == (0x0705, "u16", 200, 100, 2000)
+
+
+def test_dictionary_cr03_k1_check_v07() -> None:
+    """CR-03 / D-41: power sense optional (default off); SRS OI-18: K1_WELDED check gated by its own parameter."""
+    keys = {p.key: p for p in PD.params}
+    ps, kc = keys["drv.pwr_sense_enable"], keys["drv.k1_check_enable"]
+    assert (ps.id, ps.type, ps.default, ps.reboot_required) == (0x0704, "bool", False, True)
+    assert (kc.id, kc.type, kc.default, kc.reboot_required, kc.moving_ok) == (0x0706, "bool", False, True, False)
+    names = {v["name"]: v for v in CHECK["vectors"]}
+    # vectors that need the sense set it explicitly (the default no longer evaluates DRV_POWER)
+    for n in ("move_alarm_unpowered", "move_after_drv_power_lost", "jog_after_drv_power_lost"):
+        assert names[n]["state"]["params"]["drv.pwr_sense_enable"] is True, n
+    assert names["move_alarm_unpowered"]["expect"]["status"] == "E_STATE"
 
 
 def test_every_range_end_reachable() -> None:
@@ -312,8 +325,9 @@ def test_mul_bound_at_position() -> None:
 
 def test_state_schema() -> None:
     """F-B-25: state keys versioned and stable (v0.5: stop_btn_* kept but never set, D-36)."""
-    assert CHECK["state_schema"] == cc.STATE_SCHEMA == 2
-    assert list(CHECK["state_defaults"])[-1] == "paused" and len(CHECK["state_defaults"]) == 22
+    assert CHECK["state_schema"] == cc.STATE_SCHEMA == 3                   # v0.7: + unhomed_origin_um (D-43 b)
+    assert list(CHECK["state_defaults"])[-2:] == ["paused", "unhomed_origin_um"]
+    assert len(CHECK["state_defaults"]) == 23 and CHECK["state_defaults"]["unhomed_origin_um"] == 0
     for v in CHECK["vectors"]:
         assert set(v["state"]) <= set(CHECK["state_defaults"]), v["name"]
 
@@ -427,12 +441,29 @@ def test_loadlim_regrow_window_d40d() -> None:
     assert [x.get("trip") for x in s if x["op"] == "sample"] == [False, False, True, False, False, True]
     s = _ll("regrow_window_ends_inside")
     assert s[2]["regrow_window"] is False and s[3]["trip"] is True
-    s = _ll("regrow_new_reference")
-    assert s[3]["ref"] == 7_150_000 and s[4]["trip"] is False and s[5]["trip"] is True
+    # OI-B-M2-03 (v0.7): only a FAULT_CLEAR that clears a latched LOAD_LIMIT takes a new reference
+    s = _ll("regrow_clear_without_latch_keeps_reference")
+    assert s[2]["trip"] is False and s[3]["ref"] == 7_100_000 and s[4]["trip"] is False and s[5]["trip"] is True
+    s = _ll("regrow_new_reference_after_retrip")
+    assert s[2]["trip"] is True and s[3]["ref"] == 7_228_850 and s[4]["trip"] is False and s[5]["trip"] is True
     assert _ll("clear_inside_no_window")[2]["regrow_window"] is False
     assert _ll("regrow_config_keeps_window")[2]["regrow_window"] is True
     assert all(not x.get("trip") for x in _ll("regrow_unload"))[1:] if False else True
     assert [x["trip"] for x in _ll("regrow_unload") if x["op"] == "sample"] == [True, False, False, False]
+
+
+def test_unhomed_window_d43b() -> None:
+    """D-43 b (v0.7): un-homed JOG toward a reached bound of origin ± home.max_travel_um -> E_RANGE 0."""
+    want = {"jog_unhomed_window_inside": ("OK", 0), "jog_unhomed_window_reached_toward": ("E_RANGE", 0),
+            "jog_unhomed_window_reached_away": ("OK", 0), "jog_unhomed_window_neg_reached": ("E_RANGE", 0),
+            "jog_unhomed_window_origin": ("E_RANGE", 0), "jog_zero_at_bound": ("OK", 0),
+            "jog_homed_ignores_window": ("OK", 0)}
+    got = {v["name"]: (v["expect"]["status"], v["expect"]["detail"]) for v in CHECK["vectors"] if v["name"] in want}
+    assert got == want
+    st = cc.FwState(homed=False, unhomed_origin_um=10_000, pos_um=370_000)
+    jog = rc.encode_request("JOG", {"v_um_s": 1000, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND})
+    assert MODEL.check(st, rc.CMD["JOG"], jog) == ("E_RANGE", 0)
+    assert MODEL.check(cc.FwState(homed=False, unhomed_origin_um=10_001, pos_um=370_000), rc.CMD["JOG"], jog) == ("OK", 0)
 
 
 def test_motion_sum_tolerance_ceil_d40b() -> None:

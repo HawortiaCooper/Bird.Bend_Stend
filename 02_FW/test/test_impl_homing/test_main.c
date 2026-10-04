@@ -164,6 +164,69 @@ static void test_load_precheck(void)               /* SAF-FW-021 */
     TEST_ASSERT_TRUE(motion_active());
 }
 
+/* D-43 b (ICD v0.7 §5.4): un-homed travel window origin +- home.max_travel_um, origin latched when the
+ * axis becomes un-homed (ENABLE, DISABLE, homing failure ...), never by a jog / stop; a held jog stops
+ * at the bound (SOFT_LIMIT), a JOG toward a reached bound -> E_RANGE 0, away / JOG 0 accepted; an
+ * un-homed HOME fast seek ends at origin - max_travel (here at once -> HOME_NOT_FOUND, no hang) */
+static void jog_held(int32_t v)
+{
+    uint32_t k;
+    h_expect_ok(mu_jog(v, 0u, PROTO_JOG_NO_BOUND));
+    for (k = 0u; k < 40u && motion_active(); k++) {
+        mu_run(100u);
+        if (motion_active()) {
+            h_expect_ok(mu_jog(v, 0u, PROTO_JOG_NO_BOUND));          /* button held: refresh */
+        }
+    }
+    TEST_ASSERT_FALSE(motion_active());
+}
+
+static void test_unhomed_window(void)
+{
+    uint32_t from;
+    int32_t p;
+    fake_world_limits(false, 0, 0);
+    h_set_param(PID_HOME_MAX_TRAVEL_UM, PARAM_T_U32, 1000u);     /* 800 steps */
+    mu_enable();                                                  /* origin latched at 0 */
+    from = fake_cap_n;
+    jog_held(2000);
+    TEST_ASSERT_EQUAL_INT32(800, fake_step_count());
+    TEST_ASSERT_EQUAL_UINT16(MD_SOFT_LIMIT, mu_ev_arg(mu_ev(EV_MOVE_DONE, from)));
+    h_expect_nack(mu_jog(2000, 0u, PROTO_JOG_NO_BOUND), ST_E_RANGE, 0u);   /* toward the bound */
+    h_expect_ok(mu_jog(0, 0u, PROTO_JOG_NO_BOUND));                         /* JOG 0 never refused */
+    /* away, stop in the middle, toward again: the bound is still origin + 800 (not re-latched) */
+    h_expect_ok(mu_jog(-2000, 0u, PROTO_JOG_NO_BOUND));
+    mu_run(200u);
+    h_expect_ok(mu_jog(0, 0u, PROTO_JOG_NO_BOUND));
+    (void)mu_run_until_idle(1000u);
+    p = fake_step_count();
+    TEST_ASSERT_TRUE(p > 0 && p < 800);
+    jog_held(2000);
+    TEST_ASSERT_EQUAL_INT32(800, fake_step_count());
+    /* the other bound: origin - 800 */
+    jog_held(-2000);
+    TEST_ASSERT_EQUAL_INT32(-800, fake_step_count());
+    h_expect_nack(mu_jog(-2000, 0u, PROTO_JOG_NO_BOUND), ST_E_RANGE, 0u);
+    /* DISABLE + ENABLE re-latch the origin at -800: the window is now [-1600, 0] */
+    h_expect_ok(h_cmd(CMD_DISABLE, 0x72u, NULL, 0u));
+    mu_enable();
+    jog_held(-2000);
+    TEST_ASSERT_EQUAL_INT32(-1600, fake_step_count());
+    /* un-homed HOME: the fast seek ends at origin - max_travel = -1600 = here -> NOT_FOUND at once */
+    from = fake_cap_n;
+    home_cmd(0u);
+    mu_run(5u);
+    TEST_ASSERT_FALSE(motion_active());
+    TEST_ASSERT_EQUAL_UINT8(MS_IDLE, g_fw.motion_state);
+    TEST_ASSERT_EQUAL_INT32(-1600, fake_step_count());
+    TEST_ASSERT_EQUAL_UINT16(HF_NOT_FOUND, mu_ev_arg(mu_ev(EV_HOME_FAILED, from)));
+    TEST_ASSERT_EQUAL_UINT16(MD_STOPPED, mu_ev_arg(mu_ev(EV_MOVE_DONE, from)));
+    /* the homing failure re-latched the origin at -1600: -x is allowed again after FAULT_CLEAR */
+    h_expect_ok(h_cmd(CMD_FAULT_CLEAR, 0x73u, NULL, 0u));
+    jog_held(-2000);
+    TEST_ASSERT_EQUAL_INT32(-2400, fake_step_count());
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -174,5 +237,6 @@ int main(void)
     RUN_TEST(test_drift);
     RUN_TEST(test_aborted);
     RUN_TEST(test_load_precheck);
+    RUN_TEST(test_unhomed_window);
     return UNITY_END();
 }

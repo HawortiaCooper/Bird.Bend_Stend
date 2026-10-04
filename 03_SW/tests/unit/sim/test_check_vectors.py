@@ -80,6 +80,13 @@ def test_simboard_frame_path_replay(v: dict) -> None:
     board.step()
     frames = FrameDecoder().feed(pair.pc.read(65536, 0.0))
     resp = [f for f in frames if f.type & 0x80 and f.type < 0xC0]
+    for _ in range(1000):                           # NVM commands answer after the flash stall (MC2-4)
+        if resp:
+            break
+        board.clock.advance(ns=1_000_000)
+        board.step()
+        frames += FrameDecoder().feed(pair.pc.read(65536, 0.0))
+        resp = [f for f in frames if f.type & 0x80 and f.type < 0xC0]
     assert len(resp) == 1, frames
     r = P.split_response(resp[0].type, resp[0].seq, resp[0].payload)
     exp = v["expect"]

@@ -12,6 +12,7 @@
 #include "hal_step.h"
 #include "hal_sys.h"
 #include "irq_prio.h"
+#include "meas_dwt.h"
 #include "resetcause.h"
 
 #define PAINT        0xA5C3A5C3u
@@ -77,6 +78,57 @@ uint16_t hal_stack_free_min(void)
     return (b > 0xFFFFu) ? 0xFFFFu : (uint16_t)b;
 }
 
+#if defined(HW_MEAS_DWT) && HW_MEAS_DWT
+/* HW_MEAS_DWT (OI-FW-37): the token also carries the level (bits 8-10) and the low 20 bits of the
+ * CYCCNT at the start of the masked window (bits 11-30); the window (mask set -> mask restored) is
+ * recorded per level in sections MDWT_CRIT_HALT + level (reentrant: nothing shared between nested
+ * sections). The release / HW_MEAS functions below are unchanged. */
+#define CRIT_T_SHIFT 11u
+#define CRIT_T_MASK  0xFFFFFu
+static inline hal_crit_t crit_tok(uint32_t old, hal_crit_level_t level)
+{
+    return old | ((uint32_t)level << 8) | ((DWT->CYCCNT & CRIT_T_MASK) << CRIT_T_SHIFT);
+}
+
+hal_crit_t hal_crit_enter(hal_crit_level_t level)
+{
+    uint32_t old;
+    switch (level) {
+    case HAL_CRIT_HALT:
+        old = __get_PRIMASK();
+        __disable_irq();
+        return CRIT_PRIMASK | crit_tok(old & 1u, level);
+    case HAL_CRIT_AFE:
+    case HAL_CRIT_MOTION:
+        old = __get_BASEPRI();
+        __set_BASEPRI_MAX(BASEPRI_MOTION);
+        return crit_tok(old, level);
+    case HAL_CRIT_DATA:
+        old = __get_BASEPRI();
+        __set_BASEPRI_MAX(BASEPRI_DATA);
+        return crit_tok(old, level);
+    case HAL_CRIT_TICK:
+    default:
+        old = __get_BASEPRI();
+        __set_BASEPRI_MAX(BASEPRI_TICK);
+        return crit_tok(old, HAL_CRIT_TICK);
+    }
+}
+
+void hal_crit_exit(hal_crit_t saved)
+{
+    uint32_t cyc = (DWT->CYCCNT - (saved >> CRIT_T_SHIFT)) & CRIT_T_MASK;
+    uint32_t sec = MDWT_CRIT_HALT + ((saved >> 8) & 7u);
+    if ((saved & CRIT_PRIMASK) != 0u) {
+        if ((saved & 1u) == 0u) {
+            __enable_irq();
+        }
+    } else {
+        __set_BASEPRI(saved & 0xFFu);
+    }
+    meas_dwt_rec(sec, cyc);
+}
+#else
 hal_crit_t hal_crit_enter(hal_crit_level_t level)
 {
     uint32_t old;
@@ -112,6 +164,8 @@ void hal_crit_exit(hal_crit_t saved)
         __set_BASEPRI(saved);
     }
 }
+
+#endif /* HW_MEAS_DWT */
 
 /* seam v1.3 (D-40 c): no HW_MEAS in this image -> 0 (the core answers DIAG_MEAS NOT_IN_BUILD);
  * meas_f4.c overrides it in the measurement images */

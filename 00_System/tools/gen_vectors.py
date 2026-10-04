@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single generator of the shared protocol vectors (ICD_protocol.md v0.6 §12).
+"""Single generator of the shared protocol vectors (ICD_protocol.md v0.7 §12).
 
 Implements: IF-003, IF-004, IF-006, IF-010, FW-CMD-001, FW-CFG-003, SAF-FW-020
 Writes  00_System/tools/vectors/protocol_vectors.json   (CRC, frames, parser streams)
@@ -566,16 +566,19 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         add(f"{c.lower()}_alarm_moving", f"{c} during a move with ALM active -> OK (never blocked)",
             dict(moving, alm_active=True), c, {"mode": 0} if c == "STOP" else None, srs=("SAF-FW-026",))
     add("move_alarm_unpowered", "ALM active because the driver is unpowered -> DRV_UNPOWERED only",
-        {"alm_active": True, "drv_power": False}, "MOVE_ABS", mv, srs=("D-28",))
+        {"alm_active": True, "drv_power": False, "params": {"drv.pwr_sense_enable": True}}, "MOVE_ABS", mv,
+        srs=("D-28",))
     add("move_alarm_sense_off", "ALM active, sense disabled (power assumed) -> DRIVER_ALARM",
         {"alm_active": True, "drv_power": False, "params": {"drv.pwr_sense_enable": False}},
         "MOVE_ABS", mv, srs=("D-28",))
     add("move_after_drv_power_lost", "driver power lost with the E-stop closed: NOT_ENABLED, "
         "HOMED cleared -> E_STATE NOT_ENABLED | NOT_HOMED | DRV_UNPOWERED (D-29c)",
-        {"motion_state": "NOT_ENABLED", "homed": False, "drv_power": False}, "MOVE_ABS", mv,
+        {"motion_state": "NOT_ENABLED", "homed": False, "drv_power": False, "params": {"drv.pwr_sense_enable": True}},
+        "MOVE_ABS", mv,
         srs=("D-29c", "SAF-FW-005"))
     add("jog_after_drv_power_lost", "JOG after driver power loss -> E_STATE NOT_ENABLED | "
-        "DRV_UNPOWERED (D-29c)", {"motion_state": "NOT_ENABLED", "homed": False, "drv_power": False},
+        "DRV_UNPOWERED (D-29c)", {"motion_state": "NOT_ENABLED", "homed": False, "drv_power": False,
+                                  "params": {"drv.pwr_sense_enable": True}},
         "JOG", jog_nb, srs=("D-29c",))
     add("enable_after_drv_power_return", "power back, axis not homed: ENABLE accepted (settle "
         "follows), motion still needs HOME (D-29c)", {"motion_state": "NOT_ENABLED", "homed": False},
@@ -661,6 +664,22 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
     jog = {"v_um_s": 2000, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}
     add("jog_unhomed_ok", "JOG un-homed at v_unhomed accepted", {"homed": False}, "JOG", jog,
         srs=("FW-MOT-005",))
+    UH = ("FW-MOT-005", "D-43b")
+    uh = {"homed": False, "unhomed_origin_um": 0}
+    add("jog_unhomed_window_inside", "un-homed JOG + inside origin ± home.max_travel_um -> OK", dict(uh, pos_um=359_999),
+        "JOG", jog, srs=UH)
+    add("jog_unhomed_window_reached_toward", "un-homed JOG + with the + bound (origin + 360 mm) reached -> E_RANGE 0 "
+        "until homed (D-43b)", dict(uh, pos_um=360_000), "JOG", jog, srs=UH)
+    add("jog_unhomed_window_reached_away", "... JOG - away from the reached bound -> OK", dict(uh, pos_um=360_000),
+        "JOG", dict(jog, v_um_s=-2000), srs=UH)
+    add("jog_unhomed_window_neg_reached", "un-homed JOG - at origin − 360 mm -> E_RANGE 0", dict(uh, pos_um=-360_000),
+        "JOG", dict(jog, v_um_s=-2000), srs=UH)
+    add("jog_unhomed_window_origin", "the window is measured from the latched origin, not the jog start "
+        "(origin 50 mm, pos 410 mm) -> E_RANGE 0", dict(uh, unhomed_origin_um=50_000, pos_um=410_000), "JOG", jog, srs=UH)
+    add("jog_zero_at_bound", "JOG 0 at the reached bound -> OK (never refused)", dict(uh, pos_um=360_000), "JOG",
+        {"v_um_s": 0, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}, srs=UH)
+    add("jog_homed_ignores_window", "homed: the un-homed window does not apply", {"pos_um": 280_000, "unhomed_origin_um": -200_000},
+        "JOG", jog, srs=UH)
     add("jog_unhomed_fast", "JOG un-homed above v_unhomed -> E_RANGE 0", {"homed": False}, "JOG",
         dict(jog, v_um_s=-2001), srs=S)
     add("jog_before_enable", "JOG after boot -> E_STATE NOT_ENABLED", boot, "JOG", jog,
@@ -1180,8 +1199,12 @@ def make_loadlim(pd: gen_params.Dictionary) -> dict[str, Any]:
          ("s", top - 50_000), ("s", d_hi + 5)], srs=R)
     case("regrow_window_ends_inside", "the window ends with the first sample inside the thresholds; after that the "
          "normal rule applies again", [("s", top), ("clear",), ("s", d_hi - 1_000), ("s", d_hi + 1_000)], srs=R)
-    case("regrow_new_reference", "the next FAULT_CLEAR takes a new reference", [("s", top), ("clear",),
-         ("s", top + 50_000), ("clear",), ("s", top + 50_000 + d_rg), ("s", top + 50_000 + d_rg + 1)], srs=R)
+    case("regrow_clear_without_latch_keeps_reference", "a FAULT_CLEAR while LOAD_LIMIT is not latched (window "
+         "open, no re-trip) keeps the reference (OI-B-M2-03)", [("s", top), ("clear",), ("s", top + 50_000), ("clear",),
+         ("s", top + d_rg), ("s", top + d_rg + 1)], srs=R)
+    case("regrow_new_reference_after_retrip", "a re-trip latches LOAD_LIMIT again; its FAULT_CLEAR takes the new "
+         "reference", [("s", top), ("clear",), ("s", top + d_rg + 1), ("clear",), ("s", top + 2 * d_rg + 1),
+                       ("s", top + 2 * d_rg + 2)], srs=R)
     case("regrow_low_side", "mirror on the negative side", [("s", -top), ("clear",), ("s", -top - d_rg),
          ("s", -top - d_rg - 1)], srs=R)
     case("clear_inside_no_window", "a clear with the last sample inside the thresholds opens no window",

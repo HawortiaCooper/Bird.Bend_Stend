@@ -275,3 +275,80 @@ def test_load_limit_trip_with_spring_specimen(ready):
     after = rises(tw, t_drdy)
     assert not after or after[0] - t_drdy <= 200.0
     assert "LOAD_LIMIT" in status(link)["status"]
+
+
+# ================================================================================ un-homed travel window (D-43 b)
+@pytest.mark.req("FW-MOT-005", "D-43")
+def test_unhomed_window_from_latched_origin(twin):
+    """Un-homed: the window is origin ± home.max_travel_um with the origin latched when the axis became un-homed
+    (boot), not re-latched per jog. A jog reaches the + bound (MOVE_DONE SOFT_LIMIT); JOG + there -> E_RANGE 0;
+    JOG - is accepted; after backing off 1 mm a new JOG + stops at the same bound again."""
+    link = TwinLink(twin)
+    twin.advance_ms(5)
+    needs(link, "MOTION")
+    link.cmd("STREAM_STOP")
+    enable(twin, link)
+    w = 3_000
+    setp(link, "home.max_travel_um", w)
+    v = DEF["motion.v_unhomed_um_s"]
+    origin = status(link)["pos_um"]
+    jog = {"v_um_s": v, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND}
+
+    def hold_jog(fields: dict, ms: float) -> None:                 # dead-man refresh every 150 ms
+        end = twin.now_us + ms * 1000
+        while twin.now_us < end:
+            r = link.cmd("JOG", fields)
+            if r["status"] != "OK" or status(link)["motion_state"] != "JOG":
+                break
+            twin.advance_us(150_000.0)
+        run(twin, link, 200)
+
+    n0 = len(events(link, "MOVE_DONE"))
+    hold_jog(jog, (w / v) * 1000 + 500)
+    done = events(link, "MOVE_DONE")[n0:]
+    assert done and done[-1]["arg"] == rc.MOVE_DONE_REASON.index("SOFT_LIMIT"), done
+    assert abs(status(link)["pos_um"] - (origin + w)) <= 2, status(link)["pos_um"]
+    r = link.cmd("JOG", jog)
+    assert (r["status"], r.get("detail", 0)) == ("E_RANGE", 0), r
+    hold_jog(dict(jog, v_um_s=-v), 500)                            # back off 1 mm (2 mm/s × 0.5 s)
+    assert link.cmd("JOG", {"v_um_s": 0, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND})["status"] == "OK"
+    run(twin, link, 200)
+    hold_jog(jog, 1_500)                                           # same bound, not origin re-latched
+    assert abs(status(link)["pos_um"] - (origin + w)) <= 2, status(link)["pos_um"]
+
+
+# ================================================================================ K1 check gate (SRS OI-18)
+def _reboot_with(tw: Twin, link: TwinLink, values: dict) -> TwinLink:
+    for k, v in values.items():
+        setp(link, k, v)
+    assert link.cmd("SAVE_PARAMS", timeout_ms=3000)["status"] == "OK"
+    assert link.cmd("REBOOT", {"magic": rc.REBOOT_MAGIC})["status"] == "OK"
+    tw.advance_ms(100)
+    link = TwinLink(tw)
+    tw.advance_ms(5)
+    link.cmd("STREAM_STOP")
+    return link
+
+
+@pytest.mark.req("SAF-FW-005", "D-29", "D-41")
+@pytest.mark.parametrize("k1_check", [False, True])
+def test_k1_welded_only_with_k1_check(twin, k1_check):
+    """ICD v0.7 §6.2 (SRS OI-18): with the power sense on and the 48 V staying present while the E-stop is open
+    (no contactor, release-1 wiring): drv.k1_check_enable = 0 -> DRV_PWR reported only, no fault;
+    = 1 -> fault K1_WELDED latched <= drv.k1_weld_ms + 25 ms after the E-stop sense edge."""
+    link = TwinLink(twin)
+    twin.advance_ms(5)
+    needs(link, "DRV_SIGNALS")
+    link.cmd("STREAM_STOP")
+    link = _reboot_with(twin, link, {"drv.pwr_sense_enable": True, "drv.k1_check_enable": k1_check})
+    n0 = len(events(link, "FAULT_SET"))
+    twin.act("estop", open=True, drv_power_follows=False)
+    run(twin, link, DEF["drv.k1_weld_ms"] + 100)
+    st = status(link)
+    assert "ESTOP" in st["flags"] and "DRV_PWR" in st["io"]
+    k1 = [e for e in events(link, "FAULT_SET")[n0:] if e["arg"] == rc.FAULTS.index("K1_WELDED")]
+    if k1_check:
+        assert "K1_WELDED" in st["faults"] and k1
+        assert DEF["drv.k1_weld_ms"] <= k1[0]["value"] <= DEF["drv.k1_weld_ms"] + 25    # ms power stayed present
+    else:
+        assert "K1_WELDED" not in st["faults"] and not k1

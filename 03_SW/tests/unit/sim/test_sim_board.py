@@ -63,6 +63,10 @@ class Client:
         s = self.seq
         self.pair.pc.write(encode_frame(cmd, s, payload))
         self.run(wait)
+        for _ in range(1000):                       # NVM commands answer after the flash stall (MC2-4)
+            if s in self.resp:
+                break
+            self.run(1)
         return self.resp.pop(s)
 
     def ev(self, name: str) -> list[P.EventPayload]:
@@ -153,8 +157,9 @@ def test_nvm_records_power_cut_migration_and_hard_rule(tmp_path) -> None:
     assert not st.sys_flags & pg.SysFlags.CFG_DIRTY and st.nvm_record_seq == 1
     cl.cmd(Cmd.SET_PARAM, P.build_set_param("afe.rate_tol_pct", 31))
     cl.ctl.act("flash", cut_after_word=3)
-    cl.cmd(Cmd.SAVE_PARAMS)                               # power cut during the program → reset
+    cl.pair.pc.write(encode_frame(Cmd.SAVE_PARAMS, 99, b""))   # power cut during the program → reset, no answer
     cl.run(20)
+    assert 99 not in cl.resp
     assert cl.ev("BOOT")[-1].arg == pg.ResetCause.POWER_ON
     entry = P.decode_param_entry(cl.cmd(Cmd.GET_PARAM, struct.pack("<H", 0x0103)).body)
     assert entry.value() == 30                            # previous record still valid
@@ -191,6 +196,8 @@ def test_nvm_records_power_cut_migration_and_hard_rule(tmp_path) -> None:
 @pytest.mark.req("SYS-008", "SAF-FW-023")
 def test_latches_and_events() -> None:
     cl = Client()
+    cl.b.params["drv.pwr_sense_enable"] = True                      # optional sense (CR-03 default off)
+    cl.b.relatch_boot_params()
     cl.cmd(Cmd.STREAM_START)
     cl.ctl.act("estop", open=True)
     cl.run(50)

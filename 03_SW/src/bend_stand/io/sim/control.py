@@ -81,7 +81,8 @@ class SimControl:
         b = self.board
         with b._lock:  # noqa: SLF001
             self._set_with_bounce(lambda v: setattr(b.world, "estop_open", v), bool(open), bounce_ms)
-            if open and drv_power_follows:          # K1 drops the driver supply k1_delay_ms later (R5 Option A)
+            if open and drv_power_follows:          # vocabulary v2: supply drops k1_delay_ms later (no contactor
+                                                    # since D-41; only seen with the optional presence sense)
                 _delayed(b, k1_delay_ms, lambda: setattr(b.world, "drv_power", False))
 
     def _a_drv_power(self, on: bool, bounce_ms: list[float] | None = None) -> None:
@@ -261,8 +262,8 @@ class SimControl:
             if what == "pulses":
                 return {"pul_count": b.pulses, "pos_steps": b.pos_steps}
             if what == "outputs":
-                return {"ena": b.motion_state != "NOT_ENABLED", "rate": int(b.p("afe.rate_sps")) == 1,
-                        "led": False, "trip_relay": False}
+                return {"ena": not b.ena_disabled, "driver_energised": b.driver_energised(),
+                        "rate": int(b.p("afe.rate_sps")) == 1, "led": False, "trip_relay": False}
             if what == "wire_log":
                 return {"frames": [r for r in b.wire_log if since_us is None or r["first_us"] >= since_us]}
             if what == "sent":
@@ -370,6 +371,11 @@ class SimScenario:
         for k, v in self.params.items():
             meta = pgen.BY_KEY[k]
             board.params[k] = meta.enum_value(v) if isinstance(v, str) and meta.enum else v
+        board.relatch_boot_params()
+        if "nvm_stall_ms" in w:
+            board.cfg.nvm_stall_ms.update({str(k): int(v) for k, v in w["nvm_stall_ms"].items()})
+        if "ena_hardwired_cut" in w:
+            bw.ena_hardwired_cut = bool(w["ena_hardwired_cut"])
         for entry in self.schedule:
             e = dict(entry)
             t_ms = float(e.pop("t_ms"))

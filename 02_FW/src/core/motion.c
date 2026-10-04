@@ -60,7 +60,8 @@ typedef struct {
     volatile bool    step_fault;   /* step_isr -> tick */
     /* jog */
     uint32_t jog_ms;
-    int32_t  jog_origin;           /* un-homed: travel bound origin (steps) */
+    int32_t  unhomed_origin;       /* D-43 b: un-homed travel window origin (steps), latched when the
+                                      axis becomes un-homed */
     bool     jog_bounded;
     bool     reversing;            /* decelerating to standstill for a reversal */
     int32_t  rev_v;
@@ -88,6 +89,15 @@ static motion_t M;
 
 /* ------------------------------------------------------------------ helpers */
 static int32_t pos_now(void) { return hal_step_count(); }
+
+/* D-43 b (ICD v0.7 §5.4): every event that clears HOMED (boot, ENABLE, DISABLE / E-stop / idle /
+ * driver power, STEP_FAULT, homing failure) latches the current position as the un-homed origin; a
+ * jog, a stop or a jog restart never re-latches it */
+static void unhome(void)
+{
+    g_fw.homed = false;
+    M.unhomed_origin = pos_now();
+}
 static int32_t um_of(int32_t steps) { return units_steps_to_um(steps, g_fw.p.motion.steps_per_mm); }
 static int32_t steps_of(int32_t um) { return units_um_to_steps(um, g_fw.p.motion.steps_per_mm); }
 
@@ -143,11 +153,14 @@ void motion_init(void)
     }
     apply_step_cfg(true);
     M.isr_count = pos_now();
+    unhome();                                          /* boot: un-homed origin = 0 (D-43 b) */
     g_fw.ena_on = true;                                /* reset level: no LED current = holding (D-13) */
 }
 
 bool motion_active(void) { return M.active; }
 int8_t motion_dir(void) { return (M.active && M.running) ? M.dir : 0; }
+
+int32_t motion_unhomed_origin_um(void) { return um_of(M.unhomed_origin); }
 
 int32_t motion_target_um(void)
 {
@@ -177,6 +190,9 @@ static void settle_deadline(uint32_t now_ms)
 uint16_t motion_enable(uint32_t now_ms)
 {
     if (g_fw.motion_state == (uint8_t)MS_NOT_ENABLED) {
+        if (!g_fw.homed) {
+            unhome();                                  /* ENABLE (after power-up): D-43 b */
+        }
         motion_ena_out(true);
         g_fw.motion_state = (uint8_t)MS_ENABLING;
         settle_deadline(now_ms);
@@ -210,7 +226,7 @@ void motion_disable(uint8_t dd_cause)
     motion_ena_out(false);
     g_fw.motion_state = (uint8_t)MS_NOT_ENABLED;      /* a running motion (already stopped by the
                                                           caller) completes as NOT_ENABLED */
-    g_fw.homed = false;                                /* position not held by the driver (D-11) */
+    unhome();                                          /* position not held by the driver (D-11) */
     M.pend_wait = false;
     if (changed) {
         ev((uint16_t)EV_DRIVER_DISABLED, dd_cause, 0, 0);
@@ -422,7 +438,7 @@ static int32_t jog_end_steps(int8_t dir, int32_t bound_um, bool *bounded)
         return steps_of(dir > 0 ? p->limits.soft_max_um : p->limits.soft_min_um);
     }
     {
-        int64_t e = (int64_t)M.jog_origin + (int64_t)dir * (int64_t)steps_of((int32_t)p->home.max_travel_um);
+        int64_t e = (int64_t)M.unhomed_origin + (int64_t)dir * (int64_t)steps_of((int32_t)p->home.max_travel_um);
         return (e > INT32_MAX) ? INT32_MAX : (e < INT32_MIN ? INT32_MIN : (int32_t)e);
     }
 }
@@ -433,9 +449,6 @@ static void jog_begin(int32_t v_um_s, uint32_t a_um_s2, int32_t bound_um)
     uint32_t v = (uint32_t)((v_um_s > 0) ? v_um_s : -(int64_t)v_um_s);
     bool bounded;
     int32_t end, p = pos_now();
-    if (!g_fw.homed) {
-        M.jog_origin = p;                              /* un-homed bound: from this jog's start point */
-    }
     end = jog_end_steps(dir, bound_um, &bounded);
     M.kind = (uint8_t)MS_JOG;
     M.jog_bounded = bounded;
@@ -512,17 +525,31 @@ void motion_jog(int32_t v_um_s, uint32_t a_um_s2, int32_t bound_um, uint32_t now
     }
 }
 
+static void home_segment_done(int32_t p);
+
+/* homing geometry; un-homed at HOME (D-43 b): the un-homed travel window bounds every segment */
+static void home_geo(home_geo_t *g)
+{
+    const params_home_t *h = &g_fw.p.home;
+    int64_t w = (int64_t)steps_of((int32_t)h->max_travel_um);
+    int64_t lo = (int64_t)M.unhomed_origin - w, hi = (int64_t)M.unhomed_origin + w;
+    g->release_max = steps_of((int32_t)PROTO_HOME_RELEASE_MAX_UM);
+    g->backoff = steps_of((int32_t)h->backoff_um);
+    g->slow_extra = steps_of((int32_t)PROTO_HOME_SLOW_EXTRA_UM);
+    g->max_travel = (int32_t)w;
+    g->bounded = !M.was_homed;
+    g->lo = (lo < INT32_MIN) ? INT32_MIN : (int32_t)lo;
+    g->hi = (hi > INT32_MAX) ? INT32_MAX : (int32_t)hi;
+}
+
 void motion_home(void)
 {
     home_geo_t g;
     home_next_t n;
     int32_t p = pos_now();
     const params_home_t *h = &g_fw.p.home;
-    g.release_max = steps_of((int32_t)PROTO_HOME_RELEASE_MAX_UM);
-    g.backoff = steps_of((int32_t)h->backoff_um);
-    g.slow_extra = steps_of((int32_t)PROTO_HOME_SLOW_EXTRA_UM);
-    g.max_travel = steps_of((int32_t)h->max_travel_um);
     M.was_homed = g_fw.homed;
+    home_geo(&g);
     M.hdrift_um = 0;
     M.kind = (uint8_t)MS_HOMING;
     M.end_md = (uint8_t)MD_TARGET;
@@ -536,7 +563,10 @@ void motion_home(void)
     M.target_um = um_of(n.end_steps);
     M.active = true;
     g_fw.motion_state = (uint8_t)MS_HOMING;
-    (void)seg_start(n.dir, span(p, n.end_steps, n.dir), n.slow ? h->v_slow_um_s : h->v_fast_um_s, h->a_um_s2);
+    if (!seg_start(n.dir, span(p, n.end_steps, n.dir), n.slow ? h->v_slow_um_s : h->v_fast_um_s, h->a_um_s2)) {
+        M.start = p;                                   /* zero-length first segment (at the window */
+        home_segment_done(p);                          /* bound, D-43 b): NOT_FOUND / WIRING at once */
+    }
 }
 
 /* ------------------------------------------------------------------ stops */
@@ -592,7 +622,7 @@ void motion_stop(uint8_t cause, bool controlled, uint8_t md)
         }
         if (M.kind == (uint8_t)MS_HOMING && cause != (uint8_t)SC_HOME_FAIL) {
             ev((uint16_t)EV_HOME_FAILED, (uint16_t)HF_ABORTED, um_of(p), p);   /* no latch of its own */
-            g_fw.homed = false;
+            unhome();
             g_fw.home_phase = (uint8_t)HP_DONE;
         }
         M.ctrl = controlled;
@@ -683,7 +713,7 @@ static void home_fail(uint8_t why, int32_t p)
     (void)latch_fault(&g_fw.lat, &g_fw.evq, bit, um_of(p), p, t);
     CRIT_END();
     ev((uint16_t)EV_HOME_FAILED, why, um_of(p), p);
-    g_fw.homed = false;
+    unhome();
     g_fw.home_phase = (uint8_t)HP_DONE;
     M.stopping = true;
     ev((uint16_t)EV_STOPPED, (uint16_t)SC_HOME_FAIL, um_of(p), p);
@@ -699,10 +729,7 @@ static void home_segment_done(int32_t p)
     home_in_t in;
     home_next_t n;
     const params_home_t *h = &g_fw.p.home;
-    g.release_max = steps_of((int32_t)PROTO_HOME_RELEASE_MAX_UM);
-    g.backoff = steps_of((int32_t)h->backoff_um);
-    g.slow_extra = steps_of((int32_t)PROTO_HOME_SLOW_EXTRA_UM);
-    g.max_travel = steps_of((int32_t)h->max_travel_um);
+    home_geo(&g);
     in.pos = p;
     in.origin = M.horigin;
     in.start_edge = M.hstart_edge;
@@ -781,7 +808,7 @@ static void segment_ended(uint32_t now_ms)
         CRIT_BEGIN(HAL_CRIT_DATA);
         (void)latch_fault(&g_fw.lat, &g_fw.evq, (uint8_t)FAULT_STEP_FAULT_BIT, um_of(p), p, t);
         CRIT_END();
-        g_fw.homed = false;
+        unhome();
         g_fw.pos_uncertain = true;
         motion_stop((uint8_t)SC_STEP_FAULT, false, (uint8_t)MD_STOPPED);
         finish((uint8_t)MD_STOPPED);
@@ -797,7 +824,7 @@ void motion_tick(uint32_t now_ms)
         CRIT_BEGIN(HAL_CRIT_DATA);
         (void)latch_fault(&g_fw.lat, &g_fw.evq, (uint8_t)FAULT_STEP_FAULT_BIT, um_of(p), p, t);
         CRIT_END();
-        g_fw.homed = false;
+        unhome();
         g_fw.pos_uncertain = true;
         motion_stop((uint8_t)SC_STEP_FAULT, false, (uint8_t)MD_STOPPED);
         CRIT_BEGIN(HAL_CRIT_DATA);

@@ -38,6 +38,7 @@ static void test_estop_during_move(void)           /* SAF-FW-005/006 */
     uint32_t from, n;
     int32_t a, b, c, d, e;
     const fake_frame_t *r;
+    mu_boot_sense(false);                         /* the end checks DRV_UNPOWERED */
     moving_homed(10000u);
     from = fake_cap_n;
     fake_input_set(IN_ESTOP, true);               /* HAL: TRUNCATE + ENA disabled at the edge */
@@ -96,7 +97,15 @@ static void test_boot_with_inputs_active(void)     /* SAF-FW-007/018, OI-FW-22 *
     TEST_ASSERT_EQUAL_HEX16(FAULT_LIMIT_WIRING, le_get16(&s.b[12]));
     TEST_ASSERT_EQUAL_HEX16(IO_ESTOP_OPEN | IO_LIMIT_START | IO_LIMIT_END | IO_ENA_DISABLED,
                             le_get16(&s.b[14]) & (IO_ESTOP_OPEN | IO_LIMIT_START | IO_LIMIT_END | IO_ENA_DISABLED));
+    /* DRV_PWR input off at boot with the default (sensing off, ICD v0.7 / D-41): ignored */
+    fake_hal_reset();
+    fake_flash_blank();
+    fake_input_set(IN_PWR, true);
+    app_init();
+    TEST_ASSERT_TRUE(fake_ena_enabled);
+    TEST_ASSERT_EQUAL_HEX16(DS_DRV_PWR, le_get16(&h_status().b[10]) & DS_DRV_PWR);
     /* DRV_PWR off at boot (sense enabled) -> disabled level too */
+    mu_boot_sense(false);
     fake_hal_reset();
     fake_input_set(IN_PWR, true);
     app_init();
@@ -161,6 +170,7 @@ static void test_drv_power_loss_during_jog(void)   /* SAF-FW-024, FW-SW-005 */
     uint32_t from, k, t0;
     int32_t a, b, c, d;
     uint8_t pl[1] = {1u};
+    mu_boot_sense(false);
     mu_enable();
     h_expect_ok(h_cmd(CMD_SET_VALID, 3u, pl, 1u));
     h_expect_ok(mu_jog(1000, 0u, PROTO_JOG_NO_BOUND));
@@ -206,11 +216,12 @@ static void test_drv_power_loss_during_jog(void)   /* SAF-FW-024, FW-SW-005 */
 static void test_estop_then_power_only_driver_power_event(void)   /* OI-ICD-06 */
 {
     uint32_t from;
+    mu_boot_sense(true);
     mu_enable();
     from = fake_cap_n;
     fake_input_set(IN_ESTOP, true);
     mu_run(2u);
-    fake_input_set(IN_PWR, true);                 /* contactor drops 20 ms later */
+    fake_input_set(IN_PWR, true);                 /* (optional) power removal 20 ms later */
     mu_run(30u);
     TEST_ASSERT_EQUAL_UINT32(1u, mu_ev_count(EV_DRIVER_DISABLED, from));   /* only the E-stop's */
     TEST_ASSERT_TRUE(mu_ev(EV_DRIVER_POWER, from) >= 0);
@@ -221,7 +232,9 @@ static void test_k1_welded(void)                   /* SAF-FW-025 */
 {
     uint32_t k;
     int32_t i;
-    uint32_t from = fake_cap_n;
+    uint32_t from;
+    mu_boot_sense(true);                          /* K1 check needs both parameters (SRS OI-18) */
+    from = fake_cap_n;
     fake_input_set(IN_ESTOP, true);               /* power stays present */
     for (k = 0u; k < 150u; k++) {
         fake_run_ms(1u);
@@ -240,9 +253,50 @@ static void test_k1_welded(void)                   /* SAF-FW-025 */
     h_expect_ok(h_cmd(CMD_FAULT_CLEAR, 2u, NULL, 0u));
 }
 
+/* ICD v0.7 / D-41 / SRS OI-18: K1_WELDED only with drv.pwr_sense_enable AND drv.k1_check_enable;
+ * D-42: the hardwired E-stop ENA cut forces the opto to "disabled" independent of the MCU output - the
+ * FW never reads ENA back, so the forced level causes no fault and a release never moves (the axis
+ * is NOT_ENABLED after the E-stop and needs ESTOP_CLEAR + ENABLE) */
+static void test_k1_and_power_optional(void)
+{
+    uint32_t k, from;
+    /* defaults (sense off): PA7 "off" ignored, E-stop held 1 s -> no K1, DRV_PWR reads 1 */
+    from = fake_cap_n;
+    fake_input_set(IN_PWR, true);
+    fake_input_set(IN_ESTOP, true);
+    for (k = 0u; k < 1000u; k++) {
+        fake_run_ms(1u);
+    }
+    TEST_ASSERT_TRUE((g_fw.lat.faults & FAULT_K1_WELDED) == 0u);
+    TEST_ASSERT_EQUAL_HEX16(DS_DRV_PWR, le_get16(&h_status().b[10]) & DS_DRV_PWR);
+    TEST_ASSERT_EQUAL_INT32(-1, mu_ev(EV_DRIVER_POWER, from));
+    TEST_ASSERT_FALSE(fake_ena_enabled);
+    fake_input_set(IN_ESTOP, false);
+    mu_run(110u);
+    h_expect_ok(h_cmd(CMD_ESTOP_CLEAR, 1u, NULL, 0u));
+    TEST_ASSERT_EQUAL_UINT8(MS_NOT_ENABLED, g_fw.motion_state);   /* release never moves / enables */
+    TEST_ASSERT_FALSE(fake_ena_enabled);
+    mu_enable();                                                    /* no DRV_UNPOWERED refusal */
+    TEST_ASSERT_EQUAL_HEX16(0u, g_fw.lat.faults);
+    /* sense on, K1 check off: power present during an E-stop is only reported */
+    mu_boot_sense(false);
+    from = fake_cap_n;
+    fake_input_set(IN_ESTOP, true);
+    for (k = 0u; k < 1000u; k++) {
+        fake_run_ms(1u);
+    }
+    TEST_ASSERT_TRUE((g_fw.lat.faults & FAULT_K1_WELDED) == 0u);
+    TEST_ASSERT_EQUAL_HEX16(DS_DRV_PWR, le_get16(&h_status().b[10]) & DS_DRV_PWR);
+    fake_input_set(IN_PWR, true);
+    mu_run(25u);
+    TEST_ASSERT_TRUE(mu_ev(EV_DRIVER_POWER, from) >= 0);           /* reported */
+    TEST_ASSERT_TRUE((g_fw.lat.faults & FAULT_K1_WELDED) == 0u);
+}
+
 static void test_alm_start_block(void)             /* SAF-FW-026, FW-SW-004 */
 {
     uint32_t from;
+    mu_boot_sense(false);                         /* the end checks DRV_UNPOWERED */
     mu_enable();
     g_fw.homed = true;
     fake_input_set(IN_ALM, true);
@@ -432,6 +486,7 @@ int main(void)
     RUN_TEST(test_drv_power_loss_during_jog);
     RUN_TEST(test_estop_then_power_only_driver_power_event);
     RUN_TEST(test_k1_welded);
+    RUN_TEST(test_k1_and_power_optional);
     RUN_TEST(test_alm_start_block);
     RUN_TEST(test_pause_button);
     RUN_TEST(test_load_limit_trip_and_regrow);

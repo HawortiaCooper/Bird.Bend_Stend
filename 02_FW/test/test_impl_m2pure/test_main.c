@@ -88,7 +88,7 @@ static void test_loadlim_vectors(void)          /* loadlim_vectors.json (ref_loa
         const vec_ll_t *c = &VEC_LOADLIM[k];
         loadlim_t l;
         int32_t last = 0;
-        bool last_sat = false;
+        bool last_sat = false, latched = false;      /* LOAD_LIMIT latch (core side, cmd.c) */
         loadlim_init(&l, c->lo, c->hi, c->trip_samples, c->regrow);
         for (j = 0u; j < c->n; j++) {
             const vec_llstep_t *st = &c->steps[j];
@@ -97,11 +97,15 @@ static void test_loadlim_vectors(void)          /* loadlim_vectors.json (ref_loa
                 bool trip = loadlim_check(&l, st->a, sat);
                 last = st->a;
                 last_sat = sat;
+                latched = latched || trip;
                 if (st->trip >= 0) {
                     TEST_ASSERT_EQUAL_MESSAGE(st->trip != 0, trip, c->name);
                 }
             } else if (st->op == 1u) {
-                loadlim_on_clear(&l, last, last_sat);
+                if (latched) {                       /* OI-B-M2-03: only a clear of LOAD_LIMIT */
+                    loadlim_on_clear(&l, last, last_sat);
+                    latched = false;
+                }
                 TEST_ASSERT_EQUAL_INT32_MESSAGE(st->ref, l.ref, c->name);
             } else {
                 loadlim_config(&l, st->a, st->b, st->trip_samples, st->regrow);
@@ -119,7 +123,7 @@ static void test_drvmon_filter_and_k1(void)
     drvmon_t m;
     drvmon_ev_t e;
     uint32_t i;
-    drvmon_init(&m, true, true, false);
+    drvmon_init(&m, true, true, true, false);
     for (i = 0u; i < 19u; i++) {                                        /* 19 ms toggle: ignored */
         e = drvmon_sample(&m, false, false, false, 200u, 20u);
         TEST_ASSERT_FALSE(e.pwr_changed);
@@ -132,7 +136,7 @@ static void test_drvmon_filter_and_k1(void)
     }
     TEST_ASSERT_FALSE(drvmon_power(&m));
     /* K1 weld: E-stop open with power held on (k1 = 200): no fault at 150 ms, fault at 201 */
-    drvmon_init(&m, true, true, false);
+    drvmon_init(&m, true, true, true, false);
     for (i = 1u; i <= 201u; i++) {
         e = drvmon_sample(&m, true, true, false, 200u, 20u);
         TEST_ASSERT_EQUAL(i == 201u, e.k1_fault);
@@ -143,13 +147,26 @@ static void test_drvmon_filter_and_k1(void)
     e = drvmon_sample(&m, true, true, false, 200u, 20u);
     TEST_ASSERT_FALSE(e.k1_fault);                                      /* once per episode */
     /* normal case: power drops 60 ms after the E-stop -> no fault */
-    drvmon_init(&m, true, true, false);
+    drvmon_init(&m, true, true, true, false);
     for (i = 1u; i <= 300u; i++) {
         e = drvmon_sample(&m, i < 60u, true, false, 200u, 20u);
         TEST_ASSERT_FALSE(e.k1_fault);
     }
-    /* sensing disabled: power always present, never K1 */
-    drvmon_init(&m, false, false, false);
+    /* SRS OI-18 / ICD v0.7: sensing on, drv.k1_check_enable off -> power during an E-stop is only
+     * reported (no fault, no FAULT_CLEAR cause), the power filter still works */
+    drvmon_init(&m, true, false, true, false);
+    for (i = 1u; i <= 1000u; i++) {
+        e = drvmon_sample(&m, true, true, false, 200u, 20u);
+        TEST_ASSERT_FALSE(e.k1_fault);
+    }
+    TEST_ASSERT_FALSE(drvmon_k1_cause(&m, true));
+    TEST_ASSERT_TRUE(drvmon_power(&m));
+    for (i = 1u; i <= 20u; i++) {
+        e = drvmon_sample(&m, false, true, false, 200u, 20u);
+        TEST_ASSERT_EQUAL(i == 20u, e.pwr_lost);
+    }
+    /* sensing disabled: power always present, never K1 (k1_check alone has no effect) */
+    drvmon_init(&m, false, true, false, false);
     for (i = 0u; i < 300u; i++) {
         e = drvmon_sample(&m, false, true, false, 100u, 20u);
         TEST_ASSERT_FALSE(e.k1_fault || e.pwr_changed);
@@ -161,7 +178,7 @@ static void test_alm_filter_chatter(void)       /* OBS-P1-10: chatter -> <= 1 pa
 {
     drvmon_t m;
     uint32_t i, changes = 0u;
-    drvmon_init(&m, true, true, false);
+    drvmon_init(&m, true, true, true, false);
     for (i = 0u; i < 1000u; i++) {                                      /* 1 kHz sampled 50 % chatter */
         drvmon_ev_t e = drvmon_sample(&m, true, false, (i & 1u) != 0u, 200u, 20u);
         changes += e.alm_changed ? 1u : 0u;

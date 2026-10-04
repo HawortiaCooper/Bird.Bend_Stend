@@ -50,14 +50,14 @@ sys.path.insert(0, TOOLS)
 import gen_params  # noqa: E402
 import ref_codec as rc  # noqa: E402
 
-STATE_SCHEMA = 2          # ICD v0.5 keeps schema 2: the stop_btn_* keys stay (F-B-25) but are never set (D-36)
+STATE_SCHEMA = 3          # ICD v0.7: + unhomed_origin_um (D-43 b); the stop_btn_* keys stay (F-B-25) but are never set (D-36)
 ACCEPTED_SCHEMAS = (2, 3)
 RETIRED_KEYS = ("stop_btn_active", "stop_btn_released_ms")
 STATE_KEYS = ["params", "motion_state", "enabling_left_ms", "homed", "pos_um", "estop_latched",
               "estop_input_open", "estop_closed_ms", "halt_latched", "stop_btn_active",
               "stop_btn_released_ms", "faults", "fault_causes", "limit_start", "limit_end",
               "afe_stale", "afe_saturated", "raw", "drv_power", "alm_active", "nvm_record_valid",
-              "paused"]
+              "paused", "unhomed_origin_um"]          # unhomed_origin_um: state_schema 3 (D-43 b)
 
 
 def fail(msg):
@@ -405,6 +405,7 @@ def gen_check(v, dic):
            "    bool halt_latched;",
            "    uint16_t faults, fault_causes; bool limit_start, limit_end, afe_stale, afe_saturated;",
            "    int32_t raw; bool drv_power, alm_active, nvm_record_valid, paused, hw_meas;",
+           "    int32_t unhomed_origin_um;",
            "    uint8_t n_par; const vec_pov_t *par;",
            "    uint8_t type; uint8_t seq; const uint8_t *payload; uint16_t len;",
            "    const uint8_t *req_frame; uint16_t req_frame_len;",
@@ -443,7 +444,7 @@ def gen_check(v, dic):
                 f"{cbool(st['limit_start'])}, {cbool(st['limit_end'])}, {cbool(st['afe_stale'])}, "
                 f"{cbool(st['afe_saturated'])}, {i32(st['raw'])}, {cbool(st['drv_power'])}, "
                 f"{cbool(st['alm_active'])}, {cbool(st['nvm_record_valid'])}, {cbool(st['paused'])}, "
-                f"{cbool(hw_meas)}, "
+                f"{cbool(hw_meas)}, {i32(st.get('unhomed_origin_um', 0))}, "
                 f"{len(pars)}u, {('VCP_' + tag) if pars else '0'}, {typ}u, {rq['seq']}u, VCQ_{tag}, "
                 f"{len(pl)}u, VCF_{tag}, {len(bytes.fromhex(rq['frame_hex']))}u, {rc.STATUS[e['status']]}u, "
                 f"{e['detail']}u, VCR_{tag}, {len(resp)}u, {-1 if pa is None else int(bool(pa))} }},")

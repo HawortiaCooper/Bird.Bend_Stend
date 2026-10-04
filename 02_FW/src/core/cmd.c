@@ -43,6 +43,7 @@ void fw_cmd_ctx(cmd_ctx_t *c)
     c->nvm_record_valid = g_fw.nvm_record_valid;
     c->paused = g_fw.lat.paused;
     c->hw_meas = g_fw.hw_meas;
+    c->unhomed_origin_um = motion_unhomed_origin_um();
 }
 
 static void ok_empty(uint8_t type, uint8_t seq)

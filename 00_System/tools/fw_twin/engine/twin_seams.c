@@ -192,6 +192,9 @@ void twin_step_event(void)
     T.wsteps += ((T.dir_level > 0) != T.dir_wiring_inv) ? 1 : -1;
     T.last_pul_end = T.now;
     tw_step_counted();
+    if (!T.step_running) return;                          /* OI-FW-35: a HAL fixed reaction (limit edge at this
+                                                             step) halted the timer: no update ISR afterwards,
+                                                             like the target (TIM2 stopped, UIF not raised) */
     if (T.step_stop_after || T.step_last) { step_halt(); return; }
     uint32_t next = T.period_pre ? T.period_pre : T.period_cur;
     T.period_pre = 0;

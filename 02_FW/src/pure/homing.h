@@ -13,6 +13,9 @@
  *               the EXTI callback) -> zero set so that the edge lies at -offset, drift check ->
  *               MOVE_TO_ZERO; END edge -> HOME_WIRING; planned end -> HOME_NOT_FOUND.
  *  MOVE_TO_ZERO to 0 at v_fast -> DONE.
+ * Un-homed (D-43 b, ICD v0.7 §5.4): every segment end before MOVE_TO_ZERO is clamped into the un-homed
+ * travel window [lo, hi] = origin -/+ max_travel and the FAST_SEEK ends at lo (no START edge there ->
+ * HOME_NOT_FOUND; a RELEASE / BACKOFF clamped at hi with START still active -> HOME_WIRING).
  * Any other stop (stop sources, latches, PC STOP) is handled by the core as HOME_FAILED ABORTED.
  * Implements: FW-HOM-001, FW-HOM-002, FW-HOM-004 (drift)
  */
@@ -31,6 +34,8 @@ typedef struct {
     int32_t backoff;          /* steps: home.backoff_um */
     int32_t slow_extra;       /* steps: PROTO_HOME_SLOW_EXTRA_UM */
     int32_t max_travel;       /* steps: home.max_travel_um */
+    bool    bounded;          /* D-43 b: axis un-homed at HOME -> window [lo, hi] applies */
+    int32_t lo, hi;           /* steps: un-homed origin -/+ max_travel */
 } home_geo_t;
 
 #define HOME_ACT_SEGMENT 0u   /* run the segment {dir, end_steps, slow} in `phase` */
@@ -60,8 +65,16 @@ typedef struct {
 home_next_t home_begin(bool start_active, int32_t pos, const home_geo_t *g);
 /** The segment of `phase` ended (timer stopped, no external stop source). */
 home_next_t home_segment_end(uint8_t phase, const home_in_t *in, const home_geo_t *g);
+/** Segment end clamped into the un-homed window (D-43 b; unchanged when !g->bounded). */
+static inline int32_t home_clamp(int32_t e, const home_geo_t *g)
+{
+    if (!g->bounded) {
+        return e;
+    }
+    return (e < g->lo) ? g->lo : ((e > g->hi) ? g->hi : e);
+}
 /** RELEASE / BACKOFF: START released stably at pos -> new end point. */
-static inline int32_t home_release_end(int32_t pos, const home_geo_t *g) { return pos + g->backoff; }
+static inline int32_t home_release_end(int32_t pos, const home_geo_t *g) { return home_clamp(pos + g->backoff, g); }
 
 typedef struct {
     int32_t new_count;        /* hal_step_set_count() value at step count `pos` */

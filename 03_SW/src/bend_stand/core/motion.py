@@ -366,11 +366,26 @@ class MotionController:
         ms = st.motion
         if act.kind == "MOVE":
             executed = ms in ("MOVE_ABS", "STOPPING") and st.target_um == act.target_um
+            if not executed and ms == "IDLE" and act.target_um is not None and st.pos_um == act.target_um:
+                # a short move that already ended while its response and its MOVE_DONE were lost (SWD-M2-03)
+                md = MoveDone("TARGET", st.pos_um / 1000.0, st.pos_steps, st.t_us, None)
+                self._done_ns, self._done_pos_mm = self._be.clock.monotonic_ns(), md.pos_mm
+                self._be.events.publish("motion.done", md)
+                self._finish_active(act, MoveOutcome("DONE", md, text="MOVE_DONE not received; position = target "
+                                                                       "by GET_STATUS"), drop_pending=False)
+                self._send_pending_after(act)
+                return
         else:
             executed = ms in ("HOMING", "STOPPING") or st.home_phase not in (int(pg.HomePhase.NONE),
                                                                               int(pg.HomePhase.DONE))
         if not executed:
             self._finish_active(act, MoveOutcome("NOT_EXECUTED", text="not executed (no automatic re-send)"))
+
+    def _send_pending_after(self, act: _Active) -> None:
+        with self._lock:
+            pend, self._pending = self._pending, None
+        if pend is not None:
+            self._send_move(pend.target_mm, pend.v_um_s, pend.a_um_s2, pend.ticket)
 
     # ================================================================================ FW events
     def on_fw_event(self, ev: P.EventPayload) -> None:
@@ -606,7 +621,12 @@ class MotionController:
             if self._jog is jog:
                 self._jog = None
         if isinstance(exc, NackError):
-            self._be.events.log(f"jog ended: {exc.detail_text}", logging.INFO)
+            if exc.name == "E_RANGE" and exc.detail == 0 and not self._dev.last_flags & DF.HOMED:
+                # D-43 b: un-homed travel window (origin ± home.max_travel_um) reached in this direction
+                self._be.events.log("jog ended: un-homed travel window reached — home the axis (only motion back "
+                                    "into the window is accepted)", logging.INFO)
+            else:
+                self._be.events.log(f"jog ended: {exc.detail_text}", logging.INFO)
 
     def tick(self, now: int) -> None:
         """Supervisor tick (5 ms; lockstep: every step): jog refresh, PAUSED edge from DATA / STATUS."""

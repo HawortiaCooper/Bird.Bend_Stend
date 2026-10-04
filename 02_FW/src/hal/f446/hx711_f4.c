@@ -20,6 +20,7 @@
 #include "hal_step.h"
 #include "hx711_math.h"
 #include "irq_prio.h"
+#include "meas_dwt.h"
 #include "proto_gen.h"
 
 #define L_DOUT (1u << PIN_DOUT_BIT)
@@ -130,6 +131,7 @@ void EXTI4_IRQHandler(void)
     afe_sample_t s;
     uint32_t raw24;
     bool high = false;
+    MDWT_T0(t0);
     s.t_us = TIM5->CNT;                              /* FIRST: data-ready time (FW-TIM-001) */
     s.pos_steps = hal_step_count();                  /* and the commanded position (FW-AFE-005) */
     EXTI->PR = L_DOUT;
@@ -138,7 +140,12 @@ void EXTI4_IRQHandler(void)
     }
     EXTI->IMR &= ~L_DOUT;                            /* DOUT toggles with the data during the read */
     s_max_hi = 0u;
-    raw24 = hx711_shift_in(s_pulses, &high);
+    {
+        MDWT_T0(t_rd);
+        raw24 = hx711_shift_in(s_pulses, &high);
+        MDWT_END(MDWT_HX_READ, t_rd);
+        MDWT_VAL(MDWT_HX_SCK_HIGH, s_max_hi);
+    }
     EXTI->PR = L_DOUT;
     EXTI->IMR |= L_DOUT;
     s.raw = hx711_sign_extend(raw24);
@@ -151,5 +158,6 @@ void EXTI4_IRQHandler(void)
         s.status |= (uint8_t)AFES_MISSED_EDGE;
     }
     on_afe_sample(&s);
+    MDWT_END(MDWT_ISR_HX711, t0);
 }
 #endif

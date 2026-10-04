@@ -13,6 +13,7 @@
 #include "hal_sys.h"
 #include "hal_uart.h"
 #include "irq_prio.h"
+#include "meas_dwt.h"
 #include "stm32_def.h"
 #include "txsched.h"
 
@@ -131,22 +132,26 @@ uint32_t hal_uart_rx_overruns(void) { return s_ovr; }
 void DMA1_Stream5_IRQHandler(void)
 {
     uint32_t hisr = DMA1->HISR;
+    MDWT_T0(t0);
     if ((hisr & DMA_HISR_TCIF5) != 0u) {
         DMA1->HIFCR = DMA_HIFCR_CTCIF5;
         s_laps++;
     }
     DMA1->HIFCR = hisr & (DMA_HISR_TEIF5 | DMA_HISR_FEIF5 | DMA_HISR_DMEIF5 | DMA_HISR_HTIF5);
+    MDWT_END(MDWT_ISR_DMA_RX, t0);
 }
 
 void USART2_IRQHandler(void)
 {
     uint32_t sr = USART2->SR;
+    MDWT_T0(t0);
     if ((sr & (USART_SR_ORE | USART_SR_FE | USART_SR_NE)) != 0u) {
         (void)USART2->DR;                                /* SR then DR read clears the flags */
         if ((sr & USART_SR_ORE) != 0u) {
             s_ovr++;
         }
     }
+    MDWT_END(MDWT_ISR_UART, t0);
 }
 
 /* ---------------- TX ---------------- */
@@ -207,6 +212,7 @@ bool hal_uart_tx_idle(void)
 void DMA1_Stream6_IRQHandler(void)
 {
     uint32_t hisr = DMA1->HISR;
+    MDWT_T0(t0);
     DMA1->HIFCR = hisr & (DMA_HISR_TCIF6 | DMA_HISR_TEIF6 | DMA_HISR_FEIF6 | DMA_HISR_DMEIF6 | DMA_HISR_HTIF6);
     if ((hisr & (DMA_HISR_TCIF6 | DMA_HISR_TEIF6)) != 0u) {
         CRIT_BEGIN(HAL_CRIT_DATA);
@@ -214,4 +220,5 @@ void DMA1_Stream6_IRQHandler(void)
         kick_locked();                                   /* next frame: DATA > RESP > EVENT */
         CRIT_END();
     }
+    MDWT_END(MDWT_ISR_DMA_TX, t0);
 }

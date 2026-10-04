@@ -32,18 +32,19 @@ R, C, W = Severity.REFUSE, Severity.CONFIRM, Severity.WARN
 DF, DS, IO = INT_DF, INT_DS, INT_IO       # plain ints (fast)
 
 CLEAR_HINTS: Mapping[str, str] = MappingProxyType({
-    "ESTOP": "release the red E-stop button, press RESET (K1), wait ≥ io.estop_release_ms, Clear E-stop, then "
-             "Enable and Home",
+    "ESTOP": "release the red E-stop button, wait ≥ io.estop_release_ms, Clear E-stop, then Enable and Home "
+             "(the position is lost: re-home)",
     "HALT": "Clear stop",                       # HALT comes from GUI STOP / Pause/Break only (D-36, GF-19)
     "PAUSED": "motion blocked — Resume (clears PAUSE) or Clear stop",
     "FAULT": "Fault clear when the cause is gone",
     "LOAD_LIMIT": "Fault clear, then move to reduce the load — re-trips if the load grows",
-    "K1_WELDED": "contactor K1 did not drop: switch off the driver supply, have K1 checked; Fault clear when "
-                 "the E-stop sense and driver power agree again",
-    "DRV_PWR": "restore driver power (E-stop released, RESET on K1), then Enable and Home",
-    "DRV_UNPOWERED": "restore driver power (E-stop released, RESET on K1), then Enable and Home",
-    "DRIVER_ALARM": "driver alarm: new motion blocked — power-cycle the driver (E-stop + RESET), then Enable and "
-                    "Home",
+    "K1_WELDED": "optional 48 V presence sense: driver supply still present with the E-stop open — check the "
+                 "supply wiring; Fault clear when the E-stop is closed or the supply is off",
+    "DRV_PWR": "driver supply absent (optional 48 V presence sense): restore the 48 V supply, then Enable and "
+               "Home",
+    "DRV_UNPOWERED": "driver supply absent (optional 48 V presence sense): restore the 48 V supply, then Enable and "
+                     "Home",
+    "DRIVER_ALARM": "driver alarm: new motion blocked — power-cycle the driver supply, then Enable and Home",
     "HOME_DRIFT": "home switch moved: check the switch, Fault clear",
     "LINK_WDG": "clears with the next command frame",
     "NOT_ENABLED": "Enable the driver",
@@ -172,7 +173,7 @@ def g_estop_clear(s: GateSnapshot) -> GateResult:
     elif s.io & IO.ESTOP_OPEN:
         items.append(GateItem("ESTOP", R, "E-stop input still open", CLEAR_HINTS["ESTOP"]))
     else:
-        items.append(GateItem(GateCode.CAUSE_ACTIVE, C, "button released and K1 reset; the driver stays disabled: "
+        items.append(GateItem(GateCode.CAUSE_ACTIVE, C, "E-stop button released; the driver stays disabled: "
                                                         "Enable and re-home"))
     return GateResult(tuple(items))
 

@@ -37,13 +37,14 @@ static home_next_t fail(uint8_t phase, uint8_t why)
 
 static home_next_t fast_seek(int32_t pos, const home_geo_t *g)
 {
-    return seg((uint8_t)HP_FAST_SEEK, -1, sat_add(pos, -(int64_t)g->max_travel), false);
+    /* un-homed: to the window bound origin - max_travel (D-43 b); homed: max_travel from here */
+    return seg((uint8_t)HP_FAST_SEEK, -1, g->bounded ? g->lo : sat_add(pos, -(int64_t)g->max_travel), false);
 }
 
 home_next_t home_begin(bool start_active, int32_t pos, const home_geo_t *g)
 {
     if (start_active) {
-        return seg((uint8_t)HP_RELEASE, 1, sat_add(pos, g->release_max), true);
+        return seg((uint8_t)HP_RELEASE, 1, home_clamp(sat_add(pos, g->release_max), g), true);
     }
     return fast_seek(pos, g);
 }
@@ -61,16 +62,16 @@ home_next_t home_segment_end(uint8_t phase, const home_in_t *in, const home_geo_
                 return fast_seek(in->pos, g);
             }
             return seg((uint8_t)HP_SLOW_APPROACH, -1,
-                       sat_add(in->pos, -((int64_t)g->backoff + (int64_t)g->slow_extra)), true);
+                       home_clamp(sat_add(in->pos, -((int64_t)g->backoff + (int64_t)g->slow_extra)), g), true);
         }
         if (in->start_edge && !in->planned_end) {
             /* stopped by a bounce edge of the switch being left: continue to the same end point */
-            return seg(phase, 1, sat_add(in->origin, g->release_max), true);
+            return seg(phase, 1, home_clamp(sat_add(in->origin, g->release_max), g), true);
         }
         return fail(phase, (uint8_t)HF_WIRING);            /* stuck switch or inverted DIR */
     case HP_FAST_SEEK:
         if (in->start_edge) {
-            return seg((uint8_t)HP_BACKOFF, 1, sat_add(in->pos, g->release_max), true);
+            return seg((uint8_t)HP_BACKOFF, 1, home_clamp(sat_add(in->pos, g->release_max), g), true);
         }
         return fail(phase, (uint8_t)HF_NOT_FOUND);
     case HP_SLOW_APPROACH: {

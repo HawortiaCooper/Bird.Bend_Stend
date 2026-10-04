@@ -20,6 +20,7 @@
 #include "hal_step.h"
 #include "hal_time.h"
 #include "irq_prio.h"
+#include "meas_dwt.h"
 #include "params_gen.h"
 
 #define RAMFUNC __attribute__((section(".RamFunc"), noinline, long_call))
@@ -121,6 +122,7 @@ RAMFUNC static void callback(uint8_t id, bool level)
 RAMFUNC void EXTI15_10_IRQHandler(void)
 {
     bool open;
+    MDWT_T0(t0);
     if ((EXTI->PR & L_ESTOP) == 0u) {
         return;
     }
@@ -131,6 +133,7 @@ RAMFUNC void EXTI15_10_IRQHandler(void)
         hal_ena_set(false);                          /* (SAF-FW-005 b) */
     }
     callback(0u, open);
+    MDWT_END(MDWT_ISR_ESTOP, t0);
 }
 
 RAMFUNC static void limit_line(uint32_t m, uint8_t id, GPIO_TypeDef *g, uint32_t b)
@@ -147,21 +150,26 @@ RAMFUNC static void limit_line(uint32_t m, uint8_t id, GPIO_TypeDef *g, uint32_t
 
 RAMFUNC void EXTI0_IRQHandler(void)
 {
+    MDWT_T0(t0);
     if ((EXTI->PR & L_START) != 0u) {
         limit_line(L_START, 1u, PIN_START_PORT, PIN_START_BIT);
     }
+    MDWT_END(MDWT_ISR_LIM_START, t0);
 }
 
 RAMFUNC void EXTI1_IRQHandler(void)
 {
+    MDWT_T0(t0);
     if ((EXTI->PR & L_END) != 0u) {
         limit_line(L_END, 2u, PIN_END_PORT, PIN_END_BIT);
     }
+    MDWT_END(MDWT_ISR_LIM_END, t0);
 }
 
 RAMFUNC void EXTI9_5_IRQHandler(void)
 {
     bool lvl, active;
+    MDWT_T0(t0);
     if ((EXTI->PR & L_PAUSE) == 0u || (EXTI->IMR & L_PAUSE) == 0u) {
         return;                                      /* only our own, enabled line */
     }
@@ -172,4 +180,5 @@ RAMFUNC void EXTI9_5_IRQHandler(void)
         EXTI->IMR &= ~L_PAUSE;
     }
     callback(4u, lvl);
+    MDWT_END(MDWT_ISR_PAUSE, t0);
 }

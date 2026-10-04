@@ -287,9 +287,19 @@ class Twin:
             self._handle(line)
             line = self.eng.readline()
 
-    def _restart(self, cause_name: str, t: int) -> None:
+    def _restart(self, cause_name: str, t: int, external: bool = False) -> None:
         """MCU reset at virtual t: frames in flight are cut, RX in flight is lost, flash is kept."""
         self.resets.append({"t_us": t / 1000, "cause": cause_name})
+        if external and self.eng and self.eng.p.poll() is None:
+            # externally requested reset (reset action / iwdg / power): the engine is still running, so take what
+            # survives an MCU reset from it — world x (the axis does not move) and DIAG_MEAS .noinit (REQ-C-M2-12)
+            y = self._engine_query()
+            if "x_um_true" in y:
+                self.world_x_um = float(y["x_um_true"])
+            if "noinit" in y:
+                self.noinit = y["noinit"]
+        if cause_name == "power":
+            self.noinit = "0:0:0"                    # .noinit RAM does not survive a power cycle
         if self.eng:
             self.eng.close()
         cut = deque()
@@ -886,7 +896,7 @@ class Twin:
             cause = "software"
         if cause not in RESET_CAUSE_OF:
             raise ValueError(f"cause {cause}")
-        self._restart(cause, self.now)
+        self._restart(cause, self.now, external=True)
         if self.eng:
             self.eng.flush()
 

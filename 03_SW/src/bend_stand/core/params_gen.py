@@ -1,8 +1,8 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/params.yaml (dict_version 4, schema 1)
+Source : 00_System/specs/params.yaml (dict_version 5, schema 1)
 Tool   : 00_System/tools/gen_params.py
-Hash   : PARAM_DICT_HASH = 0xFCC54C90
+Hash   : PARAM_DICT_HASH = 0xB7B0263F
 
 Parameter metadata for the GUI (typed config fields) and the protocol codec.
 f32 min/max/default are stored already rounded to binary32, so read-back values
@@ -19,10 +19,10 @@ from dataclasses import dataclass
 from enum import IntEnum
 from types import MappingProxyType
 
-PARAM_DICT_HASH = 0xFCC54C90
-PARAM_DICT_VERSION = 4
+PARAM_DICT_HASH = 0xB7B0263F
+PARAM_DICT_VERSION = 5
 PARAM_SCHEMA_VERSION = 1
-PARAM_COUNT = 47
+PARAM_COUNT = 48
 
 
 class ParamType(IntEnum):
@@ -373,7 +373,7 @@ PARAMS: tuple[ParamMeta, ...] = (
     ParamMeta(
         id=0x0407, key='home.max_travel_um', type=ParamType.U32, unit='um',
         min=1000, max=500000, default=360000,
-        description='No switch within this travel -> HOME_NOT_FOUND. Also bounds un-homed JOG travel from its start point.',
+        description='No switch within this travel -> HOME_NOT_FOUND. Also bounds un-homed JOG / HOME travel to the un-homed origin ± this value (D-43 b: origin latched when the axis became un-homed; a JOG toward a reached bound -> E_RANGE until homed).',
         enum=None,
         group='home', group_label='Homing / zeroing', label='Homing max travel', name='max_travel_um',
         moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
@@ -525,8 +525,8 @@ PARAMS: tuple[ParamMeta, ...] = (
         srs=('FW-SW-004', 'R5 §8')),
     ParamMeta(
         id=0x0704, key='drv.pwr_sense_enable', type=ParamType.BOOL, unit='',
-        min=0, max=1, default=True,
-        description='true = the DRV_POWER input (PA7, E-stop contactor aux contact, closed = powered, fixed fail-safe polarity, D-28) is evaluated: power off -> immediate stop, not enabled, not homed, motion refused (E_STATE DRV_UNPOWERED); after power returns ENABLE waits motion.ena_settle_ms; E-stop sense open while power stays on for drv.k1_weld_ms -> fault K1_WELDED (D-29c). false = bring-up without the contactor wiring only: the input is ignored, status DRV_PWR reads 1 (power assumed present) and K1_WELDED is never detected.',
+        min=0, max=1, default=False,
+        description='OPTIONAL since CR-03 / D-41 (no power-removal device in release 1; default false): true = the DRV_POWER input (PA7, optional 48 V presence sense, closed = powered, fixed fail-safe polarity, D-28) is evaluated: power off -> immediate stop, not enabled, not homed, motion refused (E_STATE DRV_UNPOWERED); after power returns ENABLE waits motion.ena_settle_ms; the K1_WELDED check additionally needs drv.k1_check_enable (SRS OI-18). false (default): the input is ignored, status DRV_PWR reads 1 (power assumed present) and K1_WELDED is never detected.',
         enum=None,
         group='drv', group_label='Driver signals (ALM / PEND / power)', label='Driver power sense', name='pwr_sense_enable',
         moving_ok=False, nvm=True, reboot_required=True, decimals=None, advanced=False,
@@ -535,12 +535,21 @@ PARAMS: tuple[ParamMeta, ...] = (
     ParamMeta(
         id=0x0705, key='drv.k1_weld_ms', type=ParamType.U16, unit='ms',
         min=100, max=2000, default=200,
-        description='With drv.pwr_sense_enable, the E-stop sense input open while the DRV_POWER input still reports power continuously for longer than this time latches fault K1_WELDED (contactor K1 welded or aux contact miswired; D-29c, R5 §1.5). Must exceed the contactor drop-out time incl. the aux-contact delay. Minimum 100 ms (DILM7-class drop-out plus margin).',
+        description="With drv.pwr_sense_enable and drv.k1_check_enable, the E-stop sense input open while the DRV_POWER input still reports power continuously for longer than this time latches fault K1_WELDED (power-removal device stuck closed or its feedback miswired; D-29c, R5 §1.5). Must exceed the device's opening time incl. the feedback delay. Minimum 100 ms (DILM7-class drop-out plus margin).",
         enum=None,
         group='drv', group_label='Driver signals (ALM / PEND / power)', label='K1 weld detection time', name='k1_weld_ms',
         moving_ok=False, nvm=True, reboot_required=False, decimals=None, advanced=False,
         enum_labels=None,
         srs=('SAF-FW-005', 'D-29', 'R5 §1.5')),
+    ParamMeta(
+        id=0x0706, key='drv.k1_check_enable', type=ParamType.BOOL, unit='',
+        min=0, max=1, default=False,
+        description='SRS OI-18 (CR-03 / D-41): true = the K1_WELDED check runs (E-stop sense open while DRV_POWER stays present > drv.k1_weld_ms -> fault K1_WELDED); only effective together with drv.pwr_sense_enable, and only meaningful with a power-removal device whose feedback contact feeds DRV_POWER. false (default, release 1 has no such device): DRV_POWER present during an E-stop is only reported (status DRV_PWR, EVENT DRIVER_POWER), never a fault — otherwise a plain 48 V presence sense would latch K1_WELDED on every E-stop.',
+        enum=None,
+        group='drv', group_label='Driver signals (ALM / PEND / power)', label='K1 weld check', name='k1_check_enable',
+        moving_ok=False, nvm=True, reboot_required=True, decimals=None, advanced=False,
+        enum_labels=None,
+        srs=('SAF-FW-005', 'D-29', 'D-41', 'CR-03')),
     ParamMeta(
         id=0x0801, key='stream.fallback_hz', type=ParamType.U8, unit='Hz',
         min=1, max=80, default=10,
@@ -570,7 +579,7 @@ GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ('io', 'Inputs (switches / buttons)',
      ('io.release_ms', 'io.estop_release_ms', 'io.pause_active_level')),
     ('drv', 'Driver signals (ALM / PEND / power)',
-     ('drv.alm_active_level', 'drv.pend_active_level', 'drv.pend_timeout_ms', 'drv.pwr_sense_enable', 'drv.k1_weld_ms')),
+     ('drv.alm_active_level', 'drv.pend_active_level', 'drv.pend_timeout_ms', 'drv.pwr_sense_enable', 'drv.k1_weld_ms', 'drv.k1_check_enable')),
     ('stream', 'Data stream',
      ('stream.fallback_hz',)),
 )

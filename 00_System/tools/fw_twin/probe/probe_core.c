@@ -270,7 +270,8 @@ static void dispatch(uint8_t type, uint8_t seq, const uint8_t *pl, uint16_t len)
             uint32_t raw; uint8_t st = param_validate_set(m, pl[2], pl + 3, &raw);
             if (st != PARAM_ST_OK) { nack(type, seq, st, m->id); break; }
             param_set_raw(&P, m, raw);
-            reboot_req = P.motion.pul_invert != P_boot.motion.pul_invert || P.motion.ena_invert != P_boot.motion.ena_invert || P.drv.pwr_sense_enable != P_boot.drv.pwr_sense_enable;
+            reboot_req = P.motion.pul_invert != P_boot.motion.pul_invert || P.motion.ena_invert != P_boot.motion.ena_invert || P.drv.pwr_sense_enable != P_boot.drv.pwr_sense_enable
+                      || P.drv.k1_check_enable != P_boot.drv.k1_check_enable;
             if (m->id == PID_AFE_RATE_SPS) hal_hx711_config(25, P.afe.rate_sps != 0);
         }
         put16(b, m->id); b[2] = m->type; param_raw_to_wire(m, param_get_raw(&P, m), b + 3);

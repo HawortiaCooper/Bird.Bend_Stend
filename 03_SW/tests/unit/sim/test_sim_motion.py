@@ -17,6 +17,7 @@ import pytest
 from bend_stand.calc.motion import F_TICK_HZ, ramp_periods, um_to_steps
 from bend_stand.core import protocol_gen as pg
 from bend_stand.io import protocol as P
+from bend_stand.io.framing import encode_frame
 from bend_stand.io.sim.board import SimConfig
 from sim.test_sim_board import Client
 
@@ -26,6 +27,15 @@ SPM = 800.0
 
 def _set(cl: Client, key: str, value) -> None:
     assert cl.cmd(Cmd.SET_PARAM, P.build_set_param(key, value)).ok, key
+
+
+def _sense(cl: Client, k1: bool = True) -> Client:
+    """Optional 48 V presence sense (+ K1 check) on, as after SAVE + REBOOT (CR-03: default off since ICD v0.7)."""
+    cl.b.params["drv.pwr_sense_enable"] = True
+    cl.b.params["drv.k1_check_enable"] = k1
+    cl.b.relatch_boot_params()
+    cl.b.pwr_filt = cl.b.world.power_present()
+    return cl
 
 
 def _enable(cl: Client) -> None:
@@ -46,8 +56,10 @@ def _home(cl: Client, *, fast: bool = True) -> None:
     raise AssertionError("not homed")
 
 
-def _ready(**kw) -> Client:
+def _ready(sense: bool = False, **kw) -> Client:
     cl = Client(**kw)
+    if sense:
+        _sense(cl)
     cl.hb = True
     cl.cmd(Cmd.STREAM_START)
     _enable(cl)
@@ -115,7 +127,7 @@ def test_controlled_stop_distance_and_clean_halt_at_low_speed() -> None:
 
 @pytest.mark.req("SAF-FW-004", "SAF-FW-005")
 def test_estop_truncates_and_orders_events() -> None:
-    cl = _ready()
+    cl = _ready(sense=True)
     _set(cl, "drv.k1_weld_ms", 100)
     assert _move(cl, 100_000, 30_000).ok
     cl.run(300)
@@ -138,7 +150,7 @@ def test_estop_truncates_and_orders_events() -> None:
 @pytest.mark.req("SAF-FW-025")
 @pytest.mark.parametrize("k1", [100, 200])
 def test_k1_welded_latched_after_k1_weld_ms(k1: int) -> None:
-    cl = Client()
+    cl = _sense(Client())
     _set(cl, "drv.k1_weld_ms", k1)
     cl.run(5)
     t0 = cl.b.now_us()
@@ -154,7 +166,7 @@ def test_k1_welded_latched_after_k1_weld_ms(k1: int) -> None:
 
 @pytest.mark.req("SAF-FW-024", "FW-SW-005", "FW-MOT-008")
 def test_driver_power_loss_filter_and_enable_settle_after_return() -> None:
-    cl = _ready()
+    cl = _ready(sense=True)
     cl.ctl.act("drv_power", on=False, bounce_ms=[5, 5])               # off 5 ms, on 5 ms, off: settles off
     cl.run(15)
     assert cl.b.pwr_filt                                              # < 20 ms stable: not yet accepted
@@ -425,3 +437,109 @@ def test_scenario_and_server_feature_mask() -> None:
         assert srv.board.info().feature_mask == int(pg.Features.AFE_SYNTHETIC | pg.Features.NVM)
     finally:
         srv.stop()
+
+
+# ============================================================================================ M2 close-out (MC2-4, D-43 b, CR-03)
+
+
+@pytest.mark.req("SW-CFG-004", "FW-NVM-003", "SYS-008")
+def test_save_flash_stall_buffers_commands_and_marks_overrun() -> None:
+    cl = Client()
+    cl.cmd(Cmd.STREAM_START)
+    cl.run(50)
+    t0 = cl.b.now_us()
+    cl.pair.pc.write(encode_frame(Cmd.SAVE_PARAMS, 50, b""))
+    cl.run(100)
+    cl.pair.pc.write(encode_frame(Cmd.PING, 51, b""))              # arrives during the flash stall
+    cl.run(300)
+    assert 50 not in cl.resp and 51 not in cl.resp                  # nothing answered during the stall
+    n_data = len(cl.data)
+    cl.run(150)
+    assert cl.resp[50].ok and cl.resp[51].ok
+    assert cl.b.nvm_save_ms == 500 and (cl.b.now_us() - t0) / 1000 >= 500
+    later = cl.data[n_data:]
+    assert later and later[0].flags & DF.OVERRUN                     # missed conversions (FW-NVM-003)
+    assert P.decode_status(cl.cmd(Cmd.GET_STATUS).body).nvm_save_ms == 500
+    cl.b.cfg.nvm_stall_ms["SAVE_PARAMS"] = 0                         # configurable (scenario world.nvm_stall_ms)
+    t1 = cl.b.now_us()
+    assert cl.cmd(Cmd.SAVE_PARAMS).ok and (cl.b.now_us() - t1) / 1000 < 10
+
+
+@pytest.mark.req("FW-MOT-005", "SAF-FW-020", "SYS-008")
+def test_unhomed_window_from_a_fixed_origin() -> None:
+    cl = Client()
+    cl.hb = True
+    _set(cl, "home.max_travel_um", 3000)
+    _enable(cl)                                                      # origin latched at ENABLE (D-43 b)
+    jog = lambda v: cl.cmd(Cmd.JOG, P.build_request(Cmd.JOG, v_um_s=v, a_um_s2=0, bound_um=pg.JOG_NO_BOUND),  # noqa: E731
+                           wait=1)
+    for _ in range(2):                                               # two separate jogs share one window
+        assert jog(2000).ok
+        for _ in range(4):
+            cl.run(80)
+            jog(2000)
+        assert jog(0).ok
+        cl.run(300)
+    assert jog(2000).ok
+    for _ in range(40):
+        cl.run(80)
+        if cl.b.motion is None:
+            break
+        jog(2000)
+    assert cl.b.pos_um == 3000 and cl.ev("MOVE_DONE")[-1].arg == pg.MoveDoneReason.SOFT_LIMIT
+    r = jog(2000)
+    assert (r.status_name, r.detail) == ("E_RANGE", 0)               # toward the reached window end: refused
+    assert jog(-2000).ok                                             # away from it: accepted
+    cl.cmd(Cmd.JOG, P.build_request(Cmd.JOG, v_um_s=0, a_um_s2=0, bound_um=pg.JOG_NO_BOUND))
+    cl.run(300)
+    assert cl.cmd(Cmd.DISABLE).ok and cl.b.unhomed_origin == cl.b.steps          # re-latched on DISABLE
+
+
+@pytest.mark.req("FW-SW-005", "SAF-FW-024")
+def test_power_sense_is_a_boot_parameter_and_optional() -> None:
+    cl = Client()
+    assert not cl.b.sense_cfg and cl.b.status_now() & DS.DRV_PWR    # CR-03 default: no sense, DRV_PWR reads 1
+    _sense(cl, k1=False)
+    cl.b.params["drv.pwr_sense_enable"] = False                    # RAM change: no effect before a reboot
+    cl.ctl.act("drv_power", on=False)
+    cl.run(40)
+    assert cl.ev("DRIVER_POWER") and not cl.b.pwr_filt               # still sensed (boot value 1)
+    cl.ctl.act("drv_power", on=True)
+    cl.run(40)
+    cl.b.relatch_boot_params()                                       # = the value after SAVE + REBOOT (CR-03 default)
+    n0 = len(cl.ev("DRIVER_POWER"))
+    cl.ctl.act("estop", open=True, drv_power_follows=False)
+    cl.run(400)
+    assert len(cl.ev("DRIVER_POWER")) == n0 and not cl.b.faults_mask   # no presence sense: no K1_WELDED
+    assert cl.cmd(Cmd.GET_STATUS).ok and cl.b.status_now() & DS.DRV_PWR
+
+
+@pytest.mark.req("SAF-FW-005", "SYS-008")
+def test_hardwired_ena_cut_de_energises_the_driver() -> None:
+    cl = _ready()
+    assert cl.ctl.act("query", what="outputs")["driver_energised"]
+    cl.ctl.act("inject", fault="hang", duration_ms=50)               # MCU stuck: the hardwired cut still acts
+    cl.ctl.act("estop", open=True, drv_power_follows=False)
+    out = cl.ctl.act("query", what="outputs")
+    assert out["ena"] and not out["driver_energised"]                # MCU ENA still enabled, driver cut (D-42)
+    cl.run(60)
+    assert not cl.ctl.act("query", what="outputs")["ena"]            # FW reaction after the hang
+    cl.b.world.ena_hardwired_cut = False
+    cl.ctl.act("estop", open=False)
+    cl.run(5)
+    assert not cl.b.driver_energised()                               # MCU ENA disabled until ENABLE
+
+
+@pytest.mark.req("FW-SW-005", "SYS-008")
+def test_steps_into_a_cut_driver_are_lost() -> None:
+    cl = _ready()
+    assert _move(cl, 20_000, 10_000).ok
+    cl.run(200)
+    xt = cl.ctl.act("query", what="world")["x_um_true"]
+    cl.b.world.ena_hardwired_cut = True
+    cl.b.world.estop_open = True                                     # before the FW tick sees it
+    s0 = cl.b.steps
+    cl.b._advance_axis(cl.b.now_us() + 900)                          # noqa: SLF001  (pulses within the same ms)
+    assert cl.b.steps > s0 and cl.ctl.act("query", what="world")["x_um_true"] == pytest.approx(xt, abs=1e-6)
+    cl.run(2)
+    assert cl.b.motion is None and cl.ev("ESTOP_SET")

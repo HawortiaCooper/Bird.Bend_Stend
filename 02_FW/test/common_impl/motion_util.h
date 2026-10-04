@@ -31,6 +31,24 @@ static inline void mu_boot(void)
     mu_run(20);
 }
 
+/* boot with drv.pwr_sense_enable = 1 (+ drv.k1_check_enable = k1) saved in the NVM (both
+ * reboot-required; defaults 0 since ICD v0.7, D-41 / SRS OI-18) */
+static inline void mu_boot_sense(bool k1)
+{
+    h_boot(true);
+    h_set_param(PID_DRV_PWR_SENSE_ENABLE, PARAM_T_BOOL, 1u);
+    h_set_param(PID_DRV_K1_CHECK_ENABLE, PARAM_T_BOOL, k1 ? 1u : 0u);
+    h_expect_ok(h_cmd(CMD_SAVE_PARAMS, 0x5Fu, NULL, 0u));
+    fake_run_ms(2u);
+    h_reboot();
+    TEST_ASSERT_TRUE(g_fw.boot_p.drv.pwr_sense_enable);
+    TEST_ASSERT_EQUAL(k1, g_fw.boot_p.drv.k1_check_enable);
+    mu_raw = 0;
+    mu_afe_on = true;
+    h_set_param(PID_SAFETY_LINK_TIMEOUT_MS, PARAM_T_U16, 5000u);
+    mu_run(20);
+}
+
 static inline void mu_enable(void)
 {
     h_expect_ok(h_cmd(CMD_ENABLE, 0x60u, NULL, 0u));

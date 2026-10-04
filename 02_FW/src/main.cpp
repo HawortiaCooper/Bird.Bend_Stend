@@ -5,6 +5,7 @@
  */
 #include "f446.h"
 #include "fw.h"
+#include "meas_dwt.h"
 
 extern "C" void setup(void);
 extern "C" void loop(void);
@@ -18,5 +19,7 @@ void setup()
 
 void loop()
 {
+    MDWT_T0(t0);                                     /* HW_MEAS_DWT only (OI-FW-37) */
     app_loop();
+    MDWT_END(MDWT_MAIN_LOOP, t0);
 }

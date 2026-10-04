@@ -1,7 +1,7 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/params.yaml (dict_version 4, schema 1)
+ * Source : 00_System/specs/params.yaml (dict_version 5, schema 1)
  * Tool   : 00_System/tools/gen_params.py
- * Hash   : PARAM_DICT_HASH = 0xFCC54C90
+ * Hash   : PARAM_DICT_HASH = 0xB7B0263F
  * Implements: FW-CFG-001, IF-010
  */
 #include "params_gen.h"
@@ -108,10 +108,12 @@ const param_meta_t PARAM_TABLE[PARAM_COUNT] = {
     PM(PID_DRV_PEND_ACTIVE_LEVEL, PARAM_T_ENUM, PARAM_F_NVM, drv.pend_active_level, 1, 0x00000000u, 0x00000001u, 0x00000000u, "drv.pend_active_level"),
     /* drv.pend_timeout_ms: min 0, max 5000, default 200 ms */
     PM(PID_DRV_PEND_TIMEOUT_MS, PARAM_T_U16, PARAM_F_MOVING_OK|PARAM_F_NVM, drv.pend_timeout_ms, 2, 0x00000000u, 0x00001388u, 0x000000C8u, "drv.pend_timeout_ms"),
-    /* drv.pwr_sense_enable: min false, max true, default true  */
-    PM(PID_DRV_PWR_SENSE_ENABLE, PARAM_T_BOOL, PARAM_F_NVM|PARAM_F_REBOOT, drv.pwr_sense_enable, 1, 0x00000000u, 0x00000001u, 0x00000001u, "drv.pwr_sense_enable"),
+    /* drv.pwr_sense_enable: min false, max true, default false  */
+    PM(PID_DRV_PWR_SENSE_ENABLE, PARAM_T_BOOL, PARAM_F_NVM|PARAM_F_REBOOT, drv.pwr_sense_enable, 1, 0x00000000u, 0x00000001u, 0x00000000u, "drv.pwr_sense_enable"),
     /* drv.k1_weld_ms: min 100, max 2000, default 200 ms */
     PM(PID_DRV_K1_WELD_MS, PARAM_T_U16, PARAM_F_NVM, drv.k1_weld_ms, 2, 0x00000064u, 0x000007D0u, 0x000000C8u, "drv.k1_weld_ms"),
+    /* drv.k1_check_enable: min false, max true, default false  */
+    PM(PID_DRV_K1_CHECK_ENABLE, PARAM_T_BOOL, PARAM_F_NVM|PARAM_F_REBOOT, drv.k1_check_enable, 1, 0x00000000u, 0x00000001u, 0x00000000u, "drv.k1_check_enable"),
     /* stream.fallback_hz: min 1, max 80, default 10 Hz */
     PM(PID_STREAM_FALLBACK_HZ, PARAM_T_U8, PARAM_F_MOVING_OK|PARAM_F_NVM, stream.fallback_hz, 1, 0x00000001u, 0x00000050u, 0x0000000Au, "stream.fallback_hz"),
 };

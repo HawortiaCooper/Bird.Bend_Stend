@@ -330,24 +330,57 @@ def test_confirm_repeats_are_idempotent(twin):
 @pytest.mark.req("SAF-FW-002", "SAF-FW-003", "IF-011")
 @pytest.mark.parametrize("name,fields", [("HALT", {}), ("STOP", {"mode": 0}), ("STOP", {"mode": 1}), ("PAUSE", {})])
 def test_stop_sniffer_path_in_virtual_time(twin, name, fields):
-    """Last byte of a STOP/HALT/PAUSE frame at 5 phases vs the 1 kHz tick: the motion part (stop primitive)
-    runs <= 2 ms after the last byte and before the response is on the wire."""
+    """Last byte of a STOP/HALT/PAUSE frame at 5 phases vs the 1 kHz tick, each with a running un-homed JOG
+    (v_unhomed): the motion part runs <= 2 ms after the last byte — HALT / STOP 0: the stop primitive is called
+    before the response is on the wire and no PUL edge follows later than 2 ms; STOP 1 / PAUSE: 2 ms after the
+    last byte the axis is halted (clean-halt path, ICD §6.5) or already decelerating. Un-skipped in v0.7
+    (REQ-C-M2-12): M2 FW has motion, so the stop path is exercised with a running motion."""
     link = TwinLink(twin)
-    twin.advance_ms(10)
-    seen_call = False
+    twin.advance_ms(5)
+    if "MOTION" not in link.cmd("GET_INFO")["info"]["features"]:
+        pytest.skip("A's FW build reports FEAT_MOTION = 0")
+    link.cmd("STREAM_STOP")
+    r = link.cmd("ENABLE")
+    assert r["status"] == "OK", r
+    _run(twin, link, r.get("settle_ms", 500) + 20)
+    v = int(MODEL.value(cc.FwState(), "motion.v_unhomed_um_s"))
+    tick_us = 1e6 / 90e6
     for phase in (0.05, 0.3, 0.55, 0.8, 0.99):
+        if name in ("HALT", "PAUSE"):
+            assert link.cmd("HALT_CLEAR")["status"] == "OK"      # clears the previous phase's latch
+        r = link.cmd("JOG", {"v_um_s": v, "a_um_s2": 0, "bound_um": rc.JOG_NO_BOUND})
+        assert r["status"] == "OK", (phase, r)
+        _run(twin, link, 100)                                    # cruise reached, inside the jog dead-man time
+        assert status(link)["motion_state"] == "JOG", phase
         base = (int(twin.now_us // 1000) + 3) * 1000
         seq = link.send(name, fields, at_us=base + phase * 1000)
         twin.advance_ms(15)
         link.poll()
         rx, tx = wire_pair(twin, name, seq)
         assert tx["first_us"] - rx["last_us"] <= 10_000
-        calls = [c for c in twin.act("query", what="seam_log", since_us=rx["last_us"])["seam_log"]
-                 if c["call"] in ("hal_step_stop_now", "hal_step_abort")]
-        if calls:
-            seen_call = True
-            assert calls[0]["t_us"] - rx["last_us"] <= 2_000, (phase, calls[0])
-            # "stop executed before its response is queued" (ICD §2.4) is observable only with a running
-            # motion (the idle dispatcher need not call the primitive): M2 variant with MOVE_ABS.
-    if not seen_call:
-        pytest.skip("FW does not call the stop primitive while idle (no motion in M1): timing verified in M2")
+        t = [e["t_us"] for e in twin.act("query", what="edges", since_us=rx["last_us"] - 10_000)["edges"]
+             if e["pin"] == "PUL" and e["level"] == 1]
+        before = [x for x in t if x <= rx["last_us"]]
+        assert len(before) >= 2, (phase, "jog not running")
+        cruise = before[-1] - before[-2]
+        late = [x for x in t if x > rx["last_us"] + 2_000]
+        if name == "HALT" or fields.get("mode") == 0:
+            calls = [c for c in twin.act("query", what="seam_log", since_us=rx["last_us"])["seam_log"]
+                     if c["call"] in ("hal_step_stop_now", "hal_step_abort")]
+            assert calls and calls[0]["t_us"] - rx["last_us"] <= 2_000, (phase, calls[:1])
+            assert calls[0]["t_us"] <= tx["first_us"], (phase, "stop not executed before the response")
+            assert not late, (phase, late[:3])
+        else:
+            k = next((i for i, x in enumerate(t) if x > rx["last_us"] + 2_000), None)
+            assert k is None or t[k] - t[k - 1] > cruise + tick_us, (phase, cruise, t[k] - t[k - 1])
+        _run(twin, link, 200)
+        assert status(link)["motion_state"] == "IDLE", phase
+
+
+def _run(tw: Twin, link: TwinLink, ms: float) -> None:
+    """Advance virtual time with a PING heartbeat every 150 ms (link watchdog, ICD §9.2)."""
+    end = tw.now_us + ms * 1000
+    while tw.now_us < end:
+        link.send("PING")
+        tw.advance_us(min(150_000.0, end - tw.now_us))
+    link.poll()

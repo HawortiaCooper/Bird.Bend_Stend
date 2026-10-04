@@ -127,6 +127,7 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max);
 /* twin_meas.c hooks */
 void tw_meas_init(bool on, uint32_t ni_magic, uint32_t ni_last_pul, uint32_t ni_hang);
 void tw_meas_noinit_out(void);
+void tw_meas_noinit_y(void);              /* Q reply line "Y noinit <magic_hex>:<last_pul>:<hang>" */
 void tw_meas_edge(const char *pin, int level);
 void tw_meas_input(uint8_t id, uint8_t level);
 void tw_meas_dout(void);

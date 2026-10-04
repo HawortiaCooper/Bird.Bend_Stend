@@ -41,6 +41,7 @@ static inline void cc_setup(const vec_check_t *v, params_t *p, cmd_ctx_t *c)
     c->nvm_record_valid = v->nvm_record_valid;
     c->paused = v->paused;
     c->hw_meas = v->hw_meas;
+    c->unhomed_origin_um = v->unhomed_origin_um;    /* 0 with state_schema 2 */
 }
 
 #endif /* CHECK_CTX_H */

@@ -246,6 +246,7 @@ bool     motion_active(void);
 int8_t   motion_dir(void);                   /* direction of the running segment (0 = none) */
 bool     motion_home_edge(uint8_t lim_id, int32_t steps);  /* true: an expected homing edge */
 int32_t  motion_target_um(void);             /* STATUS target_um */
+int32_t  motion_unhomed_origin_um(void);     /* D-43 b: un-homed travel window origin (cmd_check ctx) */
 uint16_t motion_enabling_left_ms(uint32_t now_ms);
 void     motion_hold_resolved(uint8_t cause);/* sniffed-stop hold timed out: discard a parked start */
 void     motion_ena_out(bool enabled);       /* ENA output + g_fw.ena_on */

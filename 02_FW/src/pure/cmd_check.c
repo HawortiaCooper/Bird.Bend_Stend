@@ -146,6 +146,13 @@ static cmd_verdict_t check_motion(const cmd_ctx_t *c, const cmd_req_t *r, bool m
         if (abs64(v) > (int64_t)cmd_v_limit(c, cmd_loaded(c), !c->homed)) {
             return verdict(ST_E_RANGE, 0u);
         }
+        if (v != 0 && !c->homed) {          /* D-43 b: a reached window bound refuses a JOG toward it */
+            int64_t w = (int64_t)c->p->home.max_travel_um;
+            int64_t rel = (int64_t)c->pos_um - (int64_t)c->unhomed_origin_um;
+            if ((v > 0 && rel >= w) || (v < 0 && rel <= -w)) {
+                return verdict(ST_E_RANGE, 0u);
+            }
+        }
         if (r->u.jog.a_um_s2 > a_max) {
             return verdict(ST_E_RANGE, 4u);
         }

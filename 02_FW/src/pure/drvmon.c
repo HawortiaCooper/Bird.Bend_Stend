@@ -1,9 +1,10 @@
 /* Driver monitor. Implements: FW-SW-004, FW-SW-005, SAF-FW-024, SAF-FW-025, SAF-FW-026 */
 #include "drvmon.h"
 
-void drvmon_init(drvmon_t *m, bool sense, bool raw_pwr, bool raw_alm)
+void drvmon_init(drvmon_t *m, bool sense, bool k1_check, bool raw_pwr, bool raw_alm)
 {
     m->sense = sense;
+    m->k1_check = sense && k1_check;                   /* SRS OI-18: needs both (ICD v0.7) */
     m->pwr = raw_pwr;
     m->diff_ms = 0u;
     m->k1_ms = 0u;
@@ -28,7 +29,7 @@ drvmon_ev_t drvmon_sample(drvmon_t *m, bool raw_pwr, bool estop_open, bool raw_a
         } else {
             m->diff_ms = 0u;
         }
-        if (estop_open && m->pwr) {
+        if (m->k1_check && estop_open && m->pwr) {
             if (m->k1_ms != 0xFFFFu) {
                 m->k1_ms++;
             }

@@ -25,7 +25,7 @@ from bend_stand.calc.paramrules import set_violation
 from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 
-STATE_SCHEMA = 2                       # keys unchanged in ICD v0.5 (stop_btn_* never set, ignored)
+STATE_SCHEMA = 3                       # ICD v0.7: + unhomed_origin_um (D-43 b); stop_btn_* ignored (v0.5)
 B = pg.Block
 MOVING = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOMING", "STOPPING")
 MOTION = (pg.Cmd.MOVE_ABS, pg.Cmd.MOVE_UNTIL_LOAD, pg.Cmd.HOME)
@@ -57,6 +57,7 @@ class SimCheckState:
     alm_active: bool = False
     nvm_record_valid: bool = True
     paused: bool = False
+    unhomed_origin_um: int = 0                 # D-43 b: position latched when the axis became un-homed (schema 3)
 
     @classmethod
     def from_vector(cls, defaults: Mapping[str, Any], state: Mapping[str, Any], schema: int) -> SimCheckState:
@@ -292,6 +293,10 @@ def check(st: SimCheckState, ftype: int, payload: bytes) -> tuple[str, int]:
         v, a, bound = struct.unpack("<iIi", payload)
         if abs(v) > v_limit(st, unhomed_jog=not st.homed):
             return "E_RANGE", 0
+        if v != 0 and not st.homed:              # D-43 b: un-homed window origin ± home.max_travel_um reached
+            w = int(st.p("home.max_travel_um"))
+            if (v > 0 and st.pos_um >= st.unhomed_origin_um + w) or (v < 0 and st.pos_um <= st.unhomed_origin_um - w):
+                return "E_RANGE", 0
         if a > a_max:
             return "E_RANGE", 4
         if v == 0:

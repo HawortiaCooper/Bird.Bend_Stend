@@ -1,6 +1,6 @@
 # 00_System/tools — Integrator tools (owner: Implementer C)
 
-Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.6, `params.yaml` dict_version 4 and `protocol.yaml`
+Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.7, `params.yaml` dict_version 5 and `protocol.yaml`
 (protocol name registry, ICD §0.3).
 Python ≥ 3.11, standard library + PyYAML (generators only). Use the project venv: `.venv\Scripts\python`.
 
@@ -55,8 +55,9 @@ place (no copies) so `--check` staleness is caught. SW side: tests load the JSON
 code), `motion_state` (ICD §6.1 name), `enabling_left_ms`, `homed`, `pos_um`, `estop_latched`,
 `estop_input_open`, `estop_closed_ms`, `halt_latched`, `stop_btn_active`, `stop_btn_released_ms`, `faults` /
 `fault_causes` (FAULT names), `limit_start` / `limit_end` (active or latched), `afe_stale`, `afe_saturated`,
-`raw`, `drv_power`, `alm_active`, `nvm_record_valid`, `paused` (v0.2).
-`state_schema` (top level, = 2 since ICD v0.4, F-B-25): version of these keys. Keys are only ever **added**
+`raw`, `drv_power`, `alm_active`, `nvm_record_valid`, `paused` (v0.2), `unhomed_origin_um` (v0.7, D-43 b: the
+position latched when the axis became un-homed; default 0).
+`state_schema` (top level, = 2 since ICD v0.4, **= 3 since ICD v0.7** (+ `unhomed_origin_um`), F-B-25): version of these keys. Keys are only ever **added**
 (never renamed or removed), each addition bumps `state_schema`; a replay MUST fail on an unknown key or a
 newer `state_schema`. Every vector state is a valid configuration (all hard rules H1–H5 hold).
 `expect.paused_after` (present when `state.paused` or for PAUSE / RESUME): the PAUSED latch after the command
@@ -289,6 +290,31 @@ M2 additions (ICD v0.6, Validator E REQ-C-M2-02…10): `inject loop_load` (`us_p
 conversion: world `t_us`, FW `fw_t_us`, raw, delivered) and `inputs` (electrical input changes). Times in logs
 are world µs since the twin start (float, ns resolution); `wire_log` `first_us` = start of the first byte,
 `last_us` = end of the last byte.
+
+**Coordinate and limit-switch convention (normative for the twin and the SW simulator; OI-B-M2-04, ICD v0.7).**
+World x [µm] (`query world` `x_um_true`) is integrated per **completed** pulse (the end of the PUL pulse = the
+timer update) from the DIR **pin**: +1 step (1000 / `motion.steps_per_mm` µm) while DIR is high, unless the DIR
+wiring is inverted (`driver dir_wiring_inverted`); it is independent of the FW counter and persists across MCU
+resets. START is active iff x ≤ `start_switch_um`, END iff x ≥ `end_switch_um` (`limit position_um`), evaluated
+after every completed step. The HAL fixed reaction stops the timer CLEAN at that step, so the **last executed step
+is the first step at which the switch is active** (step-exact, no extra step, no overshoot); the stop position
+is therefore the first grid step at or beyond the edge. Homing: the slow approach ends at that step (x_edge), and
+machine 0 lies `home.offset_um` beyond it, i.e. machine x = x_world − x_edge − `home.offset_um`
+(`test_home_at_start_edge`). A simulator that integrates continuously must quantise the same way (stop at the first
+step ≥ the edge in the moving direction).
+
+**E-stop wiring in the world (CR-03 / D-41, ICD v0.7).** Release 1 has no power-removal contactor: the driver's
+48 V stays present when the E-stop opens. The world default `estop drv_power_follows: true` (vocabulary FROZEN)
+models the earlier contactor wiring; release-1 scenarios pass `drv_power_follows: false`. With the defaults
+`drv.pwr_sense_enable` = 0 and `drv.k1_check_enable` = 0 the FW ignores DRV_POWER, so both give the same result.
+
+**DIAG_MEAS model (twin_meas.c) aligned to the target in v0.7 (REQ-C-M2-12, OI-FW-38).** NOINIT: the magic is
+set at boot whenever the block is invalid (block cleared), so w0 = `MEAS_MAGIC` from the first read; w2 = the
+heartbeat of the last 10 kHz DMA update (FW t_us floored to 100 µs), not the time of the read; sel 1 clears the
+block and the rings. INFO w4 = 2048 stamps per channel, w7 = 10 000 000 (stimulus clock). PROBE_READ w5 = PUL
+stamps since arming; TRIGGERED = probe counter running (never in PWM_INPUT). STATIC_LEVEL acts only with the step
+timer stopped. Not modelled: the stamp rings surviving a reset (the twin carries magic, last PUL and hang start).
+The engine no longer calls `step_isr()` after a fixed-reaction halt at a counted step (OI-FW-35).
 
 ## Shared simulator / twin world-control vocabulary v2 (F-B-06, DEF-P1-03) — names FROZEN (ICD v0.4; v0.5: STOP-button names retired)
 

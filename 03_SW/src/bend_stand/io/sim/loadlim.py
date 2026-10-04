@@ -3,10 +3,11 @@
 
 * Every HX711 sample is a violation when ``raw > load_raw_max``, ``raw < load_raw_min`` or at a rail;
   ``load_trip_samples`` consecutive violations trip; a sample inside resets the count.
-* FAULT_CLEAR: reference = the last sample; if it violates, the **regrow window** opens: a violating sample
-  re-trips at once only when it lies more than ``load_regrow_raw`` beyond the reference on its side, every other
-  violating sample is ignored (unloading); the window ends with the first sample inside the thresholds or the next
-  FAULT_CLEAR; a threshold change does not end it.
+* Only a FAULT_CLEAR that clears a latched LOAD_LIMIT takes a reference = the last sample (0 if none); other
+  clears leave the state unchanged (ICD v0.7, OI-B-M2-03). If the reference violates, the **regrow window** opens:
+  a violating sample re-trips at once only when it lies more than ``load_regrow_raw`` beyond the reference on its
+  side, every other violating sample is ignored (unloading); the window ends with the first sample inside the
+  thresholds or with a re-trip; a threshold change does not end it.
 * Threshold changes act from the next sample and keep the count.
 
 Implements: SAF-FW-008, SAF-FW-009, SAF-FW-010 (next-sample effect), SAF-FW-011 (sim)
@@ -28,6 +29,7 @@ class LoadLimit:
     window: bool = False
     ref: int = 0
     last: int | None = None
+    latched: bool = False                    # LOAD_LIMIT latched (a trip sets it, its FAULT_CLEAR clears it)
 
     def config(self, lo: int, hi: int, trip_samples: int, regrow: int) -> None:
         self.lo, self.hi = int(lo), int(hi)
@@ -48,16 +50,21 @@ class LoadLimit:
             if beyond:
                 self.window = False
                 self.count = self.trip_samples
+                self.latched = True
                 return True
             self.count = 0
             return False
         self.count += 1
-        return self.count >= self.trip_samples
+        if self.count >= self.trip_samples:
+            self.latched = True
+            return True
+        return False
 
     def fault_clear(self) -> None:
-        self.count = 0
-        if self.last is None:
-            self.window = False
+        """FAULT_CLEAR: only a clear of a latched LOAD_LIMIT changes the state (new reference)."""
+        if not self.latched:
             return
-        self.ref = self.last
-        self.window = self.violation(self.last)
+        self.latched = False
+        self.count = 0
+        self.ref = 0 if self.last is None else self.last
+        self.window = self.violation(self.ref)

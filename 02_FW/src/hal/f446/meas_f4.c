@@ -27,9 +27,16 @@
  *                                  for `a` ms (0 = until the IWDG resets)
  *   STATIC_LEVEL                 : PUL forced active / inactive (TIM2 OC1, timer stopped) or DIR level
  * The request was validated by the core (cmd_check, ranges and MEAS_STATE) before this call.
- * DWT section statistics (op 9) are not implemented in this increment: w0 = 0 and the INFO variant
- * carries only MEAS also in the _meas_dwt image (open item OI-FW-37).
- * Implements: SYS-009 (on-chip measurement means), D-40 c, REQ-A-M2-03
+ *   NOINIT across a reset (DEF-M2-02, REQ-A-M2-08): meas_start() first snapshots the previous boot's
+ *                                  record (newest PUL stamp found in the retained ring, last heartbeat
+ *                                  DMA write, hang start) into "previous boot" words, then clears the
+ *                                  rings and restarts the DMAs (each boot's rings hold only its own
+ *                                  stamps, so the newest stamp of a ring is the one before its single
+ *                                  descent).
+ *   DWT statistics (_meas_dwt only, OI-FW-37): meas_dwt_rec() (RAM) keeps count / min / max / sum /
+ *                                  10-bin histogram per section of meas_dwt.h; op 9 reads (sel 1: and
+ *                                  resets) section `a`; INFO w0 = MEAS | DWT, w6 = empty stamp pair.
+ * Implements: SYS-009 (on-chip measurement means), D-40 c, REQ-A-M2-03, REQ-A-M2-08, NFR-007 (HG-18)
  */
 #if defined(HW_MEAS) && HW_MEAS
 #include <string.h>
@@ -39,6 +46,7 @@
 #include "hal_sys.h"
 #include "irq_prio.h"
 #include "le.h"
+#include "meas_dwt.h"
 #include "proto_gen.h"
 
 #define PRIO_MEAS 15u                         /* below the link (5): never delays the FW */
@@ -48,7 +56,12 @@
 typedef struct {
     uint32_t magic;
     uint32_t heartbeat_t_us;                  /* TIM5->CNT, refreshed at 10 kHz by DMA */
-    uint32_t hang_t_us;
+    uint32_t hang_t_us;                       /* HANG op start (kept across resets until a clear) */
+    uint32_t prev_valid;                      /* 1: the prev_* words were snapshot at this boot */
+    uint32_t prev_pul_t_us;                   /* previous boot: newest PUL stamp */
+    uint32_t prev_heartbeat_t_us;             /* previous boot: last heartbeat DMA write */
+    uint32_t prev_hang_t_us;                  /* previous boot: hang start */
+    uint32_t boots;                           /* boots since the block was initialised / cleared */
     uint32_t ring[4][RING];                   /* MEAS_CHAN_EVT / PUL / DIR / AUX */
 } meas_noinit_t;
 
@@ -96,6 +109,75 @@ static uint32_t stamps_total(uint8_t ch)
     } while (laps != s_laps[ch]);
     return laps * RING + idx;
 }
+
+/* newest stamp of a ring written from index 0 by one boot only: the entry before the single descent
+ * (wrap-safe signed difference); no descent -> the last entry (0 when the ring is empty) */
+static uint32_t ring_newest(const uint32_t *r)
+{
+    uint32_t i;
+    for (i = 0u; i + 1u < RING; i++) {
+        if ((int32_t)(r[i + 1u] - r[i]) < 0) {
+            return r[i];
+        }
+    }
+    return r[RING - 1u];
+}
+
+#if defined(HW_MEAS_DWT) && HW_MEAS_DWT
+/* ---------------- DWT section statistics (OI-FW-37) ---------------- */
+typedef struct {
+    uint32_t count, min, max;
+    uint64_t sum;
+    uint32_t hist[10];
+} dwt_stat_t;
+static dwt_stat_t s_dwt[MDWT_SECTIONS];
+static uint32_t   s_dwt_pair;                 /* empty stamp pair, cycles (INFO w6) */
+
+__attribute__((section(".RamFunc"), noinline, long_call)) void meas_dwt_rec(uint32_t sec, uint32_t cyc)
+{
+    uint32_t pm = __get_PRIMASK();
+    uint32_t bits = (cyc == 0u) ? 0u : 32u - (uint32_t)__CLZ(cyc);   /* bit length */
+    uint32_t bin = (bits > 9u) ? bits - 9u : 0u;                      /* < 512 -> 0 */
+    dwt_stat_t *d;
+    if (sec >= MDWT_SECTIONS) {
+        return;
+    }
+    if (bin > 9u) {
+        bin = 9u;                                                     /* >= 2^17 */
+    }
+    __disable_irq();
+    d = &s_dwt[sec];
+    if (d->count == 0u || cyc < d->min) {
+        d->min = cyc;
+    }
+    if (cyc > d->max) {
+        d->max = cyc;
+    }
+    d->count++;
+    d->sum += cyc;
+    d->hist[bin]++;
+    __set_PRIMASK(pm);
+}
+
+static void dwt_calibrate(void)
+{
+    uint32_t i, t0, t1, best = 0xFFFFFFFFu;
+    for (i = 0u; i < 16u; i++) {
+        t0 = DWT->CYCCNT;
+        t1 = DWT->CYCCNT;
+        if (t1 - t0 < best) {
+            best = t1 - t0;
+        }
+        meas_dwt_rec(MDWT_EMPTY_PAIR, t1 - t0);
+        t0 = DWT->CYCCNT;
+        meas_dwt_rec(MDWT_CALIB_SCRATCH, 0u);
+        t1 = DWT->CYCCNT;
+        meas_dwt_rec(MDWT_REC_CALL, t1 - t0);
+    }
+    memset(&s_dwt[MDWT_CALIB_SCRATCH], 0, sizeof s_dwt[0]);
+    s_dwt_pair = best;
+}
+#endif
 
 /* TC interrupts of the four stamp streams: count ring laps */
 static void lap(uint8_t ch, volatile uint32_t *ifcr, uint32_t tcif, volatile uint32_t *isr)
@@ -203,7 +285,17 @@ void meas_start(void)                         /* strong definition of board_init
     if (s_ni.magic != PROTO_MEAS_MAGIC) {
         memset(&s_ni, 0, sizeof s_ni);
         s_ni.magic = PROTO_MEAS_MAGIC;
+    } else {                                  /* DEF-M2-02: keep the previous boot's record */
+        s_ni.prev_valid = 1u;
+        s_ni.prev_pul_t_us = ring_newest(s_ni.ring[MEAS_CHAN_PUL]);
+        s_ni.prev_heartbeat_t_us = s_ni.heartbeat_t_us;
+        s_ni.prev_hang_t_us = s_ni.hang_t_us;
+        s_ni.boots++;
+        memset(s_ni.ring, 0, sizeof s_ni.ring);       /* this boot's rings start empty */
     }
+#if defined(HW_MEAS_DWT) && HW_MEAS_DWT
+    dwt_calibrate();
+#endif
     af(PIN_MH_PUL_B_PORT, PIN_MH_PUL_B_BIT, 2u);
     af(PIN_MH_EVT_PORT, PIN_MH_EVT_BIT, 3u);
     af(PIN_MH_PUL_A_PORT, PIN_MH_PUL_A_BIT, 3u);
@@ -337,13 +429,19 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
     }
     switch (op) {
     case MEAS_OP_INFO:
-        put(resp, 0u, MEAS_VAR_MEAS);          /* DWT statistics not built yet (OI-FW-37) */
+#if defined(HW_MEAS_DWT) && HW_MEAS_DWT
+        put(resp, 0u, MEAS_VAR_MEAS | MEAS_VAR_DWT);
+#else
+        put(resp, 0u, MEAS_VAR_MEAS);
+#endif
         put(resp, 1u, 2u * time_timer_hz());   /* TIM8 on the APB2 timer clock (180 MHz) */
         put(resp, 2u, 32u);
         put(resp, 3u, 1000000u);
         put(resp, 4u, RING);
         put(resp, 5u, 1000u);
-        put(resp, 6u, 0u);
+#if defined(HW_MEAS_DWT) && HW_MEAS_DWT
+        put(resp, 6u, s_dwt_pair);
+#endif
         put(resp, 7u, STIM_HZ);
         break;
     case MEAS_OP_PROBE_ARM:                    /* sel = source (J-EVT jumper position, informative) */
@@ -398,9 +496,19 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
         put(resp, 1u, (tot != 0u) ? s_ni.ring[MEAS_CHAN_PUL][(tot - 1u) % RING] : 0u);
         put(resp, 2u, s_ni.heartbeat_t_us);
         put(resp, 3u, s_ni.hang_t_us);
+        put(resp, 4u, s_ni.prev_valid);        /* DEF-M2-02 (Appendix C proposal: w4...w8) */
+        put(resp, 5u, s_ni.prev_pul_t_us);
+        put(resp, 6u, s_ni.prev_heartbeat_t_us);
+        put(resp, 7u, s_ni.prev_hang_t_us);
+        put(resp, 8u, s_ni.boots);
         if (sel == 1u) {
             memset(s_ni.ring, 0, sizeof s_ni.ring);
             s_ni.hang_t_us = 0u;
+            s_ni.prev_valid = 0u;
+            s_ni.prev_pul_t_us = 0u;
+            s_ni.prev_heartbeat_t_us = 0u;
+            s_ni.prev_hang_t_us = 0u;
+            s_ni.boots = 0u;
             s_ni.magic = PROTO_MEAS_MAGIC;
         }
         break;
@@ -445,7 +553,30 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
             g_meas_static = 1u;                /* released at the next op, hal_step_start, hal_ena_set */
         }
         break;
-    case MEAS_OP_DWT:                          /* w0 = 0: not available in this increment */
+#if defined(HW_MEAS_DWT) && HW_MEAS_DWT
+    case MEAS_OP_DWT: {                        /* section a (checked 0...31 by the core) */
+        dwt_stat_t d;
+        uint32_t k, pm = __get_PRIMASK();
+        __disable_irq();
+        d = s_dwt[a & (MDWT_SECTIONS - 1u)];
+        if (sel == 1u) {
+            memset(&s_dwt[a & (MDWT_SECTIONS - 1u)], 0, sizeof d);
+        }
+        __set_PRIMASK(pm);
+        put(resp, 0u, 1u);
+        put(resp, 1u, d.count);
+        put(resp, 2u, d.min);
+        put(resp, 3u, d.max);
+        put(resp, 4u, (uint32_t)d.sum);
+        put(resp, 5u, (uint32_t)(d.sum >> 32));
+        for (k = 0u; k < 10u; k++) {
+            put(resp, 6u + k, d.hist[k]);
+        }
+        break;
+    }
+#else
+    case MEAS_OP_DWT:                          /* HW_MEAS without DWT: w0 = 0 */
+#endif
     default:
         break;
     }

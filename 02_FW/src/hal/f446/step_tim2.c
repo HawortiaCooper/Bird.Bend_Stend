@@ -7,6 +7,8 @@
  *                        counter stops in hardware at its update (OPM, counted); else force inactive.
  *   hal_step_abort()     TRUNCATE (E-stop, HardFault): force inactive at once; a cut pulse is not
  *                        counted (POS_UNCERTAIN is the core's business).
+ *   Both count a pulse whose update event preceded the halt but whose ISR is still pending
+ *   (DEF-M2-01, halt_hw()).
  * Twin semantics (tools/README hal_step row) are reproduced: hal_step_start() resets the preload
  * (the core preloads period 2 at once), the final update (OPM) only counts and does not call
  * step_isr(), set_period_now() stretches the running period only before its pulse.
@@ -23,9 +25,12 @@
 #include "board_pins.h"
 #include "hal_step.h"
 #include "irq_prio.h"
+#include "meas_dwt.h"
 #include "stepgen.h"
 
+#ifndef RAMFUNC                                       /* host harness (test_impl_steptim) overrides */
 #define RAMFUNC __attribute__((section(".RamFunc"), noinline, long_call))
+#endif
 
 #define OC1M_FORCE_INACTIVE (TIM_CCMR1_OC1M_2)                                        /* 100 */
 #define OC1M_PWM2           (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_0)   /* 111 */
@@ -49,13 +54,29 @@ static inline __attribute__((always_inline)) void oc1m(uint32_t m)
     TIM2->CCMR1 = (TIM2->CCMR1 & ~TIM_CCMR1_OC1M) | m;
 }
 
+/* DEF-M2-01 (SAF-FW-004): an update event (= a completed pulse) that happened before this halt but
+ * whose ISR has not run yet (a level 0/1 ISR or a PRIMASK section pre-empted it) is counted here,
+ * after the counter is stopped (no further update can follow), so the count is exact at once (the
+ * E-stop / limit edge record taken right after the halt sees it); the pending NVIC request then
+ * finds UIF clear and returns. Called with PRIMASK set or from the step ISR (UIF already cleared). */
 RAMFUNC static void halt_hw(void)
 {
-    oc1m(OC1M_FORCE_INACTIVE);                       /* PUL inactive at once */
+    oc1m(OC1M_FORCE_INACTIVE);                       /* PUL inactive at once (no runt) */
     TIM2->CR1 &= ~(TIM_CR1_CEN | TIM_CR1_OPM);
-    TIM2->SR = ~TIM_SR_UIF;
+    if ((TIM2->SR & TIM_SR_UIF) != 0u) {
+        TIM2->SR = ~TIM_SR_UIF;
+        s_count += s_dir;                            /* completed before the halt: counted once */
+    }
     s_running = false;
     s_stop_gen++;
+}
+
+/* compare value of the period the counter is running now: after an update whose ISR is still
+ * pending the preloaded period is already running (DEF-M2-01: decisions on the right interval) */
+static inline __attribute__((always_inline)) uint32_t ccr_running(void)
+{
+    uint32_t c = ((TIM2->SR & TIM_SR_UIF) != 0u) ? s_pre : s_cur;
+    return c - s_pw;
 }
 
 RAMFUNC void hal_ena_set(bool enabled)
@@ -150,6 +171,7 @@ void hal_step_set_period_now(uint32_t ticks)
 {
     uint32_t pm = __get_PRIMASK();
     __disable_irq();
+    MDWT_T0(t0);
     if (s_running && stepgen_stretch_ok(TIM2->CNT, s_cur - s_pw, s_cur - 1u, s_pw, s_guard, ticks)) {
         TIM2->CR1 &= ~TIM_CR1_ARPE;
         TIM2->CCMR1 &= ~TIM_CCMR1_OC1PE;
@@ -161,6 +183,7 @@ void hal_step_set_period_now(uint32_t ticks)
         TIM2->ARR = s_pre - 1u;                      /* restore the preload */
         TIM2->CCR1 = s_pre - s_pw;
     }
+    MDWT_END(MDWT_SET_NOW, t0);
     __set_PRIMASK(pm);
 }
 
@@ -174,14 +197,17 @@ RAMFUNC bool hal_step_stop_now(void)
     uint32_t pm = __get_PRIMASK();
     bool complete = false;
     __disable_irq();
+    MDWT_T0(t0);
     if (s_running) {
-        if (stepgen_halt_complete(TIM2->CNT, s_cur - s_pw, s_guard)) {
+        if ((TIM2->CR1 & TIM_CR1_CEN) != 0u &&       /* not already stopped by OPM */
+            stepgen_halt_complete(TIM2->CNT, ccr_running(), s_guard)) {
             TIM2->CR1 |= TIM_CR1_OPM;                /* pulse completes, counted, then stops */
             complete = true;
         } else {
             halt_hw();
         }
     }
+    MDWT_END(MDWT_STOP_NOW, t0);
     __set_PRIMASK(pm);
     return complete;
 }
@@ -191,10 +217,12 @@ RAMFUNC bool hal_step_abort(void)
     uint32_t pm = __get_PRIMASK();
     bool cut = false;
     __disable_irq();
+    MDWT_T0(t0);
     if (s_running) {
-        cut = stepgen_abort_cuts(TIM2->CNT, s_cur - s_pw);
+        cut = (TIM2->CR1 & TIM_CR1_CEN) != 0u && stepgen_abort_cuts(TIM2->CNT, ccr_running());
         halt_hw();
     }
+    MDWT_END(MDWT_ABORT, t0);
     __set_PRIMASK(pm);
     return cut;
 }
@@ -228,8 +256,10 @@ void TIM2_IRQHandler(void)
     if ((TIM2->CR1 & TIM_CR1_CEN) == 0u) {           /* stopped by OPM (last / CLEAN halt) */
         oc1m(OC1M_FORCE_INACTIVE);
         TIM2->CR1 &= ~TIM_CR1_OPM;
-        s_running = false;
-        s_stop_gen++;
+        if (s_running) {                             /* halt_hw() already counted and stopped */
+            s_running = false;
+            s_stop_gen++;
+        }
     } else {
         s_cur = s_pre;                               /* the preloaded period is running now */
         r = step_isr();
@@ -244,4 +274,5 @@ void TIM2_IRQHandler(void)
             }
         }
     }
+    MDWT_VAL(MDWT_ISR_STEP, dwt_cycles() - now);      /* HW_MEAS_DWT only (OI-FW-37) */
 }

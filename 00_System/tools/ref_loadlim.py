@@ -7,13 +7,16 @@ Normative behaviour (ICD v0.6 §5.5 "FW load limit"):
 - Every HX711 sample is a *violation* when raw > safety.load_raw_max, raw < safety.load_raw_min, or the sample
   is at a rail (0x7FFFFF / −8 388 608; SAF-FW-009). safety.load_trip_samples consecutive violations trip
   (immediate stop, LOAD_LIMIT latched); a sample inside the thresholds resets the count.
-- FAULT_CLEAR of LOAD_LIMIT is always accepted. The *reference* is the last sample before the clear (its raw
-  value). If that sample is a violation, the **regrow window** opens:
+- FAULT_CLEAR of LOAD_LIMIT is always accepted. Only a FAULT_CLEAR that actually clears a latched LOAD_LIMIT
+  takes a new *reference* = the last sample before the clear (its raw value; 0 if no sample yet) — a FAULT_CLEAR
+  of other faults (or with nothing latched) leaves the load-limit state unchanged (OI-B-M2-03). If the reference
+  sample is a violation, the **regrow window** opens:
   - a violating sample re-trips **immediately** (no trip_samples count) only if it lies more than
     safety.load_regrow_raw beyond the reference on its side (raw > max and raw > ref + regrow, or raw < min and
     raw < ref − regrow); any other violating sample is ignored (unloading allowed) and does not count;
-  - the window **ends** with the first sample inside the thresholds (normal rule from the next sample) or with
-    the next FAULT_CLEAR (new reference); a threshold change (SET_PARAM) does not end it.
+  - the window **ends** with the first sample inside the thresholds (normal rule from the next sample) or with a
+    re-trip (LOAD_LIMIT latched again; its FAULT_CLEAR takes the next reference); a threshold change (SET_PARAM)
+    does not end it.
 - Threshold changes act from the next sample and keep the consecutive count.
 """
 from __future__ import annotations
@@ -34,6 +37,7 @@ class LoadLim:
     ref: int = 0
     last: int = 0
     last_sat: bool = False
+    latched: bool = False             # LOAD_LIMIT latched (a trip latches it, a FAULT_CLEAR clears it)
 
     def config(self, lo: int, hi: int, trip_samples: int, regrow: int) -> None:
         self.lo, self.hi, self.trip_samples, self.regrow = lo, hi, max(1, trip_samples), max(0, regrow)
@@ -56,11 +60,18 @@ class LoadLim:
                 return False
             self.regrow_on = False
             self.count = self.trip_samples
+            self.latched = True
             return True
         self.count += 1
-        return self.count >= self.trip_samples
+        if self.count >= self.trip_samples:
+            self.latched = True
+            return True
+        return False
 
     def fault_clear(self) -> None:
+        if not self.latched:              # nothing to clear for the load limit: state unchanged (OI-B-M2-03)
+            return
+        self.latched = False
         self.count = 0
         self.ref = self.last
         self.regrow_on = self.violates(self.last, self.last_sat)

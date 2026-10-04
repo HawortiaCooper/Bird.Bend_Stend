@@ -42,7 +42,7 @@ import logging
 import struct
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from bend_stand.calc.motion import F_TICK_HZ, Ramp, ctrl_stop_path, steps_to_um, um_to_steps, v_limit_um_s
@@ -136,6 +136,10 @@ class SimConfig:
     true_offset_um: int = 100_000          # world position of the carriage at power-up (machine 0, not homed)
     seed: int = 1
     nvm_path: str | None = None
+    #: flash stall of the NVM commands (ms; MC2-4): commands received meanwhile are answered after it (D-37 a).
+    #: SAVE = sector erase + program, the ICD worst case (≈ 0.5 s, §2.4); LOAD reads, DEFAULTS writes no flash.
+    nvm_stall_ms: dict[str, int] = field(default_factory=lambda: {"SAVE_PARAMS": 500, "LOAD_PARAMS": 5,
+                                                                   "DEFAULT_PARAMS": 2})
 
 
 class SimBoard:
@@ -169,6 +173,9 @@ class SimBoard:
         self.true_offset_um = float(self.cfg.true_offset_um)
         self._pos_override: int | None = None
         self._hung = False
+        self.flash_until_us = 0                     # NVM flash stall (MC2-4)
+        self._flash_resp: tuple[Frame, bytes] | None = None
+        self._rx_backlog: list[Frame] = []
         self.steps = 0
         self.dir_sign = 1
         self.boot(cause=self.cfg.reset_cause, first=True)
@@ -190,6 +197,9 @@ class SimBoard:
         with self._lock:
             if not first:                                 # the carriage does not move on a reset (D-13)
                 self.true_offset_um = self._x_true() - self.world.x_um_true_offset
+            self.flash_until_us = 0                    # a reset ends a flash operation without a response
+            self._flash_resp = None
+            self._rx_backlog = []
             self.boot_ns = self.clock.monotonic_ns()
             self.t0_us = self.cfg.t0_us
             self.reset_cause = int(cause)
@@ -254,8 +264,10 @@ class SimBoard:
                 d.armed = not d.level
             self.alm_filt = self._alm_level()
             self.alm_rel_since: int | None = None
-            sense = bool(self.params["drv.pwr_sense_enable"])
+            self.relatch_boot_params()
+            sense = self.sense_cfg
             self.pwr_filt = self.world.power_present() if (sense and self.has(FE.DRV_SIGNALS)) else True
+            self.unhomed_origin = 0                       # D-43 b: latched when the axis becomes un-homed
             self.pwr_change_since: int | None = None
             self.pwr_on_us = 0
             self.estop_level = self.world.estop_input_open()
@@ -267,6 +279,19 @@ class SimBoard:
                 self.emit(EV.PARAMS_DEFAULTED if img.event == "PARAMS_DEFAULTED" else EV.PARAMS_LOADED, img.arg)
             self.record_seq = img.record_seq
             self.emit(EV.BOOT, self.reset_cause)
+
+    def relatch_boot_params(self) -> None:
+        """``reboot_required`` parameters the FW reads only at boot (``drv.pwr_sense_enable``; CR-03 / D-41: default
+        0 since ICD v0.7, optional 48 V presence sense). Scenarios writing RAM directly call this."""
+        self.sense_cfg = bool(self.params["drv.pwr_sense_enable"])
+        self.k1_cfg = bool(self.params.get("drv.k1_check_enable", True)) and self.sense_cfg   # ICD v0.7 0x0706
+        if not self.sense_cfg:
+            self.pwr_filt = True
+
+    def _unhome(self) -> None:
+        """Axis becomes un-homed: HOMED cleared, un-homed origin latched here (D-43 b)."""
+        self.homed = False
+        self.unhomed_origin = self.steps
 
     def now_us(self) -> int:
         return (self.clock.monotonic_ns() - self.boot_ns) // 1000 + self.t0_us
@@ -342,17 +367,34 @@ class SimBoard:
                 self._drain_rx(discard=True)
                 self._hung = True
                 return
+            if now < self.flash_until_us:            # flash stall: CPU busy, RX stays in the ring, TX held (MC2-4)
+                return
+            if self._flash_resp is not None:         # end of the flash operation
+                fr, resp = self._flash_resp
+                self._flash_resp = None
+                self._resume_after_stall(now)
+                self.overrun_pending = self.overrun_pending or self.stream_on   # missed conversions (FW-NVM-003)
+                self._respond(fr, resp)
             if self._hung:                          # end of a hang: no overdue conversions with old stamps
                 self._hung = False                  # (SWD-M1-11); the main loop resumes at "now"
-                self.afe.schedule_from(now)
-                self.last_tick_us = now
-                m = self.motion
-                if m is not None:
-                    m.t_next_us = max(m.t_next_us, float(now))
+                self._resume_after_stall(now)
             self._run_until(now)
-            self._drain_rx(discard=now < self.link_silence_until_us)
+            while self._rx_backlog and now >= self.flash_until_us:   # frames received during a stall, in order
+                self._on_frame(self._rx_backlog.pop(0))
+                self._emit_done()
+            if now >= self.flash_until_us:
+                self._drain_rx(discard=now < self.link_silence_until_us)
+            if now < self.flash_until_us:            # a flash operation started in this step
+                return
             self._emit_done()
             self._flush()
+
+    def _resume_after_stall(self, now: int) -> None:
+        self.afe.schedule_from(now)
+        self.last_tick_us = now
+        m = self.motion
+        if m is not None:
+            m.t_next_us = max(m.t_next_us, float(now))
 
     def _run_until(self, now: int) -> None:
         """1 ms ticks and HX711 conversions in time order; the axis is advanced to each of them."""
@@ -385,6 +427,9 @@ class SimBoard:
             return
         for fr in self.decoder.feed(data, self.clock.monotonic_ns()):
             self._log_wire("RX", fr.raw)
+            if self.now_us() < self.flash_until_us:
+                self._rx_backlog.append(fr)          # arrived during the flash stall: handled after it
+                continue
             self._on_frame(fr)
             self._emit_done()
 
@@ -489,7 +534,8 @@ class SimBoard:
             afe_stale=self.afe_stale, afe_saturated=self.afe_saturated,
             raw=0 if self.last_raw == pg.AFE_NO_DATA else self.last_raw,
             drv_power=self.pwr_filt, alm_active=self.alm_filt,
-            nvm_record_valid=self.nvm.newest_valid() is not None, paused=self.paused)
+            nvm_record_valid=self.nvm.newest_valid() is not None, paused=self.paused,
+            unhomed_origin_um=steps_to_um(self.unhomed_origin, self.spm))
 
     def load_check_state(self, st: SimCheckState) -> None:
         """Set the live state from a check-vector state (differential replay, §12.5)."""
@@ -535,6 +581,8 @@ class SimBoard:
             self.nvm.save(self.params)
         self.paused = st.paused
         self.pause_src = int(pg.Source.PC) if st.paused else int(pg.Source.NONE)
+        self.unhomed_origin = um_to_steps(int(st.unhomed_origin_um), self.spm)
+        self.loadlim.last = None if st.raw == pg.AFE_NO_DATA else int(st.raw)
 
     def snapshot(self) -> dict[str, Any]:
         """Complete mutable FW state (no-side-effect check of NACKed vectors)."""
@@ -577,10 +625,16 @@ class SimBoard:
         cmd = Cmd(fr.type)
         self._pos_override = None
         body = getattr(self, f"_cmd_{cmd.name.lower()}")(fr.payload)
-        if isinstance(body, tuple):                  # execution error (E_NVM …)
-            self._respond(fr, P.encode_nack(*body))
+        resp = P.encode_nack(*body) if isinstance(body, tuple) else P.encode_ok(body or b"")
+        stall = int(self.cfg.nvm_stall_ms.get(cmd.name, 0)) if cmd.name in ("SAVE_PARAMS", "LOAD_PARAMS",
+                                                                             "DEFAULT_PARAMS") else 0
+        if stall > 0:                                # flash operation: the response follows it (ICD §2.4, D-37 a)
+            self.flash_until_us = now + stall * 1000
+            self._flash_resp = (fr, resp)
+            if cmd == Cmd.SAVE_PARAMS and not isinstance(body, tuple):
+                self.nvm_save_ms = stall
             return
-        self._respond(fr, P.encode_ok(body or b""))
+        self._respond(fr, resp)
 
     def _respond(self, fr: Frame, payload: bytes) -> None:
         ftype = fr.type | pg.RESP_BIT
@@ -669,7 +723,7 @@ class SimBoard:
             return b""
         self.record_seq = rec.seq
         self.nvm_defaulted = False
-        self.nvm_save_ms = 120
+        self.nvm_save_ms = int(self.cfg.nvm_stall_ms.get("SAVE_PARAMS", 0))
         self.nvm_save_uptime_ms = self.uptime_ms()
         self.emit(EV.PARAMS_SAVED, 0, rec.seq)
         return b""
@@ -724,6 +778,7 @@ class SimBoard:
     def _cmd_enable(self, _p: bytes) -> bytes:
         now = self.now_us()
         if self.motion_state == "NOT_ENABLED":
+            self.unhomed_origin = self.steps              # D-43 b: ENABLE after power-up / disable
             settle = int(self.p("motion.ena_settle_ms"))
             self.motion_state = "ENABLING"
             self.ena_disabled = False
@@ -745,7 +800,7 @@ class SimBoard:
     def _disable(self, cause: int) -> None:
         """ENA to the disabled level, NOT_ENABLED, HOMED cleared, DRIVER_DISABLED (if not already)."""
         self.ena_disabled = True
-        self.homed = False
+        self._unhome()
         if self.motion_state != "NOT_ENABLED":
             self.motion_state = "NOT_ENABLED"
             self.emit(EV.DRIVER_DISABLED, cause)
@@ -814,7 +869,15 @@ class SimBoard:
         if self.homed:
             lim = int(self.p("limits.soft_max_um") if d > 0 else self.p("limits.soft_min_um"))
             return um_to_steps(lim, self.spm), "SOFT_LIMIT"
-        return start_steps + d * um_to_steps(int(self.p("home.max_travel_um")), self.spm), "SOFT_LIMIT"
+        # un-homed: within the un-homed origin ± home.max_travel_um (D-43 b), not from each jog start
+        return self.unhomed_origin + d * um_to_steps(int(self.p("home.max_travel_um")), self.spm), "SOFT_LIMIT"
+
+    def unhomed_window_reached(self, d: int) -> bool:
+        """Un-homed: the axis is at (or beyond) the un-homed window end in direction ``d`` (D-43 b)."""
+        if self.homed:
+            return False
+        end = self.unhomed_origin + d * um_to_steps(int(self.p("home.max_travel_um")), self.spm)
+        return (end - self.steps) * d <= 0
 
     def _cmd_jog(self, p: bytes) -> bytes:
         v, a, bound = struct.unpack("<iIi", p)
@@ -829,8 +892,7 @@ class SimBoard:
             m.last_refresh_us = now                      # dead-man refresh (also during a reversal)
             if m.stopping and m.reverse is None:
                 return b""                               # a stop in progress is never undone
-            start = m.start_steps if not self.homed else self.steps
-            end, reason = self._jog_end(d, bound, start)
+            end, reason = self._jog_end(d, bound, self.steps)
             if d != m.direction or m.reverse is not None:  # reversal: decelerate to zero first, then restart
                 m.reverse = (d, end, float(abs(v)), self._a(a), reason)   # (motion state stays JOG)
                 if not m.stopping:
@@ -867,7 +929,10 @@ class SimBoard:
             end = self.steps + um_to_steps(int(pg.HOME_RELEASE_MAX_UM), spm)
             v = v_slow
         elif phase == "FAST_SEEK":
-            end = self.steps - um_to_steps(int(self.p("home.max_travel_um")), spm)
+            base = self.steps if self.homed else self.unhomed_origin      # un-homed: origin window (D-43 b)
+            end = base - um_to_steps(int(self.p("home.max_travel_um")), spm)
+            if (end - self.steps) >= 0:
+                end = self.steps - 1                       # window end already reached: NOT_FOUND at once
             v = v_fast
         elif phase == "SLOW_APPROACH":
             end = self.steps - um_to_steps(int(self.p("home.backoff_um")) + int(pg.HOME_SLOW_EXTRA_UM), spm)
@@ -912,7 +977,7 @@ class SimBoard:
     def _home_fail(self, reason: int, fault: str | None) -> None:
         """Homing failure: CLEAN halt, HOMED cleared, FAULT (not for ABORTED), HOME_FAILED, STOPPED, MOVE_DONE."""
         self._clean_halt_position()
-        self.homed = False
+        self._unhome()
         self.home_phase = int(pg.HomePhase.DONE)
         if fault is not None:
             self._fault(fault, self.pos_um, self.pos_steps)
@@ -990,7 +1055,8 @@ class SimBoard:
         for i, name in enumerate(pg.FAULTS_BITS):
             if self.faults_mask >> i & 1 and (name not in causes or name == "LOAD_LIMIT"):
                 cleared |= 1 << i
-        self.loadlim.fault_clear()                     # SAF-FW-011 / D-40 d: every clear takes a new reference
+        if cleared & FA.LOAD_LIMIT:
+            self.loadlim.fault_clear()                 # SAF-FW-011 / D-40 d: only a LOAD_LIMIT clear takes a reference
         self.faults_mask &= ~cleared
         self.forced_causes = None
         if cleared:
@@ -1005,7 +1071,7 @@ class SimBoard:
             out.append("AFE_FAULT")
         if self._input_level("start") and self._input_level("end"):
             out.append("LIMIT_WIRING")
-        if bool(self.p("drv.pwr_sense_enable")) and self.has(FE.DRV_SIGNALS) and self.estop_level and self.pwr_filt:
+        if self.k1_cfg and self.has(FE.DRV_SIGNALS) and self.estop_level and self.pwr_filt:
             out.append("K1_WELDED")
         return out
 
@@ -1046,7 +1112,7 @@ class SimBoard:
             return
         self._clean_halt_position(truncate=truncate)
         if m.kind == "HOMING":
-            self.homed = False
+            self._unhome()
             self.home_phase = int(pg.HomePhase.DONE)
             self.emit(EV.HOME_FAILED, int(pg.HomeFailReason.ABORTED), self.pos_um, self.pos_steps)
         self.emit(EV.STOPPED, cause, self.pos_um, self.pos_steps)
@@ -1076,12 +1142,22 @@ class SimBoard:
         m.ramp.stop(a_stop)
         self.motion_state = "STOPPING"
 
+    def driver_energised(self) -> bool:
+        """Driver holds / follows pulses: MCU ENA enabled **and** not cut by the E-stop's hardwired NO contact
+        (D-42, independent of the MCU)."""
+        cut = self.world.ena_hardwired_cut and self.world.estop_input_open()
+        return not self.ena_disabled and not cut
+
     def _advance_axis(self, t_us: float) -> None:
-        """Execute every step completed up to ``t_us`` (per-step switch checks, leg ends)."""
+        """Execute every step completed up to ``t_us`` (per-step switch checks, leg ends). Pulses into a
+        de-energised driver are counted by the FW but do not move the carriage (lost steps)."""
         m = self.motion
+        lost = m is not None and not self.driver_energised()
         while m is not None and m.t_next_us <= t_us:
             self.steps += m.direction
             self.pulses += 1
+            if lost:
+                self.true_offset_um -= self.dir_sign * m.direction * 1000.0 / self.spm
             if self._step_switches(m):
                 m = self.motion
                 continue
@@ -1222,7 +1298,7 @@ class SimBoard:
 
     # ============================================================================== 1 ms FW tick
     def _tick_1ms(self, t_us: int) -> None:
-        sense = bool(self.p("drv.pwr_sense_enable")) and self.has(FE.DRV_SIGNALS)
+        sense = self.sense_cfg and self.has(FE.DRV_SIGNALS)
         # E-stop sense (act on the edge; HAL TRUNCATE + ENA disabled)
         lvl = self.world.estop_input_open()
         if lvl and not self.estop_level:
@@ -1253,7 +1329,7 @@ class SimBoard:
         else:
             self.pwr_filt = True
         # K1 weld (SAF-FW-025)
-        if sense and self.estop_level and self.pwr_filt:
+        if sense and self.k1_cfg and self.estop_level and self.pwr_filt:
             if self.k1_since_us is None:
                 self.k1_since_us = t_us
             elif t_us - self.k1_since_us >= int(self.p("drv.k1_weld_ms")) * 1000 and \
@@ -1541,7 +1617,7 @@ class SimBoard:
             self._fault("STEP_FAULT", self.pos_um, self.pos_steps)
             if self.motion is not None:
                 self._immediate_stop(int(SC.STEP_FAULT))
-            self.homed = False
+            self._unhome()
             self.pos_uncertain = True
             self._clear_valid(int(SC.STEP_FAULT))
             self._emit_done()

@@ -81,7 +81,7 @@
 # =====================================================================================
 
 schema_version: 1
-dict_version: 4
+dict_version: 5
 # dict_version history:
 #   1  ICD v0.1 — initial 48 parameters
 #   2  ICD v0.2 — D-29: home.ref_switch (0x0401) removed (homing only at START, D-29b);
@@ -93,6 +93,10 @@ dict_version: 4
 #                 motion.steps_per_mm default 160 -> 800 (4000 p/rev, closed loop).
 #   4  ICD v0.5 — CR-01 / D-36: io.stop_active_level (0x0603) retired (no physical holding STOP
 #                 button; the red button is the E-stop) -> 47 parameters.
+#   5  ICD v0.7 — CR-03 / D-41: drv.pwr_sense_enable default true -> false (no power-removal contactor;
+#                 the driver-power sense is an optional 48 V presence input); SRS OI-18: new
+#                 drv.k1_check_enable (0x0706, bool, default false, reboot) gates the K1_WELDED check
+#                 -> 48 parameters.
 
 retired_ids: [0x0401, 0x0603]   # home.ref_switch (dict_version 1), io.stop_active_level (dict_version 3)
 
@@ -514,8 +518,9 @@ groups:
         default: 360000
         moving_ok: false
         description: >-
-          No switch within this travel -> HOME_NOT_FOUND. Also bounds un-homed JOG travel
-          from its start point.
+          No switch within this travel -> HOME_NOT_FOUND. Also bounds un-homed JOG / HOME travel
+          to the un-homed origin ± this value (D-43 b: origin latched when the axis became
+          un-homed; a JOG toward a reached bound -> E_RANGE until homed).
         srs: [FW-HOM-002, FW-MOT-005, FW-PAR-004]
 
       - id_off: 0x08
@@ -778,17 +783,17 @@ groups:
         name: pwr_sense_enable
         label: Driver power sense
         type: bool
-        default: true
+        default: false
         moving_ok: false
         reboot_required: true
         description: >-
-          true = the DRV_POWER input (PA7, E-stop contactor aux contact, closed = powered,
-          fixed fail-safe polarity, D-28) is evaluated: power off -> immediate stop, not
+          OPTIONAL since CR-03 / D-41 (no power-removal device in release 1; default false): true =
+          the DRV_POWER input (PA7, optional 48 V presence sense, closed = powered, fixed fail-safe
+          polarity, D-28) is evaluated: power off -> immediate stop, not
           enabled, not homed, motion refused (E_STATE DRV_UNPOWERED); after power returns
-          ENABLE waits motion.ena_settle_ms; E-stop sense open while power stays on for
-          drv.k1_weld_ms -> fault K1_WELDED (D-29c). false = bring-up without the contactor
-          wiring only: the input is ignored, status DRV_PWR reads 1 (power assumed present)
-          and K1_WELDED is never detected.
+          ENABLE waits motion.ena_settle_ms; the K1_WELDED check additionally needs
+          drv.k1_check_enable (SRS OI-18). false (default): the input is ignored, status DRV_PWR
+          reads 1 (power assumed present) and K1_WELDED is never detected.
         srs: [SAF-FW-005, D-28, D-29, R5 §1.5]
 
       - id_off: 0x05
@@ -801,12 +806,28 @@ groups:
         default: 200
         moving_ok: false
         description: >-
-          With drv.pwr_sense_enable, the E-stop sense input open while the DRV_POWER input
+          With drv.pwr_sense_enable and drv.k1_check_enable, the E-stop sense input open while the DRV_POWER input
           still reports power continuously for longer than this time latches fault K1_WELDED
-          (contactor K1 welded or aux contact miswired; D-29c, R5 §1.5). Must exceed the
-          contactor drop-out time incl. the aux-contact delay. Minimum 100 ms (DILM7-class
+          (power-removal device stuck closed or its feedback miswired; D-29c, R5 §1.5). Must exceed
+          the device's opening time incl. the feedback delay. Minimum 100 ms (DILM7-class
           drop-out plus margin).
         srs: [SAF-FW-005, D-29, R5 §1.5]
+
+      - id_off: 0x06
+        name: k1_check_enable
+        label: K1 weld check
+        type: bool
+        default: false
+        moving_ok: false
+        reboot_required: true
+        description: >-
+          SRS OI-18 (CR-03 / D-41): true = the K1_WELDED check runs (E-stop sense open while
+          DRV_POWER stays present > drv.k1_weld_ms -> fault K1_WELDED); only effective together
+          with drv.pwr_sense_enable, and only meaningful with a power-removal device whose feedback
+          contact feeds DRV_POWER. false (default, release 1 has no such device): DRV_POWER present
+          during an E-stop is only reported (status DRV_PWR, EVENT DRIVER_POWER), never a fault —
+          otherwise a plain 48 V presence sense would latch K1_WELDED on every E-stop.
+        srs: [SAF-FW-005, D-29, D-41, CR-03]
 
   # --------------------------------------------------------------------------------
   - group: stream

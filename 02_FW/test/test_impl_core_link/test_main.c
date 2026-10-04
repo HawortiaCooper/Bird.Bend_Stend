@@ -164,44 +164,45 @@ static void test_motion_gating_and_reboot_params(void)
 {
     uint8_t mv[12] = {0};
     uint8_t jog0[12] = {0};
-    uint8_t home[1] = {0u};
-    /* boot: not enabled / not homed; driver power lost (input high = K1 open) -> DRV_UNPOWERED */
+    /* ICD v0.7 / D-41: drv.pwr_sense_enable default 0 -> an unwired / "off" PA7 is ignored: DRV_PWR
+     * reads 1, no DRV_UNPOWERED refusal */
     le_put32(mv, 100000u);
     le_put32(&mv[4], 1000u);
     h_expect_nack(h_cmd(CMD_MOVE_ABS, 1u, mv, 12u), ST_E_STATE, BLOCK_NOT_ENABLED | BLOCK_NOT_HOMED);
-    fake_input_set(IO_DRV_PWR_BIT, true);
+    fake_input_set(IO_DRV_PWR_BIT, true);                     /* input reads "off" */
     fake_run_ms(DRV_PWR_FILTER_MS + 1u);
-    h_expect_nack(h_cmd(CMD_MOVE_ABS, 1u, mv, 12u), ST_E_STATE,
-                  BLOCK_NOT_ENABLED | BLOCK_NOT_HOMED | BLOCK_DRV_UNPOWERED);
-    h_expect_nack(h_cmd(CMD_ENABLE, 2u, NULL, 0u), ST_E_STATE, BLOCK_DRV_UNPOWERED);
+    h_expect_nack(h_cmd(CMD_MOVE_ABS, 1u, mv, 12u), ST_E_STATE, BLOCK_NOT_ENABLED | BLOCK_NOT_HOMED);
+    TEST_ASSERT_EQUAL_HEX16(DS_DRV_PWR, le_get16(&h_status().b[10]) & DS_DRV_PWR);
     h_expect_ok(h_cmd(CMD_JOG, 3u, jog0, 12u));               /* JOG 0: OK no-op */
     /* DEF-M1-01: drv.pwr_sense_enable is reboot_required - the old behaviour stays until SAVE +
      * REBOOT (REBOOT_PENDING meanwhile); the same holds for pul_invert / ena_invert */
-    h_set_param(PID_DRV_PWR_SENSE_ENABLE, PARAM_T_BOOL, 0u);
+    h_set_param(PID_DRV_PWR_SENSE_ENABLE, PARAM_T_BOOL, 1u);
     h_set_param(PID_MOTION_PUL_INVERT, PARAM_T_BOOL, 1u);
     h_set_param(PID_MOTION_ENA_INVERT, PARAM_T_BOOL, 1u);
     {
         h_status_t s = h_status();
         TEST_ASSERT_EQUAL_HEX8(SYSF_REBOOT_PENDING, s.b[19] & SYSF_REBOOT_PENDING);
-        TEST_ASSERT_EQUAL_HEX16(0u, le_get16(&s.b[10]) & DS_DRV_PWR);
+        TEST_ASSERT_EQUAL_HEX16(DS_DRV_PWR, le_get16(&s.b[10]) & DS_DRV_PWR);
     }
-    h_expect_nack(h_cmd(CMD_ENABLE, 7u, NULL, 0u), ST_E_STATE, BLOCK_DRV_UNPOWERED);
     TEST_ASSERT_TRUE(g_fw.p.motion.pul_invert && !g_fw.boot_p.motion.pul_invert);
     TEST_ASSERT_FALSE(params_rt_effective()->motion.ena_invert);
-    TEST_ASSERT_FALSE(params_rt_effective()->drv.pwr_sense_enable == false);
+    TEST_ASSERT_FALSE(params_rt_effective()->drv.pwr_sense_enable);
     h_expect_ok(h_cmd(CMD_SAVE_PARAMS, 8u, NULL, 0u));
     fake_run_ms(2);
     h_reboot();
-    {
-        h_status_t s = h_status();
-        TEST_ASSERT_EQUAL_HEX8(0u, s.b[19] & SYSF_REBOOT_PENDING);
-        TEST_ASSERT_EQUAL_HEX16(DS_DRV_PWR, le_get16(&s.b[10]) & DS_DRV_PWR);
-    }
+    TEST_ASSERT_EQUAL_HEX8(0u, h_status().b[19] & SYSF_REBOOT_PENDING);
     TEST_ASSERT_TRUE(g_fw.boot_p.motion.pul_invert && g_fw.boot_p.motion.ena_invert);
-    /* driver-power sensing disabled (bring-up): power assumed present -> ENABLE accepted */
-    fake_input_set(IO_DRV_PWR_BIT, true);                     /* input still reads "off" */
+    TEST_ASSERT_TRUE(g_fw.boot_p.drv.pwr_sense_enable);
+    /* sensing enabled (optional 48 V presence input): input off -> DRV_UNPOWERED */
+    fake_input_set(IO_DRV_PWR_BIT, true);
     fake_run_ms(DRV_PWR_FILTER_MS + 1u);
-    h_expect_nack(h_cmd(CMD_HOME, 6u, home, 1u), ST_E_STATE, BLOCK_NOT_ENABLED);
+    TEST_ASSERT_EQUAL_HEX16(0u, le_get16(&h_status().b[10]) & DS_DRV_PWR);
+    h_expect_nack(h_cmd(CMD_MOVE_ABS, 1u, mv, 12u), ST_E_STATE,
+                  BLOCK_NOT_ENABLED | BLOCK_NOT_HOMED | BLOCK_DRV_UNPOWERED);
+    h_expect_nack(h_cmd(CMD_ENABLE, 2u, NULL, 0u), ST_E_STATE, BLOCK_DRV_UNPOWERED);
+    h_expect_ok(h_cmd(CMD_JOG, 3u, jog0, 12u));
+    fake_input_set(IO_DRV_PWR_BIT, false);                    /* powered */
+    fake_run_ms(DRV_PWR_FILTER_MS + 1u);
     {
         const fake_frame_t *r = h_cmd(CMD_ENABLE, 4u, NULL, 0u);
         h_expect_ok(r);
@@ -231,7 +232,7 @@ static void test_effective_overlay_from_generated_flags(void)
         param_set_raw(&g_fw.p, m, m->def_raw);
         TEST_ASSERT_FALSE(params_rt_reboot_pending());
     }
-    TEST_ASSERT_EQUAL_UINT16(3u, n);
+    TEST_ASSERT_EQUAL_UINT16(4u, n);                  /* + drv.k1_check_enable (ICD v0.7) */
 }
 
 static void test_halt_pause_resume_flow(void)

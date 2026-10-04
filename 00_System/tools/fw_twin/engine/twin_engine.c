@@ -378,6 +378,7 @@ static void cmd_query(void)
     tw_out("Y now %llu", (unsigned long long)T.now);
     tw_out("Y fw_t_us %lu", (unsigned long)tw_fw_us(T.now));
     tw_out("Y x_um_true %.3f", tw_x_um());
+    tw_meas_noinit_y();
     tw_out("Y pos_steps %ld", (long)T.count);
     tw_out("Y world_steps %lld", (long long)T.wsteps);
     tw_out("Y dir_level %d", T.dir_level);

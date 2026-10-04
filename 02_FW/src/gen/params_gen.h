@@ -1,7 +1,7 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/params.yaml (dict_version 4, schema 1)
+ * Source : 00_System/specs/params.yaml (dict_version 5, schema 1)
  * Tool   : 00_System/tools/gen_params.py
- * Hash   : PARAM_DICT_HASH = 0xFCC54C90
+ * Hash   : PARAM_DICT_HASH = 0xB7B0263F
  * Implements: FW-CFG-001, IF-010
  */
 #ifndef PARAMS_GEN_H
@@ -19,10 +19,10 @@ extern "C" {
 #define PARAMS_GEN_WITH_KEYS 1
 #endif
 
-#define PARAM_DICT_HASH       0xFCC54C90UL
-#define PARAM_DICT_VERSION    4u
+#define PARAM_DICT_HASH       0xB7B0263FUL
+#define PARAM_DICT_VERSION    5u
 #define PARAM_SCHEMA_VERSION  1u
-#define PARAM_COUNT           47u
+#define PARAM_COUNT           48u
 
 /* Wire type codes (ICD §7.5). */
 typedef enum {
@@ -95,6 +95,7 @@ typedef enum {
     PID_DRV_PEND_TIMEOUT_MS            = 0x0703, /* u16 */
     PID_DRV_PWR_SENSE_ENABLE           = 0x0704, /* bool */
     PID_DRV_K1_WELD_MS                 = 0x0705, /* u16 */
+    PID_DRV_K1_CHECK_ENABLE            = 0x0706, /* bool */
     PID_STREAM_FALLBACK_HZ             = 0x0801, /* u8 */
 } param_id_t;
 
@@ -191,6 +192,7 @@ typedef struct {
     uint16_t  pend_timeout_ms; /* ms */
     bool      pwr_sense_enable;
     uint16_t  k1_weld_ms; /* ms */
+    bool      k1_check_enable;
 } params_drv_t;
 
 typedef struct {

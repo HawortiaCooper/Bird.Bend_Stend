@@ -46,7 +46,7 @@
 #define PIN_RATE_BIT     5u
 
 /* outputs */
-#define PIN_TRIP_PORT    GPIOB   /* PB9  provision only, never high in release 1 */
+#define PIN_TRIP_PORT    GPIOB   /* PB9  retired with the contactor (D-41): driven low, nothing connected */
 #define PIN_TRIP_BIT     9u
 #define PIN_LED_PORT     GPIOA   /* PA5  LD2 */
 #define PIN_LED_BIT      5u

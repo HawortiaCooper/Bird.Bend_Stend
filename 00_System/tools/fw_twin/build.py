@@ -73,14 +73,33 @@ def exe_path(core: str, build_dir: Path) -> Path:
     return build_dir / ("fw_twin.exe" if core == "fw" else "fw_twin_probe.exe")
 
 
-def needs_build(core: str, build_dir: Path = HERE / "build") -> bool:
-    exe = exe_path(core, build_dir)
-    if not exe.exists():
-        return True
-    t = exe.stat().st_mtime
+def _inputs(core: str) -> list[Path]:
     hdrs = [p for d in (FW / "src", FW / "include", HERE / "engine", HERE / "contract", HERE / "probe")
             if d.exists() for p in d.rglob("*.h")]
-    return any(p.stat().st_mtime > t for p in sources(core) + hdrs + [Path(__file__)])
+    return sorted(set(sources(core) + hdrs + [Path(__file__)]))
+
+
+def _fingerprint(core: str) -> str:
+    """Path, size and mtime (ns) of every build input. Taken *before* compiling and stored next to the exe, so a
+    source written by another role while gcc runs (A and C work in parallel) makes the next call rebuild — an
+    exe-mtime comparison misses that case (v0.7: a stale twin binary)."""
+    import hashlib
+    h = hashlib.sha1()
+    for p in _inputs(core):
+        st = p.stat()
+        h.update(f"{p}|{st.st_size}|{st.st_mtime_ns};".encode())
+    return h.hexdigest()
+
+
+def _stamp(core: str, build_dir: Path) -> Path:
+    return build_dir / f"build_{core}.stamp"
+
+
+def needs_build(core: str, build_dir: Path = HERE / "build") -> bool:
+    exe, stamp = exe_path(core, build_dir), _stamp(core, build_dir)
+    if not exe.exists() or not stamp.exists():
+        return True
+    return stamp.read_text(encoding="ascii").strip() != _fingerprint(core)
 
 
 # ---------------------------------------------------------------------------------------------- seams
@@ -172,6 +191,8 @@ def build(core: str = "auto", build_dir: Path = HERE / "build", quiet: bool = Fa
            *[f"-I{p}" for p in inc if p.exists()], *[str(s) for s in sources(core)], "-o", str(exe), "-lm", "-lws2_32"]
     env = dict(os.environ)
     env["PATH"] = str(Path(gcc).parent) + os.pathsep + env.get("PATH", "")
+    fp = _fingerprint(core)                        # before compiling (see _fingerprint)
+    _stamp(core, build_dir).unlink(missing_ok=True)
     r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     log = build_dir / f"build_{core}.log"
     seams = check_seams()
@@ -187,6 +208,7 @@ def build(core: str = "auto", build_dir: Path = HERE / "build", quiet: bool = Fa
     if not quiet:
         warn = r.stderr.count("warning:")
         print(f"fw_twin build OK: {exe.relative_to(REPO)} (core {core}, seams from {hal_src}, {warn} warnings), log {log.relative_to(REPO)}")
+    _stamp(core, build_dir).write_text(fp, encoding="ascii")
     return exe
 
 

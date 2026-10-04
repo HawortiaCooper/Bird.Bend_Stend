@@ -4,7 +4,8 @@ signals as plain world state. Deterministic (seeded RNG); time in µs of the boa
 HX711 rate × (1 + ε), noise, offset (default 50 000 counts, SWD-P1-15), rails / saturate, stall, dropped /
 missed conversions, verbatim raw script; linear-spring / bilinear specimen with break and relaxation (M2);
 world inputs: E-stop sense (NC), limit switches by position (world coordinates) or forced, PAUSE button with
-its contact type (NO default), ALM / PEND (logical driver outputs), driver supply (K1), broken wires; scheduled
+its contact type (NO default), ALM / PEND (logical driver outputs), driver supply (optional 48 V presence sense, D-41: no contactor), the hardwired ENA cut of the
+E-stop (D-42), broken wires; scheduled
 contact bounce is applied by ``SimControl`` (M2, WP-B12). D-36 / CR-01 (ICD v0.5): there is no STOP/BREAK
 button input any more.
 
@@ -135,6 +136,7 @@ class World:
     pend: bool = True
     broken: set[str] = field(default_factory=set)
     x_um_true_offset: int = 0          # world_shift (lost steps)
+    ena_hardwired_cut: bool = True     # D-42: the E-stop's NO contact forces the driver ENA to disabled
     specimen: Specimen = field(default_factory=Specimen)
 
     def limit_start(self, x_true_um: float) -> bool:

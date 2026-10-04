@@ -150,7 +150,8 @@ void safety_init(void)
         relf_init(&g_fw.in.lim_rel[i], active_of(raw, (uint8_t)(IO_LIMIT_START_BIT + i)));
     }
     btn_init(&g_fw.in.pause, active_of(raw, (uint8_t)IO_PAUSE_BTN_BIT));   /* no press at boot */
-    drvmon_init(&g_fw.in.drv, g_fw.boot_p.drv.pwr_sense_enable, pwr, active_of(raw, (uint8_t)IO_ALM_BIT));
+    drvmon_init(&g_fw.in.drv, g_fw.boot_p.drv.pwr_sense_enable, g_fw.boot_p.drv.k1_check_enable, pwr,
+                active_of(raw, (uint8_t)IO_ALM_BIT));
     g_fw.in.pend = active_of(raw, (uint8_t)IO_PEND_BIT);
     /* ENA boot rule (ICD §6.4, OI-FW-22): disabled if the E-stop is open or (sense on and power off),
      * else left at the "no current" level = holding (D-13) */

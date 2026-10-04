@@ -1,4 +1,9 @@
-/* FW host twin — model of the HW_MEAS diagnostic seam (seam v1.3 hal_meas_cmd, ICD v0.6 Appendix C).
+/* FW host twin — model of the HW_MEAS diagnostic seam (seam v1.3 hal_meas_cmd, ICD v0.7 Appendix C).
+ * v0.7 (REQ-C-M2-12, OI-FW-38): aligned to A's target meas_f4.c — NOINIT magic set at boot when invalid (block
+ * cleared), w2 = heartbeat of the last 10 kHz DMA update (not the time of the read), ring 2048, stimulus clock
+ * 10 MHz, PROBE_READ w5 = PUL stamps since arming, TRIGGERED = probe counter running (not in PWM_INPUT),
+ * STATIC_LEVEL only with the step timer stopped. Not modelled: the stamp rings surviving a reset (the twin
+ * carries only magic / last PUL / hang across a reset).
  * Owner: Integrator. Implements: REQ-C-M2-08 (Validator E dry runs of hil_*.py before the HW gate), D-40c.
  *
  * Without --hw-meas 1 the seam answers 0 (= no HW_MEAS in this build, like the release image): the core
@@ -8,8 +13,8 @@
  *   MT-3 probe    = probe timer at 180 MHz / (PSC + 1), 16 bit, started (TRIGGER) / restarted (RESET) by the
  *                   selected event source, captures of the last PUL rising edge, ENA and DIR edges after the
  *                   event; PWM_INPUT = min / max PUL period and high time (probe ticks) since arming
- *   MT-4 stamps   = t_us rings (4096 per channel) of EVT (selected source), PUL (rising), DIR, AUX (unused: 0)
- *   .noinit       = last PUL t_us, heartbeat (t_us now), hang start t_us; survives a twin reset (twin.py
+ *   MT-4 stamps   = t_us rings (2048 per channel) of EVT (selected source), PUL (rising), DIR, AUX (unused: 0)
+ *   .noinit       = last PUL t_us, heartbeat (t_us floored to the 100 µs DMA update), hang start t_us; survives a twin reset (twin.py
  *                   passes it back with --noinit)
  *   STIM_RUN      = forwarded to twin.py ("M stim ..."), which toggles the selected input at seeded times
  *   HANG          = the twin's hang model (main / tick / isr1) for a duration
@@ -22,7 +27,9 @@
 
 #include "twin_internal.h"
 
-#define RING 4096u
+#define RING 2048u
+#define STIM_HZ 10000000u
+#define MEAS_MAGIC 0x4D454153u
 #define PROBE_HZ 180000000.0
 
 typedef struct { uint32_t v[RING]; uint32_t n; } ring_t;
@@ -35,7 +42,7 @@ static struct {
     bool armed, triggered, ovf, before;
     uint8_t src; uint8_t mode; bool falling; uint32_t psc;
     vt_t t_evt;
-    uint32_t ccr2, ccr3, ccr4, pul_caps;
+    uint32_t ccr2, ccr3, ccr4, pul_at_arm;
     vt_t last_rise, last_fall; bool have_rise;
     uint32_t pwm_min_p, pwm_max_p, pwm_min_h, pwm_max_h, pwm_n;
     /* noinit */
@@ -50,11 +57,21 @@ void tw_meas_init(bool on, uint32_t ni_magic, uint32_t ni_last_pul, uint32_t ni_
     M.on = on;
     M.static_pin = -1;
     M.ni_magic = ni_magic; M.ni_last_pul = ni_last_pul; M.ni_hang = ni_hang;
+    if (on && M.ni_magic != MEAS_MAGIC) {             /* meas_start(): invalid block -> cleared, magic set */
+        M.ni_magic = MEAS_MAGIC; M.ni_last_pul = 0; M.ni_hang = 0;
+    }
 }
+
+static uint32_t heartbeat(void) { uint32_t t = tw_fw_us(T.now); return t - t % 100u; }   /* 10 kHz DMA copy */
 
 void tw_meas_noinit_out(void)                     /* for twin.py at a reset: carried into the next boot */
 {
     tw_out("N %lx %lu %lu", (unsigned long)M.ni_magic, (unsigned long)M.ni_last_pul, (unsigned long)M.ni_hang);
+}
+
+void tw_meas_noinit_y(void)                       /* for twin.py before an externally requested reset */
+{
+    tw_out("Y noinit %lx:%lu:%lu", (unsigned long)M.ni_magic, (unsigned long)M.ni_last_pul, (unsigned long)M.ni_hang);
 }
 
 static void push(unsigned ch, uint32_t t_us) { M.ch[ch].v[M.ch[ch].n % RING] = t_us; M.ch[ch].n++; }
@@ -72,7 +89,7 @@ static void event(void)
     if (!M.armed || M.mode == 2u) return;
     if (M.mode == 0u && M.triggered) return;          /* TRIGGER: single shot */
     M.triggered = true; M.t_evt = T.now; M.ovf = false;
-    M.ccr2 = M.ccr3 = M.ccr4 = 0; M.pul_caps = 0;
+    M.ccr2 = M.ccr3 = M.ccr4 = 0;
 }
 
 /* hooks from the engine */
@@ -92,7 +109,7 @@ void tw_meas_edge(const char *pin, int level)
                 M.last_rise = T.now; M.have_rise = true;
             } else if (M.armed && M.triggered) {
                 uint32_t c = probe_ticks(T.now);
-                if (!M.ovf) { M.ccr2 = c; M.pul_caps++; }
+                if (!M.ovf) M.ccr2 = c;
             } else if (M.armed && !M.triggered) {
                 M.before = true;
             }
@@ -145,18 +162,18 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
     switch (op) {
     case 0:                                                      /* INFO */
         put32(resp, 0, 0x1u | 0x4u); put32(resp, 1, 180000000u); put32(resp, 2, 32u); put32(resp, 3, 1000000u);
-        put32(resp, 4, RING); put32(resp, 5, 0u); put32(resp, 6, 0u); put32(resp, 7, 90000000u);
+        put32(resp, 4, RING); put32(resp, 5, 0u); put32(resp, 6, 0u); put32(resp, 7, STIM_HZ);
         break;
     case 1:                                                      /* PROBE_ARM */
         M.armed = true; M.triggered = false; M.ovf = false; M.before = false; M.have_rise = false;
         M.src = sel; M.mode = (uint8_t)(a & 3u); M.falling = (a & 0x100u) != 0u; M.psc = b;
-        M.ccr2 = M.ccr3 = M.ccr4 = 0; M.pul_caps = 0; M.pwm_n = 0;
+        M.ccr2 = M.ccr3 = M.ccr4 = 0; M.pul_at_arm = M.ch[1].n; M.pwm_n = 0;
         M.pwm_min_p = M.pwm_max_p = M.pwm_min_h = M.pwm_max_h = 0;
         break;
     case 2: {                                                    /* PROBE_READ */
-        uint32_t fl = (M.armed ? 1u : 0u) | (M.triggered ? 2u : 0u) | (M.ovf ? 8u : 0u) | (M.before ? 16u : 0u);
+        uint32_t fl = (M.armed ? 1u : 0u) | (M.triggered && M.mode != 2u ? 2u : 0u) | (M.ovf ? 8u : 0u) | (M.before ? 16u : 0u);
         put32(resp, 0, fl); put32(resp, 1, 0u); put32(resp, 2, M.ccr2); put32(resp, 3, M.ccr3); put32(resp, 4, M.ccr4);
-        put32(resp, 5, M.pul_caps); put32(resp, 6, M.triggered && !M.ovf ? probe_ticks(T.now) : 0u); put32(resp, 7, M.psc);
+        put32(resp, 5, M.ch[1].n - M.pul_at_arm); put32(resp, 6, M.triggered && !M.ovf ? probe_ticks(T.now) : 0u); put32(resp, 7, M.psc);
         put32(resp, 8, M.pwm_min_p); put32(resp, 9, M.pwm_max_p); put32(resp, 10, M.pwm_min_h);
         put32(resp, 11, M.pwm_max_h); put32(resp, 12, M.pwm_n);
         break;
@@ -175,8 +192,8 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
         break;
     }
     case 5:                                                      /* NOINIT */
-        put32(resp, 0, M.ni_magic); put32(resp, 1, M.ni_last_pul); put32(resp, 2, tw_fw_us(T.now)); put32(resp, 3, M.ni_hang);
-        if (sel == 1u) { M.ni_magic = 0x4D454153u; M.ni_last_pul = 0; M.ni_hang = 0; }
+        put32(resp, 0, M.ni_magic); put32(resp, 1, M.ni_last_pul); put32(resp, 2, heartbeat()); put32(resp, 3, M.ni_hang);
+        if (sel == 1u) { M.ni_magic = MEAS_MAGIC; M.ni_last_pul = 0; M.ni_hang = 0; memset(M.ch, 0, sizeof M.ch); }
         break;
     case 6:                                                      /* STIM_RUN -> twin.py schedules the pulses */
         tw_out("M stim %u %u %u %lu %u %lu", (unsigned)M.src, (unsigned)(sel & 1u), (unsigned)(sel >> 1), (unsigned long)a,
@@ -190,6 +207,7 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
     }
     case 8:                                                      /* STATIC_LEVEL */
         tw_meas_release_static();
+        if (T.step_running) break;                               /* target: acts only with TIM2 stopped */
         M.static_pin = sel;
         tw_edge(sel == 0u ? "PUL" : "DIR", a ? 1 : 0);
         break;

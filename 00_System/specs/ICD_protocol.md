@@ -2,11 +2,11 @@
 
 | Doc | ICD_protocol |
 |---|---|
-| Version | **0.6 — M2 entry (D-40, Validator E M2 requests)** (change history §15) |
+| Version | **0.7 — M2 close-out (CR-03, D-41…D-43)** (change history §15) |
 | Date | 2026-10-03 |
 | Owner | Implementer C — Integrator (changes only with a version bump + change-history entry, IF-001) |
-| Implements | SRS v0.5: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34, D-36, D-37, D-40; FW_test_plan v0.3 §6.4 / §8.4 (REQ-C-M2-01…11); SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
-| Protocol | **PROTO_VERSION 1.0**, **PAYLOAD_VERSION 1**, dictionary `params.yaml` dict_version 4 (hash in Appendix A) |
+| Implements | SRS v0.6: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34, D-36, D-37, D-40…D-43; FW_test_plan v0.3 §6.4 / §8.4 (REQ-C-M2-01…11); SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
+| Protocol | **PROTO_VERSION 1.0**, **PAYLOAD_VERSION 1**, dictionary `params.yaml` dict_version 5 (hash in Appendix A) |
 | Machine-readable companions | `00_System/specs/protocol.yaml` (names and codes, §0.3, Appendix B), `00_System/specs/params.yaml` (parameters, Appendix A), `00_System/tools/ref_codec.py` (codec oracle), `ref_cmdcheck.py` (acceptance oracle), `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json`, `vectors/motion_vectors.json`, `vectors/loadlim_vectors.json` (§12) |
 | Origin | framing, CRC, parser, PARAM_ENTRY, NVM and versioning rules follow Thrust_Stand_HAW `00_System/specs/ICD_protocol.md` @9473c68 (trimmed per R3 §1.6) |
 
@@ -283,7 +283,7 @@ Generated from `protocol.yaml` table `block` (C `BLOCK_*`, Python `Block`).
 | 5 | `LIMIT` | motion toward an active or latched limit switch (direction = sign(target − x) or sign(v)); only motion away is accepted while latched (D-33h) |
 | 6 | `AFE_STALE` | no HX711 sample for afe.timeout_ms |
 | 7 | `AFE_SATURATED` | last HX711 sample at a rail |
-| 8 | `DRV_UNPOWERED` | drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c) |
+| 8 | `DRV_UNPOWERED` | only with the optional power sense (drv.pwr_sense_enable, default 0 since CR-03 / D-41): the DRV_POWER input reads 'off' (D-28, D-29c) |
 | 9 | `DRIVER_ALARM` | ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging) |
 | 10 | `PAUSED` | PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31) |
 | 11 | `MEAS_STATE` | DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c) |
@@ -410,9 +410,18 @@ Common rules:
 the absolute target; MOVE_DONE reason TARGET. A target equal to the current position completes at once
 (MOVE_DONE TARGET, no pulse).
 
+**Un-homed travel window (normative, D-43b)** — when the axis becomes un-homed (boot, power-up, E-stop, DISABLE,
+idle disable, driver-power loss, STEP_FAULT, homing failure — every event that clears HOMED) the FW latches the
+current position as the **un-homed origin**. Un-homed JOG and HOME motion stays within origin ± `home.max_travel_um`:
+a held jog that reaches the bound stops there (planned stop, MOVE_DONE SOFT_LIMIT), and a further JOG ≠ 0 toward a
+reached bound is refused with `E_RANGE` 0 until the axis is homed (a JOG away from it is accepted; JOG 0 is never
+refused). A HOME fast seek that reaches origin − `home.max_travel_um` without a START edge ends in HOME_NOT_FOUND.
+The origin is not re-latched by a jog, a stop or a reset of the jog; HOMED ends the window (soft limits apply).
+Check vectors: state key `unhomed_origin_um` (state_schema 3).
+
 **JOG** (`v_um_s` signed, `a_um_s2`, `bound_um`) — `v ≠ 0`: move in the sign direction at |v| (offset 0
 checked against `v_limit`), stopping with a planned deceleration at the end point: `bound_um` if given, else
-the soft limit in that direction (homed) or `home.max_travel_um` from the jog's start point (un-homed).
+the soft limit in that direction (homed) or the **un-homed travel window** bound (un-homed, D-43b, below).
 `bound_um = 0x80000000` (`JOG_NO_BOUND`) = no bound; any other value MUST lie inside the soft limits and
 strictly ahead of the axis in the jog direction (else `E_RANGE` 8) and requires HOMED (else `E_STATE`
 NOT_HOMED) (SW_design F-B-15). A JOG while jogging changes speed, acceleration and bound on the fly (a
@@ -442,7 +451,7 @@ to the step-rate cap (`home_phase` §7.2). If the axis was HOMED before, the cap
 expected position (−`home.offset_um`); a deviation > `home.drift_tol_um` latches fault HOME_DRIFT (value =
 deviation µm) but homing completes (R5 §8). Success → HOMED, POS_UNCERTAIN cleared, EVENT HOMED (value =
 deviation µm, 0 if not homed before), MOVE_DONE TARGET at 0. Failures (FW-HOM-002): no START edge within
-`home.max_travel_um` (FAST_SEEK) or within `home.backoff_um` + `HOME_SLOW_EXTRA_UM` (10 mm, SLOW_APPROACH) →
+`home.max_travel_um` (FAST_SEEK; un-homed: from the un-homed origin, D-43b) or within `home.backoff_um` + `HOME_SLOW_EXTRA_UM` (10 mm, SLOW_APPROACH) →
 fault HOME_NOT_FOUND; the END switch reached, or START still active after `HOME_RELEASE_MAX_UM` (10 mm) of
 travel in RELEASE or BACKOFF (stuck switch or inverted DIR) → fault HOME_WIRING (OI-FW-23; FW constants in
 `protocol.yaml`, C `PROTO_HOME_*`); any other stop during homing → HOME_FAILED reason ABORTED (not a fault latch; the stopping cause has its own latch, if any). Every
@@ -469,7 +478,7 @@ PC_STOP / PC_STOP_CONTROLLED) if a motion was running.
 **HALT** — immediate stop + **HALT latch** (`halt_src` = PC: the HALT command, sent for GUI HALT and the
 Pause/Break key) + VALID cleared; EVENT HALT_SET (arg = 1 PC) on the first HALT only. Since v0.5 there is no
 physical holding STOP/BREAK button and no HALT source BUTTON (D-36, CR-01; SAF-FW-022 withdrawn): the single red
-mushroom button is the E-stop (power cut + sense, §6.2 E-stop row). Motion refused (`E_STATE` HALT) until
+mushroom button is the E-stop (MCU sense + hardwired ENA cut, §6.2 E-stop row, D-41/D-42). Motion refused (`E_STATE` HALT) until
 HALT_CLEAR.
 
 **HALT_CLEAR** — never refused (no cause input since v0.5, D-36): clears HALT if latched (EVENT
@@ -479,7 +488,7 @@ motion restarts (SW-STOP-003). Nothing latched → OK, no other effect.
 
 **RESUME** (D-31, F-B-30) — clears **only** PAUSED (EVENT PAUSE_CLEARED arg 3 = RESUME, `pause_src` → NONE).
 Refused with `E_STATE` while ESTOP (latched or sense input open), HALT or any FAULT is latched (detail = those
-BLOCK bits, §4.3); the NACK has no effect, so a STOP-button HALT latched just before the RESUME frame stays
+BLOCK bits, §4.3); the NACK has no effect, so a HALT (Pause/Break key) latched just before the RESUME frame stays
 latched together with PAUSED. No other condition is evaluated (not DRV_UNPOWERED, ALM, LIMIT, AFE, NOT_ENABLED,
 NOT_HOMED, motion state; never `E_BUSY`): the motion command that follows is gated as usual. Not PAUSED → OK,
 no-op, no event. RESUME refreshes the link watchdog like every command frame; it is not handled by the stop
@@ -528,12 +537,14 @@ at once). OK body = mask of the cleared faults; EVENT FAULT_CLEARED (arg = that 
 - Every HX711 sample is a **violation** when raw > `safety.load_raw_max`, raw < `safety.load_raw_min` or the sample
   is at a rail (SAF-FW-009). `safety.load_trip_samples` consecutive violations trip (immediate stop, LOAD_LIMIT);
   a sample inside the thresholds resets the count. Threshold changes act from the next sample and keep the count.
-- At an accepted FAULT_CLEAR of LOAD_LIMIT the **reference** = the last sample (raw). If that sample is a violation
-  the **regrow window** opens: a violating sample re-trips **immediately** (no trip-sample count) only if it lies more
+- Only an accepted FAULT_CLEAR that clears a **latched LOAD_LIMIT** (OK body bit 0) takes the **reference** = the
+  last sample (raw; 0 if there is none yet). A FAULT_CLEAR of other faults, or with LOAD_LIMIT not latched, leaves
+  the load-limit state unchanged (OI-B-M2-03). If the reference sample is a violation the **regrow window** opens: a violating sample re-trips **immediately** (no trip-sample count) only if it lies more
   than `safety.load_regrow_raw` beyond the reference on its side (raw > max and raw > ref + regrow, or raw < min and
   raw < ref − regrow); any other violating sample is ignored (unloading allowed) and does not count.
 - The window **ends** with the first sample inside the thresholds (the normal rule applies from the next sample) or
-  with the next FAULT_CLEAR (new reference). A threshold change does not end it. A clear with the last sample
+  with a re-trip (LOAD_LIMIT latched again; its FAULT_CLEAR takes the next reference). A threshold change does not
+  end it. A clear with the last sample
   inside the thresholds opens no window.
 
 ### 5.6 Diagnostics: DIAG_MEAS (D-40c, CR-02; FW_test_plan §6)
@@ -580,21 +591,21 @@ NOT_ENABLED.
 
 | Trigger | Stop | ENA | Latch → clear | HOMED | VALID | EVENTs |
 |---|---|---|---|---|---|---|
-| E-stop sense opens | immediate (≤ 100 µs) | disabled ≤ 1 ms | ESTOP → ESTOP_CLEAR (input closed ≥ `io.estop_release_ms`), then ENABLE + HOME | cleared | cleared | ESTOP_SET, STOPPED (ESTOP), DRIVER_DISABLED (3) |
+| E-stop sense opens (MCU / FW only, D-41; the E-stop NO contact also forces ENA disabled in hardware, D-42) | immediate (≤ 100 µs) | disabled ≤ 1 ms | ESTOP → ESTOP_CLEAR (input closed ≥ `io.estop_release_ms`), then ENABLE + HOME | cleared | cleared | ESTOP_SET, STOPPED (ESTOP), DRIVER_DISABLED (3) |
 | PC STOP | immediate / controlled | kept | none | kept | cleared | STOPPED |
 | PC HALT | immediate | kept | HALT (PC) → HALT_CLEAR | kept | cleared | HALT_SET, STOPPED |
 | physical PAUSE button / PC PAUSE | controlled (if moving) | kept | PAUSED (`pause_src` BUTTON / PC): new motion refused (BLOCK PAUSED); cleared **only** by RESUME or HALT_CLEAR (D-30, D-31, §5.5); button press while PAUSED → RESUME_REQUEST only | kept | cleared | PAUSE_BUTTON (button only), PAUSED (arg = source), STOPPED (PAUSE_BUTTON / PC_PAUSE) |
 | limit switch while moving | immediate (≤ 200 µs) | kept | LIMIT_x → auto-clear when the input has been released continuously for `io.release_ms`; while latched only motion **away** from the switch is accepted (BLOCK LIMIT toward it) (D-33h) | kept | cleared | LIMIT_SET, STOPPED, LIMIT_CLEARED |
 | both limit inputs active | immediate | kept | fault LIMIT_WIRING → inputs no longer both active + FAULT_CLEAR; a still-active input then acts as a LIMIT latch (D-40a) | kept | cleared | FAULT_SET, STOPPED |
-| FW load limit / rail sample | immediate (≤ 200 µs after DRDY) | kept | fault LOAD_LIMIT → FAULT_CLEAR (always; regrow window until a sample is inside the thresholds or the next FAULT_CLEAR, §5.5, D-40d) | kept | cleared | FAULT_SET, STOPPED |
+| FW load limit / rail sample | immediate (≤ 200 µs after DRDY) | kept | fault LOAD_LIMIT → FAULT_CLEAR (always; regrow window until a sample is inside the thresholds or a re-trip, §5.5, D-40d) | kept | cleared | FAULT_SET, STOPPED |
 | AFE stale while moving | immediate | kept | fault AFE_FAULT → fresh samples + FAULT_CLEAR | kept | cleared | AFE_STALE, FAULT_SET, STOPPED |
 | link watchdog (moving) | controlled | kept | LINK_WDG status → next valid frame | kept | cleared | LINK_WDG, STOPPED, LINK_RESTORED |
 | jog dead-man | controlled | kept | none | kept | **unchanged** | STOPPED (JOG_DEADMAN) |
 | step overrun / count fault | immediate | kept | fault STEP_FAULT → FAULT_CLEAR | **cleared** | cleared | FAULT_SET, STOPPED |
 | homing failure | immediate | kept | fault HOME_NOT_FOUND / HOME_WIRING → FAULT_CLEAR (ABORTED: no latch) | cleared | cleared | HOME_FAILED, STOPPED |
 | home drift at re-homing | none (homing completes) | kept | fault HOME_DRIFT → FAULT_CLEAR | set (new zero) | — | FAULT_SET, HOMED |
-| E-stop sense open while driver power stays present > `drv.k1_weld_ms` (default 200 ms; sense enabled) | (already stopped by the E-stop row) | disabled | fault K1_WELDED, latched ≤ `drv.k1_weld_ms` + 25 ms after the E-stop sense edge (D-33f) → cause gone (E-stop closed or power off) + FAULT_CLEAR (D-29c, R5 §1.5) | cleared | cleared | FAULT_SET (arg 6, value = ms) |
-| driver power lost (sense enabled; E-stop, PSU loss, K1 not reset) | pulses ended ≤ 25 ms after the input change (SAF-FW-024) | disabled level | none: motion and ENABLE refused (`E_STATE` DRV_UNPOWERED; motion also NOT_ENABLED) while off; after power returns ENABLE (+ settle) and HOME are required (D-29c, D-11) | **cleared** (position lost) | cleared | DRIVER_POWER (0) always; STOPPED (DRV_POWER_LOST) if a motion was still running; DRIVER_DISABLED (4) if the state was not already NOT_ENABLED |
+| **only with `drv.pwr_sense_enable` and `drv.k1_check_enable`** (both default 0; CR-03, SRS OI-18; no contactor in release 1): E-stop sense open while driver power stays present > `drv.k1_weld_ms` (default 200 ms) | (already stopped by the E-stop row) | disabled | fault K1_WELDED, latched ≤ `drv.k1_weld_ms` + 25 ms after the E-stop sense edge (D-33f) → cause gone (E-stop closed or power off) + FAULT_CLEAR (D-29c, R5 §1.5) | cleared | cleared | FAULT_SET (arg 6, value = ms) |
+| **only with the optional power sense**: driver power lost (PSU loss / 48 V presence input off) | pulses ended ≤ 25 ms after the input change (SAF-FW-024) | disabled level | none: motion and ENABLE refused (`E_STATE` DRV_UNPOWERED; motion also NOT_ENABLED) while off; after power returns ENABLE (+ settle) and HOME are required (D-29c, D-11) | **cleared** (position lost) | cleared | DRIVER_POWER (0) always; STOPPED (DRV_POWER_LOST) if a motion was still running; DRIVER_DISABLED (4) if the state was not already NOT_ENABLED |
 | idle ≥ `safety.idle_disable_s` and unloaded (never while the AFE is stale: unloaded state unknown, D-33g) | — | disabled | none → ENABLE | cleared | — | DRIVER_DISABLED (2) |
 | PC DISABLE | refused while moving | disabled | — | cleared | — | DRIVER_DISABLED (1) |
 | ALM active | **no stop** (D-16); ALM start-block: new motion starts refused while driver power present, running-jog refreshes / STOP / HALT / PAUSE / ENABLE not blocked (§4.3, SAF-FW-026, D-28) | kept | — | — | — | ALM_CHANGED |
@@ -603,16 +614,29 @@ NOT_ENABLED.
 Every immediate stop that may have truncated a pulse in flight sets `POS_UNCERTAIN` (±1 step, HOMED kept;
 cleared by the next HOME) (SAF-FW-004). A stopped move is never resumed by the FW.
 
-**Driver power (D-29c, D-28, R5 §1.5)** — evaluated only with `drv.pwr_sense_enable` = true (otherwise power
-is assumed present and K1_WELDED is never detected). The DRV_POWER input is debounced by the FW (FW_design).
+**E-stop without contactor (CR-03, D-41, D-42)** — release 1 has no power-removal contactor: the red NC button
+goes to the MCU E-stop sense (PA10) only, and its additional NO contact drives the HBS86H ENA opto to *disabled*
+directly, independent of the MCU (D-42). The FW reaction is unchanged (E-stop row). The FW **must tolerate the
+externally forced ENA state**: no fault and no latch from an ENA level that differs from the commanded one while
+the E-stop is active; STATUS `io.ENA_DISABLED` reports the level the MCU drives. Not an IEC 60204-1 emergency stop
+(residual risk accepted by the PO, D-41).
+
+**Driver power (D-29c, D-28, R5 §1.5; optional since CR-03)** — evaluated only with `drv.pwr_sense_enable` = true
+(default **false** since dict_version 5: no contactor to watch; the input remains as an optional 48 V presence
+sense). With it false, power is assumed present, DRV_PWR reads 1 (feature bit permitting) and K1_WELDED is never
+detected. The **K1_WELDED check** additionally requires `drv.k1_check_enable` = true (default **false**, reboot
+required; SRS OI-18): only a power-removal contactor whose aux contact feeds DRV_POWER makes "power present while
+the E-stop is open" a fault. With the check off, DRV_POWER present during an E-stop is **reported only** (status
+DRV_PWR = 1, no EVENT, no fault); a plain 48 V presence sense would otherwise latch K1_WELDED on every E-stop. The
+DRV_POWER input is debounced by the FW (FW_design). The text below applies with the sense enabled.
 - E-stop opens first (normal case): the E-stop row applies (motion already stopped ≤ 100 µs, NOT_ENABLED,
-  HOMED and VALID cleared); the contactor drop-out that follows produces EVENT DRIVER_POWER (0) — STOPPED and
+  HOMED and VALID cleared); a power drop that follows (optional sense) produces EVENT DRIVER_POWER (0) — STOPPED and
   DRIVER_DISABLED are not repeated because no motion is running and the state is already NOT_ENABLED
   (OI-ICD-06). If the power is still reported present
-  continuously for more than `drv.k1_weld_ms` after the sense input opened, FAULT K1_WELDED is latched
-  (contactor welded or aux contact miswired); the E-stop sense path has already stopped the axis and dropped
+  continuously for more than `drv.k1_weld_ms` after the sense input opened and `drv.k1_check_enable` is set, FAULT K1_WELDED is latched
+  (power sense wired to a supply the E-stop does not cut: expected without a contactor, so keep the sense off); the E-stop sense path has already stopped the axis and dropped
   ENA.
-- Driver power lost while the E-stop sense input is closed (PSU loss, K1 dropped, RESET not pressed):
+- Driver power lost while the E-stop sense input is closed (PSU loss):
   within 25 ms of the input change (1 kHz sampling + 20 ms filter, SAF-FW-024; during an NVM erase/program —
   idle only — within the operation time + 25 ms, D-33f) pulse generation ends
   (STOPPED cause DRV_POWER_LOST if a motion was running; the active move is discarded), ENA goes to the
@@ -647,7 +671,7 @@ blocking bit.
 ### 6.4 Boot (SAF-FW-018, SAF-FW-007, D-13)
 PUL idle from reset release; ENA left at the "no current" level (driver enabled, holding) unless the E-stop
 input is open **or** (`drv.pwr_sense_enable` and DRV_POWER reads off) — then the disabled level, so the driver
-comes up disabled when K1 is reset (OI-FW-22, consistent with §6.2); motion state NOT_ENABLED; HOMED = 0;
+comes up disabled when its supply returns (OI-FW-22, optional sense, consistent with §6.2); motion state NOT_ENABLED; HOMED = 0;
 VALID = 0; PAUSED = 0; stream off; inputs active at boot (E-stop, limits) are latched/reported
 from the first GET_STATUS and refuse motion accordingly; parameters per §11.3; EVENT BOOT queued (arg = reset
 cause; value / value2 = faulting PC / CFSR of a HardFault recorded before the reset, else 0 / 0; OI-FW-21).
@@ -842,13 +866,13 @@ Generated from `protocol.yaml` table `data_status` (C `DS_*`, Python `DataStatus
 | 6 | `AFE_SETTLING` | sample within afe.settle_discard after a (re)configuration | – |
 | 7 | `AFE_RATE_MISMATCH` | measured rate deviates more than afe.rate_tol_pct | – |
 | 8 | `LINK_WDG` | link watchdog tripped, until the next valid command frame | – |
-| 9 | ~~`STOP_BTN`~~ | **retired in v0.5**: reserved, sent as 0, never reused — was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) | – |
+| 9 | ~~`STOP_BTN`~~ | **retired in v0.5**: reserved, sent as 0, never reused — was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41) | – |
 | 10 | `PAUSE_BTN` | physical PAUSE button input active | `FEAT_BUTTONS` |
 | 11 | `ALM` | driver ALM active | `FEAT_DRV_SIGNALS` |
 | 12 | `PEND` | driver PEND (in position) active | `FEAT_DRV_SIGNALS` |
 | 13 | `POS_UNCERTAIN` | an immediate stop may have truncated a pulse (±1 step), cleared by the next HOME | – |
 | 14 | `NO_AFE_DATA` | fallback frame (afe_raw = 0x80000000) | – |
-| 15 | `DRV_PWR` | driver power present (reads 1 when drv.pwr_sense_enable = false and FEAT_DRV_SIGNALS = 1) | `FEAT_DRV_SIGNALS` |
+| 15 | `DRV_PWR` | driver power present; evaluated only with the optional power sense (drv.pwr_sense_enable, default 0, CR-03 / D-41): reads 1 when it is off and FEAT_DRV_SIGNALS = 1 | `FEAT_DRV_SIGNALS` |
 
 <!-- END GENERATED protocol:data_status -->
 
@@ -869,7 +893,7 @@ Generated from `protocol.yaml` table `faults` (C `FAULT_*`, Python `Faults`).
 | 3 | `LIMIT_WIRING` | both limit inputs active; cause: both still active |
 | 4 | `HOME_NOT_FOUND` | no START edge within home.max_travel_um; no persistent cause |
 | 5 | `HOME_WIRING` | END switch reached during homing; no persistent cause |
-| 6 | `K1_WELDED` | E-stop sense open while driver power stays present > drv.k1_weld_ms (D-29c); cause: E-stop open and power present |
+| 6 | `K1_WELDED` | Power-removal device did not open with the E-stop (only with the optional power sense and the K1 check enabled: drv.pwr_sense_enable and drv.k1_check_enable, both default 0; SRS OI-18): E-stop sense open while driver power stays present > drv.k1_weld_ms (D-29c); cause: E-stop open and power present |
 | 7 | `HOME_DRIFT` | re-homing edge deviates > home.drift_tol_um; no persistent cause |
 | 8–15 | — | reserved (0) |
 
@@ -886,11 +910,11 @@ Generated from `protocol.yaml` table `io` (C `IO_*`, Python `IoBits`).
 | 0 | `ESTOP_OPEN` | E-stop sense input open | – |
 | 1 | `LIMIT_START` | START limit input active | – |
 | 2 | `LIMIT_END` | END limit input active | – |
-| 3 | ~~`STOP_BTN`~~ | **retired in v0.5**: reserved, sent as 0, never reused — was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) | – |
+| 3 | ~~`STOP_BTN`~~ | **retired in v0.5**: reserved, sent as 0, never reused — was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41) | – |
 | 4 | `PAUSE_BTN` | PAUSE button input active | `FEAT_BUTTONS` |
 | 5 | `ALM` | driver ALM input active | `FEAT_DRV_SIGNALS` |
 | 6 | `PEND` | driver PEND input active | `FEAT_DRV_SIGNALS` |
-| 7 | `DRV_PWR` | raw driver-power sense input 'powered' | `FEAT_DRV_SIGNALS` |
+| 7 | `DRV_PWR` | raw driver-power sense input 'powered' (optional 48 V presence sense, CR-03) | `FEAT_DRV_SIGNALS` |
 | 8 | `ENA_DISABLED` | ENA output at the disabled level | – |
 | 9 | `RATE_80` | HX711 RATE output high | – |
 | 10–15 | — | reserved (0) | – |
@@ -932,7 +956,7 @@ Generated from `protocol.yaml` table `event` (C `EV_*`, Python `Event`).
 | 19 | `HOME_FAILED` | home_fail_reason: 1 NOT_FOUND, 2 WIRING, 3 ABORTED | pos_um / pos_steps |
 | 20 | `DRIVER_ENABLED` | 0 | 0 / 0 |
 | 21 | `DRIVER_DISABLED` | driver_disabled_cause: 1 PC DISABLE, 2 IDLE, 3 ESTOP, 4 DRV_POWER_LOST | 0 / 0 |
-| 22 | ~~`STOP_BUTTON`~~ | **retired in v0.5**: never sent, code never reused — was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) | – |
+| 22 | ~~`STOP_BUTTON`~~ | **retired in v0.5**: never sent, code never reused — was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41) | – |
 | 23 | `PAUSE_BUTTON` | 1 pressed, 0 released | 0 / 0 |
 | 24 | `ALM_CHANGED` | 1 active, 0 inactive | 0 / 0 |
 | 25 | `AFE_REINIT` | re-init count (low 16 bit) | 0 / 0 |
@@ -959,7 +983,7 @@ Generated from `protocol.yaml` table `stop_cause` (C `SC_*`, Python `StopCause`)
 | 1 | `PC_STOP` | STOP mode 0 |
 | 2 | `PC_STOP_CONTROLLED` | STOP mode 1 |
 | 3 | `PC_HALT` | HALT command |
-| 4 | ~~`STOP_BUTTON`~~ | **retired in v0.5**: never sent, code never reused — was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) |
+| 4 | ~~`STOP_BUTTON`~~ | **retired in v0.5**: never sent, code never reused — was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41) |
 | 5 | `PAUSE_BUTTON` | physical PAUSE button |
 | 6 | `PC_PAUSE` | PAUSE command |
 | 7 | `ESTOP` | E-stop sense opened |
@@ -1024,8 +1048,8 @@ backend must let the FW watchdog trip). With the 1000 ms default ≥ 3 heartbeat
 | VERIFY | MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0, RESUME, ENABLE, DISABLE, SAVE/LOAD/DEFAULT_PARAMS, REBOOT; **HALT_CLEAR, ESTOP_CLEAR, FAULT_CLEAR** (D-34; still written on the priority lane, §2.4) | **never retried automatically.** After a timeout (100 ms; SAVE/LOAD/DEFAULT 3000 ms + wire time of the TX backlog; REBOOT: reconnect after EVENT BOOT or 3 s) the SW sends GET_STATUS and decides from `motion_state`, `target_um`, latches, `sys_flags.CFG_DIRTY` / `nvm_record_seq` whether the command was executed (clears: the latch bits `flags.HALT` / `flags.ESTOP` / STATUS `faults` and `status.PAUSED`; a NACK detail is shown verbatim). JOG ≠ 0 refreshes are a stream of new commands every ≤ 100 ms (newest speed); a lost one is covered by the next refresh and by the FW dead-man. |
 
 Why the clears are VERIFY (D-34, closes OI-ICD-08): a retry after a lost response could clear a latch that
-was set **again** in between — HALT_CLEAR a new STOP-button HALT (button pressed and released ≥
-`io.release_ms` within ~100 ms), ESTOP_CLEAR a new E-stop event, FAULT_CLEAR a new LOAD_LIMIT trip (always
+was set **again** in between — HALT_CLEAR a new HALT (Pause/Break key or GUI HALT pressed in the ~100 ms after
+the first HALT_CLEAR was sent), ESTOP_CLEAR a new E-stop event, FAULT_CLEAR a new LOAD_LIMIT trip (always
 clearable while the load is still beyond the threshold, §5.5). No clear starts motion, but the operator's new
 latch would disappear silently. After a timeout the SW reads GET_STATUS: latch gone and no new EVENT
 HALT_SET / ESTOP_SET / FAULT_SET since → executed; latch present → shown to the operator, who clears again.
@@ -1213,6 +1237,8 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 | D-36 / CR-01 (no physical holding STOP) | §5.5, §6.2, §6.3, §6.4, §7.6, §8, App. A/B |
 | D-37 (a) / (b) / (c) / (d) | §2.4 + §9.1 / §7.6 / §2.4 / §9.4 |
 | D-40 (a) / (b) / (c) / (d) | §5.5 + §6.2 / §12 / §5.6 + App. C / §5.5 |
+| D-41 / D-42 (CR-03) / D-43 (b) | §6.2 + App. A (`drv.pwr_sense_enable` 0) / §6.2 / §5.4 + check vectors |
+| SRS OI-18 (Orchestrator, v0.7) | §6.2 + App. A (`drv.k1_check_enable` 0x0706, default 0, R) |
 | D-33 (a) / (f) / (g) / (h) / (k) | §11.4 + App. A / §6.2 / §6.2 + §7.2 / §6.2 / §9.3 |
 | OI-FW-17 / 18 / 19 / 20 / 21 / 22 / 23 | `tools/README.md` seams / §2.4 / §2 / §0.1 + §12 / §4.2 + §6.4 / §6.4 / §5.4 |
 | GF-01 / GF-08 / OI-FW-11 | §5.5, §7.2 / §0.3, App. B / §0.3, App. B |
@@ -1248,13 +1274,19 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 | OBS-M1-01…05 | **Closed (v0.5):** SAVE exemption §2.4 (01); twin RX during flash stalls fixed (02, `tools/README.md`); LOAD sends no EVENT on failure §5.2 / §11.3 (03); unit-conversion saturation §0.1 (05). | — |
 | IF-C-M1-02 | **Closed (v0.5):** §7.6 feature-dependent bits. Follow-ups: A sends DRV_PWR = 0 while FEAT_DRV_SIGNALS = 0 also with `drv.pwr_sense_enable` = false; B's simulator masks the bits by its feature mask. | A, B |
 | OI-ICD-09 | **Closed (v0.6):** A aligned `ramp_stop()` / `ramp_set_speed()` (REQ-A-M2-06); Validator E dry run 9/9 + 28/28, Integrator differential re-run 2026-10-04. | — |
-| OI-ICD-10 | **DIAG_MEAS word layouts (Appendix C) to be confirmed by A** while building the HW_MEAS env (REQ-A-M2-03): clocks, ring sizes and the per-op words are the Integrator's proposal from FW_test_plan §6.3/§6.4; a change is an ICD 0.6.x revision with regenerated vectors. | A, Validator E |
+| OI-ICD-10 | **Closed (v0.7):** A confirmed Appendix C (OI-FW-38); Appendix C updated with the FW facts (ring 2048, stimulus clock 10 MHz, PROBE_READ w1 = 0 / w5 = PUL stamps since arming / TRIGGERED = counter running, STIM delay span = running step period else 1 ms, STATIC_LEVEL only with the step timer stopped); DMA map ASSUMED until HG-29. | — |
+| OI-B-M2-03 | **Answered (v0.7):** only a FAULT_CLEAR that clears a latched LOAD_LIMIT takes a new load reference; other clears leave the load-limit state unchanged. A's FW (`cmd.c` FAULT_CLEAR → `afe_loadlim_cleared()` only when LOAD_LIMIT was cleared; reference 0 without a sample) matches; `ref_loadlim.py` and `loadlim_vectors.json` aligned (new cases `regrow_clear_without_latch_keeps_reference`, `regrow_new_reference_after_retrip`). | B: align the simulator |
+| OI-B-M2-04 | **Answered (v0.7, tools/README):** coordinate convention of the twin world and the simulator: x [µm] = world position integrated per completed pulse (pulse end) from the DIR pin; START active iff x ≤ `start_switch_um`, END active iff x ≥ `end_switch_um`, evaluated after every completed step; the HAL fixed reaction stops CLEAN at that step: the last executed step is the first one at which the switch is active (step-exact, no extra step). Machine x after HOME = x_world − x_edge − `home.offset_um`, x_edge = world x of that first active step on the slow approach. | B: same convention in the simulator |
+| OI-FW-35 | **Closed (v0.7):** the twin no longer calls `step_isr()` after a HAL fixed-reaction halt at a counted step (twin_seams.c). | — |
+| MC2-2 / OI-F-M2-03 | **Closed (v0.7):** §9.3 rationale reworded (Pause/Break-key HALT). | — |
+| SD-17 | **CR-03 / D-41…D-43 SRS deltas** (SRS v0.6): E-stop MCU/FW only + hardwired ENA cut, FW tolerates the forced ENA; K1_WELDED / DRV_PWR optional; un-homed travel window from a latched origin; new parameter `drv.k1_check_enable` (0x0706, bool, default 0, reboot required; gates K1_WELDED, needs `drv.pwr_sense_enable`; SRS OI-18) — Table 5.1 row. | Orchestrator |
 | SD-16 | **D-40 SRS deltas:** SAF-FW-014 (LIMIT_WIRING clear rule, aligned in SRS), FW-MOT-003 (±ceil(N/1000), aligned), SAF-FW-011 regrow window end (§5.5), CR-02 DIAG_MEAS / FEAT_HW_MEAS (SYS-009, NFR-007 HW-gate evidence). | Orchestrator: SRS v0.5.x |
 
 ## 15. Change history
 
 | ICD | Date | PROTO / PAYLOAD / dict | Change |
 |---|---|---|---|
+| 0.7 | 2026-10-04 | 1.0 / 1 / 5 | **M2 close-out.** CR-03 / D-41 / D-42: `drv.pwr_sense_enable` default **0** (dict_version 5), new `drv.k1_check_enable` (0x0706, default 0, reboot; gates K1_WELDED, SRS OI-18), K1_WELDED / DRV_PWR / DRV_UNPOWERED texts "only with the optional power sense", E-stop = MCU / FW only + hardwired ENA cut, FW tolerates the externally forced ENA (§6.2); D-43 b un-homed travel window from a latched origin (§5.4, check vectors, state_schema 3: `unhomed_origin_um`); MC2-2 §9.3 rationale (no STOP-button HALT); OI-B-M2-03 load reference only at a LOAD_LIMIT clear (§5.5, `ref_loadlim.py`, vectors); OI-B-M2-04 coordinate convention (tools/README); Appendix C aligned to A's FW facts (OI-FW-38 / OI-ICD-10 closed); twin: DIAG_MEAS NOINIT magic at boot + 10 kHz heartbeat (REQ-C-M2-12), no `step_isr()` after a fixed-reaction halt (OI-FW-35), 4 stop-timing integration tests un-skipped. |
 | 0.6 | 2026-10-04 | 1.0 / 1 / 4 | **D-40 / Validator E M2 requests.** REQ-C-M2-01: command **DIAG_MEAS 0x3D** (LEN 8, 64-byte body, 10 ops, Appendix C), INFO feature bit 9 **FEAT_HW_MEAS**, BLOCK bit 11 **MEAS_STATE**, §4.4 step 2a NOT_IN_BUILD, §5.6, tables `meas_*` in `protocol.yaml`, seam v1.3 `hal_meas_cmd()` (+ SR-M2-01 `hal_step_set_dir` ±2 encoding, SR-M2-02 `hal_in_cfg_t` without `stop_active_level`). D-40a LIMIT_WIRING clear rule (§5.5, §6.2, vectors). D-40b sum tolerance ±ceil(N/1000) stated (§12). D-40d load-limit regrow window (§5.5) + `ref_loadlim.py` / `loadlim_vectors.json`. Twin: REQ-C-M2-02 `inject loop_load`, -05 conversions carry gain / rate, -06 world x from PUL + DIR pin (`driver dir_wiring_inverted`, x persists across resets), -07 automatic PEND, -08 DIAG_MEAS model (`--hw-meas`), -09 `stop=` removed, -10 `log_max` 1 000 000 + `query clear`. OI-ICD-09 closed; OI-ICD-10, SD-16 added. Dictionary unchanged. |
 | 0.5 | 2026-10-04 | 1.0 / 1 / 4 | **CR-01 / D-36** (one red button = E-stop with power cut; no physical holding STOP): DATA/STATUS `status` bit 9 and `io` bit 3 STOP_BTN, EVENT 22 STOP_BUTTON and stop cause 4 STOP_BUTTON **retired** (reserved, never reused; generated identifiers kept and marked RETIRED for compatibility, `RETIRED_MASK`); HALT source PC only; `io.stop_active_level` (0x0603) retired → **dict_version 4, 47 parameters**; SAF-FW-022 path removed (§5.5 HALT/HALT_CLEAR, §6.2 row, §6.3, §6.4); HALT_CLEAR never refused. **D-37**: (a) SAVE exemption + SW quiesce during SAVE (§2.4, §9.1); (b) feature-dependent status/IO bits sent as 0 and invalid while the feature bit is 0 (§7.6, `protocol.yaml` `feature:`, Python `<ID>_FEATURE`); (c) RESUME on the normal lane (§2.4); (d) STOP confirmation by device time (§9.4). **Queue**: OBS-M1-03 LOAD failure sends no EVENT (§5.2, §11.3); OBS-M1-05 µm/steps saturation (§0.1, `units_vectors.json` saturation cases); ESTOP_CLEAR with the input open but no latch = `E_CAUSE_ACTIVE` 0xFFFF (vector); `state_schema` stays 2 (STOP-button keys kept, ignored, never set); seam semantics + `afe_sample_t.status` bits + seam v1.2 `hal_fault_record()` in `tools/README.md`; OBS-M1-02 twin RX during flash stalls fixed; vocabulary: STOP-button inputs removed. **M2 start**: `motion_vectors.json` + `ref_motion.py` (§12), OI-ICD-09. |
 | 0.4.1 | 2026-10-03 | 1.0 / 1 / 3 | **D-34**: HALT_CLEAR, ESTOP_CLEAR, FAULT_CLEAR move from ONCE_PRIORITY to retry class **VERIFY** (never auto-retried; still on the SW priority lane; lost response resolved by GET_STATUS) — `protocol.yaml` retry class, §3.2 (generated), §9.3 table + rationale; ONCE_PRIORITY kept as an unused code. OI-ICD-08 closed (D-34); OI-ICD-06 closed (SRS v0.4 SAF-FW-024: STOPPED only when a move was ended). No wire, layout or dictionary change (hash unchanged). |
@@ -1269,7 +1301,7 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 
 <!-- BEGIN GENERATED PARAM TABLE (gen_params.py) -->
 
-Generated from `params.yaml` dict_version 4 — **PARAM_DICT_HASH = 0xFCC54C90**, 47 parameters. Flags: **M** = moving_ok (settable while moving), **N** = nvm (persisted), **R** = reboot_required. Normative descriptions: `params.yaml`.
+Generated from `params.yaml` dict_version 5 — **PARAM_DICT_HASH = 0xB7B0263F**, 48 parameters. Flags: **M** = moving_ok (settable while moving), **N** = nvm (persisted), **R** = reboot_required. Normative descriptions: `params.yaml`.
 
 | ID | Key | Type | Unit | Min | Max | Default | Flags | Values / notes |
 |---|---|---|---|---|---|---|---|---|
@@ -1317,8 +1349,9 @@ Generated from `params.yaml` dict_version 4 — **PARAM_DICT_HASH = 0xFCC54C90**
 | 0x0701 | `drv.alm_active_level` | enum |  |  |  | HIGH_ACTIVE | N | 0=HIGH_ACTIVE, 1=LOW_ACTIVE |
 | 0x0702 | `drv.pend_active_level` | enum |  |  |  | HIGH_ACTIVE | N | 0=HIGH_ACTIVE, 1=LOW_ACTIVE |
 | 0x0703 | `drv.pend_timeout_ms` | u16 | ms | 0 | 5000 | 200 | MN |  |
-| 0x0704 | `drv.pwr_sense_enable` | bool |  |  |  | true | NR |  |
+| 0x0704 | `drv.pwr_sense_enable` | bool |  |  |  | false | NR |  |
 | 0x0705 | `drv.k1_weld_ms` | u16 | ms | 100 | 2000 | 200 | N |  |
+| 0x0706 | `drv.k1_check_enable` | bool |  |  |  | false | NR |  |
 | 0x0801 | `stream.fallback_hz` | u8 | Hz | 1 | 80 | 10 | MN |  |
 
 <!-- END GENERATED PARAM TABLE -->
@@ -1685,7 +1718,7 @@ Generated from `protocol.yaml` table `retry_class` (Python `RetryClass` (not on 
 
 ---
 
-## Appendix C. DIAG_MEAS ops and word layouts (D-40c; normative in HW_MEAS builds; to be confirmed by A, OI-ICD-10)
+## Appendix C. DIAG_MEAS ops and word layouts (D-40c; normative in HW_MEAS builds; confirmed by A, OI-FW-38; DMA map ASSUMED until HG-29)
 
 Request: `u8 op` (table `meas_op`), `u8 sel`, `u16 a`, `u32 b` (ranges in the generated `meas_op` table, Appendix B).
 OK body: `u32 w[16]`, little-endian; words not listed are 0. Times: `t_us` = the FW's 1 MHz device time (DATA / EVENT
@@ -1694,15 +1727,15 @@ tables `meas_src`, `meas_chan`, `meas_probe_mode`, `meas_probe_flags`, `meas_var
 
 | op | Body words |
 |---|---|
-| 0 INFO | w0 variant (`meas_variant`), w1 probe timer clock Hz (180 000 000), w2 counter width bits (32, software-extended), w3 stamp clock Hz (1 000 000), w4 stamp ring size per channel, w5 DMA stamp latency ns (≤ 1 000), w6 DWT stamp overhead cycles (0 without DWT), w7 stimulus timer clock Hz |
+| 0 INFO | w0 variant (`meas_variant`), w1 probe timer clock Hz (180 000 000), w2 counter width bits (32, software-extended), w3 stamp clock Hz (1 000 000), w4 stamp ring size per channel (2048), w5 DMA stamp latency ns (≤ 1 000), w6 DWT stamp overhead cycles (0 without DWT), w7 stimulus timer clock Hz (10 000 000) |
 | 1 PROBE_ARM | – (armed; previous captures discarded) |
-| 2 PROBE_READ | w0 flags (`meas_probe_flags`), w1 CCR1 = event capture (0 in TRIGGER / RESET: the counter starts at the event), w2 CCR2 = last PUL rising edge after the event, w3 CCR3 = last ENA edge, w4 CCR4 = last DIR edge (probe ticks since the event), w5 PUL captures since the event, w6 probe CNT now, w7 PSC, w8 / w9 PWM-input min / max PUL period, w10 / w11 min / max PUL high time, w12 PWM samples (probe ticks) |
+| 2 PROBE_READ | w0 flags (`meas_probe_flags`; TRIGGERED = the probe counter is running), w1 CCR1 = 0 (the counter starts at the event), w2 CCR2 = last PUL rising edge after the event, w3 CCR3 = last ENA edge, w4 CCR4 = last DIR edge (probe ticks since the event), w5 PUL stamps since arming, w6 probe CNT now, w7 PSC, w8 / w9 PWM-input min / max PUL period, w10 / w11 min / max PUL high time, w12 PWM samples (probe ticks) |
 | 3 COUNTER | w0 PUL rising edges since the last reset (32 bit), w1 `t_us` of the read (sel 1: values before the reset) |
 | 4 STAMPS | w0 stamps written on the channel since boot / reset, w1 ring size, w2…w15 the 14 stamps of page `a`, newest first (stamp k = entry w0 − 1 − (14·a + k)); 0 = not available |
-| 5 NOINIT | w0 magic `0x4D454153` when valid, w1 last PUL `t_us`, w2 heartbeat `t_us` (10 kHz update), w3 hang start `t_us` (HANG op); survives a reset; sel 1 clears after reading |
-| 6 STIM_RUN | – (series started: `a` pulses on the J-STIM output, each after a seeded random delay of 0…1 step period, `sel` bits 1–7 = hold ms, bit 0 polarity) |
+| 5 NOINIT | w0 magic `0x4D454153` (set at boot when the block was invalid, rings then cleared), w1 last PUL `t_us`, w2 heartbeat `t_us` (DMA-updated at 10 kHz: the last update, not the time of the read), w3 hang start `t_us` (HANG op); survives a reset; sel 1 clears after reading |
+| 6 STIM_RUN | – (series started: `a` pulses on the J-STIM output, each after a seeded random delay of 0…1 running step period (TIM2 ARR; 1 ms when the step timer is stopped), `sel` bits 1–7 = hold ms, bit 0 polarity) |
 | 7 HANG | – (the selected context hangs for `a` ms, 0 = until the IWDG resets; only while moving) |
-| 8 STATIC_LEVEL | – (PUL or DIR held at level `a` until the next command; only NOT_ENABLED) |
+| 8 STATIC_LEVEL | – (PUL or DIR held at level `a` until the next command; only NOT_ENABLED and with the step timer stopped) |
 | 9 DWT | w0 valid (1 in HW_MEAS_DWT builds, else 0), w1 count, w2 min cycles, w3 max cycles, w4 / w5 sum low / high, w6…w15 histogram bins (main-loop section) |
 
 Retry class (§9.3): ops 0, 2, 4 and the read variants of 3, 5, 9 = RETRY; ops 1, 6, 7, 8 and the reset / clear

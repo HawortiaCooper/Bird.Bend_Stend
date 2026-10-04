@@ -7,6 +7,7 @@
 #include "f446.h"
 #include "hal_time.h"
 #include "irq_prio.h"
+#include "meas_dwt.h"
 #include "stm32_def.h"
 
 #define TICK_US 1000u
@@ -52,6 +53,7 @@ uint32_t hal_time_ms(void) { return s_ms; }
 void TIM5_IRQHandler(void)
 {
     uint32_t sr = TIM5->SR;
+    MDWT_T0(t0);
 #if defined(FW_AFE_SYNTHETIC) && FW_AFE_SYNTHETIC
     if ((sr & TIM_SR_CC2IF) != 0u && (TIM5->DIER & TIM_DIER_CC2IE) != 0u) {
         TIM5->SR = ~TIM_SR_CC2IF;
@@ -72,5 +74,6 @@ void TIM5_IRQHandler(void)
         s_ms += s_rem_us / 1000u;
         s_rem_us %= 1000u;
         core_tick_1ms();
+        MDWT_END(MDWT_ISR_TICK, t0);
     }
 }

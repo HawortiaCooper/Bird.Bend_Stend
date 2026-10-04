@@ -1,5 +1,5 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.6, PROTO 1.0, PAYLOAD 1)
+ * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7, PROTO 1.0, PAYLOAD 1)
  * Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
  * Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes
  * and their argument enums. FW code uses these identifiers only (no hand-listed codes).
@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define PROTO_ICD_VERSION      "0.6"
+#define PROTO_ICD_VERSION      "0.7"
 #define PROTO_MAJOR            1u
 #define PROTO_MINOR            0u
 #define PROTO_PAYLOAD_VERSION  1u
@@ -186,7 +186,7 @@ typedef enum {
 #define BLOCK_AFE_SATURATED_BIT          7u
 #define BLOCK_AFE_SATURATED              0x0080u /* last HX711 sample at a rail */
 #define BLOCK_DRV_UNPOWERED_BIT          8u
-#define BLOCK_DRV_UNPOWERED              0x0100u /* drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c) */
+#define BLOCK_DRV_UNPOWERED              0x0100u /* only with the optional power sense (drv.pwr_sense_enable, default 0 since CR-03 / D-41): the DRV_POWER input reads 'off' (D-28, D-29c) */
 #define BLOCK_DRIVER_ALARM_BIT           9u
 #define BLOCK_DRIVER_ALARM               0x0200u /* ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging) */
 #define BLOCK_PAUSED_BIT                 10u
@@ -330,7 +330,7 @@ typedef enum {
 #define DS_LINK_WDG_BIT               8u
 #define DS_LINK_WDG                   0x0100u /* link watchdog tripped, until the next valid command frame */
 #define DS_STOP_BTN_BIT               9u
-#define DS_STOP_BTN                   0x0200u /* RETIRED in ICD v0.5: reserved, sent as 0, never reused. was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) */
+#define DS_STOP_BTN                   0x0200u /* RETIRED in ICD v0.5: reserved, sent as 0, never reused. was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41) */
 #define DS_PAUSE_BTN_BIT              10u
 #define DS_PAUSE_BTN                  0x0400u /* physical PAUSE button input active [valid only with FEAT_BUTTONS] */
 #define DS_ALM_BIT                    11u
@@ -342,7 +342,7 @@ typedef enum {
 #define DS_NO_AFE_DATA_BIT            14u
 #define DS_NO_AFE_DATA                0x4000u /* fallback frame (afe_raw = 0x80000000) */
 #define DS_DRV_PWR_BIT                15u
-#define DS_DRV_PWR                    0x8000u /* driver power present (reads 1 when drv.pwr_sense_enable = false and FEAT_DRV_SIGNALS = 1) [valid only with FEAT_DRV_SIGNALS] */
+#define DS_DRV_PWR                    0x8000u /* driver power present; evaluated only with the optional power sense (drv.pwr_sense_enable, default 0, CR-03 / D-41): reads 1 when it is off and FEAT_DRV_SIGNALS = 1 [valid only with FEAT_DRV_SIGNALS] */
 #define DS_DEFINED_MASK               0xFDFFu
 #define DS_RETIRED_MASK               0x0200u
 
@@ -360,7 +360,7 @@ typedef enum {
 #define FAULT_HOME_WIRING_BIT            5u
 #define FAULT_HOME_WIRING                0x0020u /* END switch reached during homing; no persistent cause */
 #define FAULT_K1_WELDED_BIT              6u
-#define FAULT_K1_WELDED                  0x0040u /* E-stop sense open while driver power stays present > drv.k1_weld_ms (D-29c); cause: E-stop open and power present */
+#define FAULT_K1_WELDED                  0x0040u /* Power-removal device did not open with the E-stop (only with the optional power sense and the K1 check enabled: drv.pwr_sense_enable and drv.k1_check_enable, both default 0; SRS OI-18): E-stop sense open while driver power stays present > drv.k1_weld_ms (D-29c); cause: E-stop open and power present */
 #define FAULT_HOME_DRIFT_BIT             7u
 #define FAULT_HOME_DRIFT                 0x0080u /* re-homing edge deviates > home.drift_tol_um; no persistent cause */
 #define FAULT_DEFINED_MASK               0x00FFu
@@ -373,7 +373,7 @@ typedef enum {
 #define IO_LIMIT_END_BIT              2u
 #define IO_LIMIT_END                  0x0004u /* END limit input active */
 #define IO_STOP_BTN_BIT               3u
-#define IO_STOP_BTN                   0x0008u /* RETIRED in ICD v0.5: reserved, sent as 0, never reused. was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) */
+#define IO_STOP_BTN                   0x0008u /* RETIRED in ICD v0.5: reserved, sent as 0, never reused. was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41) */
 #define IO_PAUSE_BTN_BIT              4u
 #define IO_PAUSE_BTN                  0x0010u /* PAUSE button input active [valid only with FEAT_BUTTONS] */
 #define IO_ALM_BIT                    5u
@@ -381,7 +381,7 @@ typedef enum {
 #define IO_PEND_BIT                   6u
 #define IO_PEND                       0x0040u /* driver PEND input active [valid only with FEAT_DRV_SIGNALS] */
 #define IO_DRV_PWR_BIT                7u
-#define IO_DRV_PWR                    0x0080u /* raw driver-power sense input 'powered' [valid only with FEAT_DRV_SIGNALS] */
+#define IO_DRV_PWR                    0x0080u /* raw driver-power sense input 'powered' (optional 48 V presence sense, CR-03) [valid only with FEAT_DRV_SIGNALS] */
 #define IO_ENA_DISABLED_BIT           8u
 #define IO_ENA_DISABLED               0x0100u /* ENA output at the disabled level */
 #define IO_RATE_80_BIT                9u
@@ -412,7 +412,7 @@ typedef enum {
     EV_HOME_FAILED              = 19,
     EV_DRIVER_ENABLED           = 20,
     EV_DRIVER_DISABLED          = 21,
-    EV_STOP_BUTTON              = 22, /* RETIRED in ICD v0.5: never sent, code never reused. was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) */
+    EV_STOP_BUTTON              = 22, /* RETIRED in ICD v0.5: never sent, code never reused. was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41) */
     EV_PAUSE_BUTTON             = 23,
     EV_ALM_CHANGED              = 24,
     EV_AFE_REINIT               = 25,
@@ -433,7 +433,7 @@ typedef enum {
     SC_PC_STOP                  = 1, /* STOP mode 0 */
     SC_PC_STOP_CONTROLLED       = 2, /* STOP mode 1 */
     SC_PC_HALT                  = 3, /* HALT command */
-    SC_STOP_BUTTON              = 4, /* RETIRED in ICD v0.5: never sent, code never reused. was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense) */
+    SC_STOP_BUTTON              = 4, /* RETIRED in ICD v0.5: never sent, code never reused. was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41) */
     SC_PAUSE_BUTTON             = 5, /* physical PAUSE button */
     SC_PC_PAUSE                 = 6, /* PAUSE command */
     SC_ESTOP                    = 7, /* E-stop sense opened */

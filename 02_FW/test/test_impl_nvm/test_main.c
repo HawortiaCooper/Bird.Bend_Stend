@@ -38,7 +38,7 @@ static void test_codec_roundtrip_and_crc(void)
     p.motion.steps_per_mm = 636.0778198242188f;
     len = nvm_build(&p, 42u, 0x0001u, img);
     TEST_ASSERT_EQUAL_UINT16(NVM_HDR_SIZE + 8u * nvm_entry_count(), len);
-    TEST_ASSERT_EQUAL_UINT16(44u, nvm_entry_count());                /* 47 - 3 session values (dict 4) */
+    TEST_ASSERT_EQUAL_UINT16(45u, nvm_entry_count());                /* 48 - 3 session values (dict 5) */
     TEST_ASSERT_EQUAL(NVM_SLOT_VALID, nvm_slot_check(img, &h));
     TEST_ASSERT_EQUAL_UINT32(42u, h.seq);
     TEST_ASSERT_EQUAL_HEX32(PARAM_DICT_HASH, h.dict_hash);
@@ -138,8 +138,8 @@ static void test_power_cut_every_word(void)
     const int32_t words = (int32_t)((NVM_HDR_SIZE + NVM_ENTRY_SIZE * nvm_entry_count()) / 4u);
     h_set_param(PID_MOTION_JOG_TIMEOUT_MS, PARAM_T_U16, 111u);
     save_ok();
-    TEST_ASSERT_EQUAL_INT32(96, words);
-    for (cut = 0; cut < words; cut++) {                              /* the commit word is #96 */
+    TEST_ASSERT_EQUAL_INT32(98, words);                              /* dict 5: 45 entries */
+    for (cut = 0; cut < words; cut++) {                              /* the commit word is #98 */
         uint32_t v;
         h_set_param(PID_MOTION_JOG_TIMEOUT_MS, PARAM_T_U16, 222u);
         fake_flash_cut_after_words(cut);

@@ -33,7 +33,7 @@
 # =====================================================================================
 
 schema_version: 1
-icd_version: "0.6"
+icd_version: "0.7"
 proto_major: 1
 proto_minor: 0
 payload_version: 1
@@ -185,7 +185,7 @@ tables:
       - {name: LIMIT, bit: 5, desc: "motion toward an active or latched limit switch (direction = sign(target − x) or sign(v)); only motion away is accepted while latched (D-33h)"}
       - {name: AFE_STALE, bit: 6, desc: "no HX711 sample for afe.timeout_ms"}
       - {name: AFE_SATURATED, bit: 7, desc: "last HX711 sample at a rail"}
-      - {name: DRV_UNPOWERED, bit: 8, desc: "drv.pwr_sense_enable and the DRV_POWER input reads 'off' (R5 §1.5, D-28, D-29c)"}
+      - {name: DRV_UNPOWERED, bit: 8, desc: "only with the optional power sense (drv.pwr_sense_enable, default 0 since CR-03 / D-41): the DRV_POWER input reads 'off' (D-28, D-29c)"}
       - {name: DRIVER_ALARM, bit: 9, desc: "ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)"}
       - {name: PAUSED, bit: 10, desc: "PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)"}
       - {name: MEAS_STATE, bit: 11, desc: "DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c)"}
@@ -349,13 +349,13 @@ tables:
       - {name: AFE_SETTLING, bit: 6, desc: "sample within afe.settle_discard after a (re)configuration"}
       - {name: AFE_RATE_MISMATCH, bit: 7, desc: "measured rate deviates more than afe.rate_tol_pct"}
       - {name: LINK_WDG, bit: 8, desc: "link watchdog tripped, until the next valid command frame"}
-      - {name: STOP_BTN, bit: 9, retired: "0.5", desc: "was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)"}
+      - {name: STOP_BTN, bit: 9, retired: "0.5", desc: "was: physical STOP/BREAK button input active. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41)"}
       - {name: PAUSE_BTN, bit: 10, feature: BUTTONS, desc: "physical PAUSE button input active"}
       - {name: ALM, bit: 11, feature: DRV_SIGNALS, desc: "driver ALM active"}
       - {name: PEND, bit: 12, feature: DRV_SIGNALS, desc: "driver PEND (in position) active"}
       - {name: POS_UNCERTAIN, bit: 13, desc: "an immediate stop may have truncated a pulse (±1 step), cleared by the next HOME"}
       - {name: NO_AFE_DATA, bit: 14, desc: "fallback frame (afe_raw = 0x80000000)"}
-      - {name: DRV_PWR, bit: 15, feature: DRV_SIGNALS, desc: "driver power present (reads 1 when drv.pwr_sense_enable = false and FEAT_DRV_SIGNALS = 1)"}
+      - {name: DRV_PWR, bit: 15, feature: DRV_SIGNALS, desc: "driver power present; evaluated only with the optional power sense (drv.pwr_sense_enable, default 0, CR-03 / D-41): reads 1 when it is off and FEAT_DRV_SIGNALS = 1"}
 
   - id: faults
     kind: bitset
@@ -371,7 +371,7 @@ tables:
       - {name: LIMIT_WIRING, bit: 3, desc: "both limit inputs active; cause: both still active"}
       - {name: HOME_NOT_FOUND, bit: 4, desc: "no START edge within home.max_travel_um; no persistent cause"}
       - {name: HOME_WIRING, bit: 5, desc: "END switch reached during homing; no persistent cause"}
-      - {name: K1_WELDED, bit: 6, desc: "E-stop sense open while driver power stays present > drv.k1_weld_ms (D-29c); cause: E-stop open and power present"}
+      - {name: K1_WELDED, bit: 6, desc: "Power-removal device did not open with the E-stop (only with the optional power sense and the K1 check enabled: drv.pwr_sense_enable and drv.k1_check_enable, both default 0; SRS OI-18): E-stop sense open while driver power stays present > drv.k1_weld_ms (D-29c); cause: E-stop open and power present"}
       - {name: HOME_DRIFT, bit: 7, desc: "re-homing edge deviates > home.drift_tol_um; no persistent cause"}
 
   - id: io
@@ -385,11 +385,11 @@ tables:
       - {name: ESTOP_OPEN, bit: 0, desc: "E-stop sense input open"}
       - {name: LIMIT_START, bit: 1, desc: "START limit input active"}
       - {name: LIMIT_END, bit: 2, desc: "END limit input active"}
-      - {name: STOP_BTN, bit: 3, retired: "0.5", desc: "was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)"}
+      - {name: STOP_BTN, bit: 3, retired: "0.5", desc: "was: STOP/BREAK button input active (PC7 is no longer an input). D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41)"}
       - {name: PAUSE_BTN, bit: 4, feature: BUTTONS, desc: "PAUSE button input active"}
       - {name: ALM, bit: 5, feature: DRV_SIGNALS, desc: "driver ALM input active"}
       - {name: PEND, bit: 6, feature: DRV_SIGNALS, desc: "driver PEND input active"}
-      - {name: DRV_PWR, bit: 7, feature: DRV_SIGNALS, desc: "raw driver-power sense input 'powered'"}
+      - {name: DRV_PWR, bit: 7, feature: DRV_SIGNALS, desc: "raw driver-power sense input 'powered' (optional 48 V presence sense, CR-03)"}
       - {name: ENA_DISABLED, bit: 8, desc: "ENA output at the disabled level"}
       - {name: RATE_80, bit: 9, desc: "HX711 RATE output high"}
 
@@ -422,7 +422,7 @@ tables:
       - {name: HOME_FAILED, value: 19, arg: "home_fail_reason: 1 NOT_FOUND, 2 WIRING, 3 ABORTED", values: "pos_um / pos_steps"}
       - {name: DRIVER_ENABLED, value: 20, arg: "0", values: "0 / 0"}
       - {name: DRIVER_DISABLED, value: 21, arg: "driver_disabled_cause: 1 PC DISABLE, 2 IDLE, 3 ESTOP, 4 DRV_POWER_LOST", values: "0 / 0"}
-      - {name: STOP_BUTTON, value: 22, retired: "0.5", arg: "–", values: "–", desc: "was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)"}
+      - {name: STOP_BUTTON, value: 22, retired: "0.5", arg: "–", values: "–", desc: "was: STOP/BREAK button pressed / released. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41)"}
       - {name: PAUSE_BUTTON, value: 23, arg: "1 pressed, 0 released", values: "0 / 0"}
       - {name: ALM_CHANGED, value: 24, arg: "1 active, 0 inactive", values: "0 / 0"}
       - {name: AFE_REINIT, value: 25, arg: "re-init count (low 16 bit)", values: "0 / 0"}
@@ -447,7 +447,7 @@ tables:
       - {name: PC_STOP, value: 1, desc: "STOP mode 0"}
       - {name: PC_STOP_CONTROLLED, value: 2, desc: "STOP mode 1"}
       - {name: PC_HALT, value: 3, desc: "HALT command"}
-      - {name: STOP_BUTTON, value: 4, retired: "0.5", desc: "was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (power cut + sense)"}
+      - {name: STOP_BUTTON, value: 4, retired: "0.5", desc: "was: physical STOP/BREAK button. D-36: no physical holding STOP/BREAK button; the single red button is the E-stop (MCU sense, D-41)"}
       - {name: PAUSE_BUTTON, value: 5, desc: "physical PAUSE button"}
       - {name: PC_PAUSE, value: 6, desc: "PAUSE command"}
       - {name: ESTOP, value: 7, desc: "E-stop sense opened"}

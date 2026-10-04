@@ -491,3 +491,49 @@ def test_hotkey_service_fallbacks_with_the_fake_backend() -> None:
         finally:
             hk.stop()
         assert not hk.alive and hk.mode == "UNAVAILABLE"
+
+
+# ============================================================================================ M2 close-out
+
+
+@pytest.mark.req("IF-005", "SW-MAN-002")
+def test_lost_response_and_lost_move_done_of_a_finished_move_resolves_done() -> None:
+    """SWD-M2-03: a short move that already ended while its response and its MOVE_DONE were lost → DONE from the
+    GET_STATUS position (= target), never re-sent."""
+    be = _ready()
+    try:
+        h = be.test_hooks
+        b = be.sim.board
+        orig = b.emit
+
+        def emit(code, *a, **k):                       # the MOVE_DONE of this move is lost (EVENT overflow)
+            if code == pg.Event.MOVE_DONE:
+                b.emit = orig
+                return None
+            return orig(code, *a, **k)
+        h.result(be.motion.move_to(1.0), 20_000)
+        n0 = len(tx_frames(be, Cmd.MOVE_ABS))
+        be.sim.act("inject", fault="drop_next", cmd="MOVE_ABS", what="response")
+        b.emit = emit
+        t = be.motion.move_to(1.05, speed_mm_s=30.0)  # 50 µm: done long before the 100 ms response timeout
+        out = h.result(t, 5000)
+        assert out.kind == "DONE" and out.done.pos_mm == 1.05 and len(tx_frames(be, Cmd.MOVE_ABS)) == n0 + 1
+        assert be.status().motion.commanded_target_mm == pytest.approx(1.05)
+    finally:
+        be.shutdown()
+
+
+@pytest.mark.req("SAF-SW-002", "SYS-003")
+def test_calibrated_zero_rounds_half_away() -> None:
+    assert calibrated_target(0.0005, 100.5, 1000.0).zero_raw == 101           # banker's rounding would give 100
+    assert calibrated_target(0.0005, -100.5, 1000.0).zero_raw == -101
+
+
+@pytest.mark.req("SAF-SW-005")
+def test_clear_hints_have_no_contactor_texts() -> None:
+    """SWD-M2-01 / D-41: no K1 contactor and no RESET button in the E-stop / driver-power texts."""
+    from bend_stand.core.gates import CLEAR_HINTS  # noqa: PLC0415
+
+    for k in ("ESTOP", "DRV_PWR", "DRV_UNPOWERED", "DRIVER_ALARM", "K1_WELDED"):
+        assert "RESET" not in CLEAR_HINTS[k] and "K1" not in CLEAR_HINTS[k], k
+    assert "re-home" in CLEAR_HINTS["ESTOP"]

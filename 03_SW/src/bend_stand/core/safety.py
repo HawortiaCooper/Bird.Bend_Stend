@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from bend_stand.calc.loadcal import clamp_raw_limits, effective_force_n, fw_raw_limits
+from bend_stand.calc.rounding import round_half_away
 from bend_stand.core import params_gen as pgen
 from bend_stand.core.errors import CommandTimeout, LinkError
 from bend_stand.core.jobs import Job
@@ -75,7 +76,7 @@ def calibrated_target(k: float, tare_raw: float, fw_level_n: float, *, cal_id: s
         raise ValueError(f"FW load-limit level must be in (0, {FW_LEVEL_MAX_N:.2f}] N (SW-LIM-002)")
     lo, hi = fw_raw_limits(+fw_level_n, -fw_level_n, k, tare_raw)
     mn, mx = pgen.BY_KEY["safety.load_raw_min"], pgen.BY_KEY["safety.load_raw_max"]
-    zero = round(tare_raw)
+    zero = round_half_away(tare_raw)                     # SYS-003 (not banker's rounding)
     try:
         lo, hi, clamped = clamp_raw_limits(lo, hi, int(mn.min), int(mn.max), int(mx.min), int(mx.max))
     except ValueError as exc:

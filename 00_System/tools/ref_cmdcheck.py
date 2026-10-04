@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference command-acceptance model (test oracle) for ICD_protocol.md v0.6 §4-§6.
+"""Reference command-acceptance model (test oracle) for ICD_protocol.md v0.7 §4-§6.
 
 Implements: FW-CMD-001 (check order), FW-CFG-003 (SET_PARAM checks), SAF-FW-020 (motion
 gating), SAF-FW-006/-021/-022, FW-CMD-003, FW-MOT-004/-005/-008/-009 (acceptance only).
@@ -22,7 +22,7 @@ import ref_codec as rc
 
 MOVING_STATES = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOMING", "STOPPING")
 MOTION_CMDS = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOME")
-STATE_SCHEMA = 2        # check_vectors.json state_schema (F-B-25); keys unchanged in v0.5 (stop_btn_* never set)
+STATE_SCHEMA = 3        # check_vectors.json state_schema (F-B-25); 3 (v0.7): + unhomed_origin_um (D-43 b)
 SPS = {0: 10, 1: 80}    # afe.rate_sps enum code -> conversions per second (H5)
 
 
@@ -53,6 +53,7 @@ class FwState:
     alm_active: bool = False
     nvm_record_valid: bool = True
     paused: bool = False            # PAUSED latch: blocks new motion (BLOCK PAUSED, D-30)
+    unhomed_origin_um: int = 0      # D-43 b: position latched when the axis became un-homed (schema 3)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FwState":
@@ -330,6 +331,12 @@ class Model:
             v = req["v_um_s"]
             if abs(v) > self.v_limit(st, self.loaded(st), homed_for_jog=st.homed):
                 return "E_RANGE", 0
+            if v != 0 and not st.homed:
+                # D-43 b: un-homed travel window origin ± home.max_travel_um; a JOG toward a reached bound is
+                # refused until homed (offset 0 = the v field gives the direction)
+                w = self.value(st, "home.max_travel_um")
+                if (v > 0 and st.pos_um >= st.unhomed_origin_um + w) or (v < 0 and st.pos_um <= st.unhomed_origin_um - w):
+                    return "E_RANGE", 0
             if req["a_um_s2"] > a_max:
                 return "E_RANGE", 4
             if v == 0:
