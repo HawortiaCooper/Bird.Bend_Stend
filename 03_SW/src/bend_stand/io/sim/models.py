@@ -45,31 +45,59 @@ class Specimen:
     relax_pct: float = 0.0
     relax_tau_s: float = 30.0
     broken: bool = False
+    # M4 (B6-17 test extras + ICD v0.7.4 twin vocabulary, SWC-M4-01): grip slip, residual force after a break,
+    # specimen side, cubic term, break by travel
+    slip_at_n: float | None = None         # the contact point moves once by ``slip_mm`` when |F| first reaches this
+    slip_mm: float = 0.0
+    break_residual_pct: float = 0.0        # force kept after a break (% of the intact curve), default 0
+    side: str = "pull"                     # pull (d > 0) | push (d < 0, F negative) | both (linear through contact)
+    k3_n_per_mm3: float = 0.0              # |F| = k|d| (bilinear) + k3·|d|³, never below 0
+    break_travel_um: float | None = None   # break also when |d| ≥ this
+    slipped: bool = False
     _relax_x: float | None = None          # position at which the current relaxation started
     _relax_t_us: int = 0
 
+    def _curve(self, ad: float) -> float:
+        """Intact |F| at the deflection magnitude ``ad`` (mm)."""
+        f = self.k_n_per_mm * ad
+        if self.kind == "bilinear" and self.f_yield_n is not None and self.k2_n_per_mm is not None                 and f > self.f_yield_n:
+            f = self.f_yield_n + self.k2_n_per_mm * (ad - self.f_yield_n / self.k_n_per_mm)
+        f += self.k3_n_per_mm3 * ad ** 3
+        return max(0.0, f)
+
+    def _deflection(self, x_um: float) -> tuple[float, int]:
+        """→ (|d| mm, sign) of the active side; (0, 0) when the specimen is not engaged."""
+        d = (x_um - self.x_contact_um) / 1000.0
+        if (self.side == "pull" and d <= 0) or (self.side == "push" and d >= 0) or d == 0:
+            return 0.0, 0
+        return abs(d), (1 if d > 0 else -1)
+
     def force_n(self, x_um: float, t_us: int | None = None) -> float:
-        """Force at the world position ``x_um`` (µm); with ``t_us`` the relaxation (``relax_pct`` with time
-        constant ``relax_tau_s`` at constant position) is applied."""
-        if self.kind == "none" or self.broken:
+        """Signed force at the world position ``x_um`` (µm), twin M4 model (tools/README): side, bilinear + cubic,
+        relaxation (``relax_pct`` / ``relax_tau_s`` at constant position, with ``t_us``), grip slip, break by force
+        or travel with a residual of the intact curve."""
+        if self.kind == "none":
             return 0.0
-        dx_mm = (x_um - self.x_contact_um) / 1000.0
-        if dx_mm <= 0:
+        ad, sgn = self._deflection(x_um)
+        if self.broken:
+            return sgn * self._curve(ad) * self.break_residual_pct / 100.0
+        if sgn and self.slip_at_n is not None and not self.slipped and self._curve(ad) >= self.slip_at_n:
+            self.slipped = True
+            self.x_contact_um += sgn * int(round(self.slip_mm * 1000.0))
+            ad, sgn = self._deflection(x_um)
+        if not sgn:
             return 0.0
-        f = self.k_n_per_mm * dx_mm
+        f = self._curve(ad)
         if t_us is not None and self.relax_pct > 0:
             if self._relax_x is None or abs(x_um - self._relax_x) > 0.5:
                 self._relax_x, self._relax_t_us = x_um, t_us
             dt = max(0, t_us - self._relax_t_us) / 1e6
             f *= 1.0 - self.relax_pct / 100.0 * (1.0 - math.exp(-dt / max(1e-3, self.relax_tau_s)))
-        if self.kind == "bilinear" and self.f_yield_n is not None and self.k2_n_per_mm is not None \
-                and f > self.f_yield_n:
-            x_y = self.f_yield_n / self.k_n_per_mm
-            f = self.f_yield_n + self.k2_n_per_mm * (dx_mm - x_y)
-        if self.f_break_n is not None and f >= self.f_break_n:
+        if (self.f_break_n is not None and f >= self.f_break_n) or                 (self.break_travel_um is not None and ad * 1000.0 >= self.break_travel_um):
             self.broken = True
-            return 0.0
-        return f
+            self._relax_x = None
+            return sgn * self._curve(ad) * self.break_residual_pct / 100.0
+        return sgn * f
 
 
 @dataclass

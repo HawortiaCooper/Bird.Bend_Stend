@@ -2,10 +2,10 @@
 
 | Doc | SW_design_GUI |
 |---|---|
-| Version | **0.5 — M3 (SW application) GUI as built (§15.2, §15.3): Manual, Safety limits, Test marks, Calibration & Tare tabs, travel / load wizards, TARE popup, Pause/Break key test, units N / kgf, K1 chip (M2 gate condition); M3 backend alignment (§11.1e, B5-01…17)** · 0.4.1 — M1 as built (§15.1) + D-38 plot panes (SW-RT-006, §4.7) + M2 backend alignment (§11.1d, D-41) |
+| Version | **0.6 — M4 (Sequencer) GUI as built (§15.4, §15.5): MC3-5 trip toasts, Sequence tab (editor, loops, files, generator wizard, run controls, run line), sequence chart, Report tab; M4 backend alignment (§11.1f, B6-01…17)** · 0.5 — M3 (SW application) GUI as built (§15.2, §15.3): Manual, Safety limits, Test marks, Calibration & Tare tabs, travel / load wizards, TARE popup, Pause/Break key test, units N / kgf, K1 chip (M2 gate condition); M3 backend alignment (§11.1e, B5-01…17)** · 0.4.1 — M1 as built (§15.1) + D-38 plot panes (SW-RT-006, §4.7) + M2 backend alignment (§11.1d, D-41) |
 | Date | 2026-10-05 |
 | Owner | Implementer D — GUI (`03_SW/src/bend_stand/gui/**` incl. `gui/__init__.py`, `gui/app.py`; `03_SW/tests/gui/**`; this document) |
-| Binding inputs | **M3: SRS v0.6.1, ICD v0.7.1 (dict 5), DECISIONS D-01…D-44, `SW_design.md` v0.5 §15.5e (B5-01…17).** Earlier rounds: `00_System/specs/SRS.md` **v0.4** (SW-*, SAF-SW-*, NFR-*; same IDs as v0.3, D-30…D-33 wording incl. SW-STOP-004 RESUME and the SW-SEQ-005 refusal list), `DECISIONS.md` D-01…D-33 (esp. D-11, D-14, D-23, D-26, D-28, D-29 a/h/i/n, **D-30, D-31, D-32, D-33**; **D-27 closed** per Orchestrator 2026-10-03: driver 4000 p/rev closed loop → nominal 800 steps/mm), `ICD_protocol.md` **v0.4** (RESUME 0x3C, D-31) and the generated name tables `03_SW/src/bend_stand/core/protocol_gen.py` (ICD v0.4, PROTO 1.0, PAYLOAD 1), `params.yaml` (`motion.steps_per_mm` default 800, D-27 closed), R3 §6 (Thrust_Stand GUI solutions, perf defect SWD-PM3-05), R1 §7 (Stefan `stepper_gui` patterns), R4 §5–§8, §10 |
+| Binding inputs | **M4: SRS v0.6.2 (SW-SEQ-001…007, SW-WIZ-001/002, SW-SEQF-001, SW-SCH-001/002, SW-REP-001…004, SW-STOP-004), ICD v0.7.3 (dict 6), DECISIONS D-01…D-46, `SW_design.md` v0.6 §15.5f (B6-01…17); M3 gate condition MC3-5 (SWD-M3-02).** M3: SRS v0.6.1, ICD v0.7.1 (dict 5), DECISIONS D-01…D-44, `SW_design.md` v0.5 §15.5e (B5-01…17).** Earlier rounds: `00_System/specs/SRS.md` **v0.4** (SW-*, SAF-SW-*, NFR-*; same IDs as v0.3, D-30…D-33 wording incl. SW-STOP-004 RESUME and the SW-SEQ-005 refusal list), `DECISIONS.md` D-01…D-33 (esp. D-11, D-14, D-23, D-26, D-28, D-29 a/h/i/n, **D-30, D-31, D-32, D-33**; **D-27 closed** per Orchestrator 2026-10-03: driver 4000 p/rev closed loop → nominal 800 steps/mm), `ICD_protocol.md` **v0.4** (RESUME 0x3C, D-31) and the generated name tables `03_SW/src/bend_stand/core/protocol_gen.py` (ICD v0.4, PROTO 1.0, PAYLOAD 1), `params.yaml` (`motion.steps_per_mm` default 800, D-27 closed), R3 §6 (Thrust_Stand GUI solutions, perf defect SWD-PM3-05), R1 §7 (Stefan `stepper_gui` patterns), R4 §5–§8, §10 |
 | Backend contract | **`03_SW/docs/SW_design.md` v0.3 §15** (Implementer B): facade `core.backend.Backend` (§15.1), `BackendStatus` (§15.2), topics (§15.3), GUI rules (§15.4), **API delta A-01…A-25 (§15.5) and B3-01…B3-21 (§15.5a)**, result types (§15.6), answers to GRQ-B-01…18 (§15.7) and GF-11…17 (B3-16…B3-21); plus B §5.4–§5.6, §5.5.1, §6.5, §6.7, §9.1, §9.3.1, §10. Where the two documents differ, B §15 wins and this file is updated. |
 | Generated names | Every bit, fault, flag, source, event, stop-cause and phase name shown or iterated by the GUI comes from `core.protocol_gen` (`DATA_FLAGS_BITS`, `DATA_STATUS_BITS`, `FAULTS_BITS`, `SYS_FLAGS_BITS`, `BLOCK_BITS`, `SOURCE_NAMES`, `EVENT_NAMES`, `STOP_CAUSE_NAMES`, `MOVE_DONE_REASON_NAMES`, `HOME_PHASE_NAMES`, `MOTION_STATE_NAMES`, `DRIVER_DISABLED_CAUSE_NAMES` and their `*_DESC`); nothing is hand-listed (P8, GF-08). |
 | Reference code (read-only, D-02) | `Thrust_Stand_HAW/03_SW/src/thrust_stand/gui/**` and `io/win_hotkey.py`, cited as `TS:path:line` at **9473c68**; copies are taken from the TS HEAD current at copy time and the copied hash is written into the origin note (D-29 m, SYS-010). `Stefan/SW/stepper_gui/gui.py` (cited via R1 §7) |
@@ -488,6 +488,29 @@ Keyboard jog with ←/→ (as in Stefan's GUI) is **off** (GQ-08, decided).
 
 **Run status.** `sequencer.status()` → `SeqStatus`, pulled every tick; `seq.status` and `seq.step_result` events feed the Messages line and the Event log. Shown: `state` (PAUSED with `paused_source`, A-18), `exec_idx`/plan length, `loop_iters`, `phase` (COMMAND / MOVING / APPROACH / TRIM / SETTLE / CAPTURE / HOLD / WAIT_OPERATOR), `windows_done/total`, `plan_t_s` / **`plan_total_s`**, `behind_s`, **`remaining_s`** ("∞ – loop until stopped" when None, A-18), `k_est_n_mm`, `message`. End reasons are shown verbatim incl. **NOT_REACHED**, **DRIVER_ALARM** (ALM during the sequence → controlled STOP, D-33 c) and **CLEARED** (paused sequence ended by Clear stop, C-13) (B3-06). Step results (`seq.step_result`) show the flags verbatim, incl. **NOT_REACHED** (D-32, D-33 d: load target not reached when the approach reached its bound = the nearer of the soft limit and an enabled SW travel limit in the step direction; the axis stopped there, not a limit trip; the sequence stopped) in red, ON_TARGET, NOT_ON_TARGET, INCOMPLETE, WINDOW_DISCARDED, and the local step error BOUND_NOT_AHEAD (B3-21).
 
+**As built (M4, 2026-10-05; deviations from the draft above):**
+- Toolbar in two rows (files · Generate · Undo / Redo · badge; + Step ▾ · Duplicate · Delete · Up · Down · Loop… ·
+  Unloop · advanced columns) and a compact settings grid (name, travel ref, pull dir, k_est, step defaults v / a /
+  settle / capture / tol) so the tab fits the 1366 px layout. **No `on_trim_fail` combo** (B6-01: removed, SRS v0.6.2
+  SW-SEQ-006 "no continue option"). No [Defaults…] dialog: the defaults are inline.
+- Undo / Redo are deep-copy snapshots of the `Sequence` (≤ 100) instead of a `QUndoStack`.
+- Loops are drawn as a bracket in the **row header** (`┌×3 2`, `│ 3`, `└ 4`, `∞` = until stopped, `[×n` = one-step
+  loop) instead of a separate "Lp" column; the tooltip lists the loops of the row.
+- Step-list edits that move indices (delete, insert, duplicate) keep the loop indices with pure helpers in
+  `seq_access` (`loops_after_delete` / `loops_after_insert`); generated blocks use `Sequence.insert_block`. Nesting /
+  overlap / count rules stay the backend's validation (B6-02). Up / Down swap steps and keep the loop index ranges
+  (a step can move into / out of a loop).
+- Start: `sequencer.check_start(seq)` (B6-06) on the click — REFUSE items one message row each (code + text + hint),
+  CONFIRM / WARN items → C-07 → `start(seq, confirmed=True)`; the button's enable state follows the static
+  `sequence_start` gate plus "no validation ERROR". Pause / Resume = `backend.pause / resume("sequence")`; Abort =
+  `sequencer.abort()` (reason "operator").
+- Live marker: `SeqStatus.marker_x_mm / marker_f_n` (sequence coordinate, B6-07); fallback `data.latest`
+  (`x_test_mm` / `x_mm`, `F_N`). Trace `data.sequence_trace()` every 3rd tick. The chart is refreshed while the tab
+  is shown (main refresh, 33 ms).
+- Step results (`seq.step_result`, `StepResult`, B6-08) are one message row each with the flags verbatim;
+  NOT_REACHED rows are red with "load target not reached at the approach bound (axis stopped there; not a limit
+  trip)" and a red cross at (`x_end_mm`, `f_end_n`) in the chart.
+
 ### 3.7 Report (SW-REP-001…004, SW-ACQ-002)
 
 ```
@@ -516,6 +539,16 @@ Keyboard jog with ←/→ (as in Stefan's GUI) is **off** (GQ-08, decided).
 - **Recording list and step table** (A-19): `reports.list_recordings(root=None)` (folder, date, marks, sequence name, status, duration) and `reports.load_result(dir)` (parsed `report.json`: warnings, step/iteration results). The step table is read-only (SW-REP-002); flags are displayed verbatim, NOT_REACHED in red (D-32).
 - **[Generate]** → `reports.build_async(recording_dir, cal=…, tare=…, bend3p=…)` (SW-REP-001, SW-REP-003 re-apply, SW-REP-004 3-point bend; `bend3p=None` = session default).
 - **[Open HTML]** uses `QDesktopServices.openUrl` (system browser, GQ-13, decided).
+
+**As built (M4):** recordings table (date, specimen marks, sequence, status — PARTIAL / FAILED red —, duration,
+report yes / no, folder) refreshed on first show, [Refresh] and `report.ready`; selection → `load_result` (no
+`report.json` → "no report yet — [Build report] creates it"); step result table columns Step · Loop · Label · N · F
+mean / std / min / max / SE / drift (display unit) · x mean · Target · Flags (red for NOT_REACHED, INCOMPLETE,
+NOT_ON_TARGET, BREAK_DETECTED, TIMEOUT, SLIP, WINDOW_DISCARDED). Options: calibration file to re-apply (path; empty =
+as recorded), tare raw (checkbox + value; off = as recorded), 3-point bend (checkbox + L / b / h; prefilled and
+ticked when the session has a geometry; **unticked = `bend3p=False` = off**, B6-14). [Build report] →
+`build_async(dir, cal=, tare=, bend3p=)`; [Open HTML] / [Open folder] / [Open CSV] → `QDesktopServices.openUrl`
+(`ReportPaths` has no CSV path: `<folder>/data.csv`, GRQ-B-29). The GUI computes no statistic.
 
 ---
 
@@ -1102,10 +1135,12 @@ HotkeyTestDialog
     autorange.py         Y-range hysteresis (pure function, unit-tested)
     axes.py              axis helpers (SI prefix off, fixed width, static ticks)
     sequence_chart.py    SequenceChart (planned path, capture points, active step, trace, live marker, NOT_REACHED marks)
+  seq_access.py          (M4) the one adapter to B's sequencer / report types (§15.4 WP-D16): type resolution, issue →
+                         cell mapping, pure step-list / loop-index edits, plan / path / status / result normalisation
   models/
-    step_table_model.py  QAbstractTableModel over sequencer.model.Sequence + loop gutter
-    marks_model.py       custom key/value table model over TestMarks
-    recordings_model.py  Report-tab list model over reports.list_recordings()
+    step_table_model.py  QAbstractTableModel over the backend Sequence + loop bracket in the row header (M4)
+                         (as built: the marks custom table and the recordings list are QTableWidgets in their tabs;
+                         no separate marks_model.py / recordings_model.py)
 03_SW/tests/gui/          (owned by D) - see §10
 ```
 
@@ -1368,6 +1403,33 @@ fakes first and then aligned to B's M3 working tree of 2026-10-05 (engines, sess
 | B5-21/22 | `LimitsAPI` Protocol + manual / default thresholds; `limits.check(cfg)`; `marks.delete_preset(path)` | GUI fake implements `limits.check` and `marks.delete_preset` (OI-B-M3-04, so B can add them to the Protocol); no [Delete] preset button yet (M4) | §10 |
 | B5-23/24 | new `dimension` values; simulator vocabulary v2 additions | none (quantity groups fall back to the unit) | – |
 
+### 11.1f Adoption of the API delta v0.5.1 → v0.6 (B §15.5f, M4 backend)
+
+The GUI was first built against the §10 / §11 design (Protocols + fakes) and aligned to B's §15.5f and the M4
+working tree of 2026-10-05 (model, plan, generators, files, executor and reports wired in the Backend). All names land
+in `gui/seq_access.py`. The GUI fake sequencer uses B's real pure code (`core.sequencer.model / plan / generators /
+seqfile`) with a scripted executor; the fake conformance test covers the new Protocol members.
+
+| B6 | Change | GUI adoption | Section |
+|---|---|---|---|
+| B6-01 | model types exported by `core.api` | `SeqTypes` takes `core.api.Step / Loop / StepKind` (fallback: type hints of `sequencer.new()`); no `on_trim_fail` | §3.6 |
+| B6-02 | `SeqIssue(step_uid, field, …)` | cell colour + tooltip; loop / sequence issues (`loops[i]`, `travel_ref`, …) in the issue line under the table | §3.6 |
+| B6-03 | `Plan`, `PlannedStep`, `PathPoint(…, capture, brk)` | plan summary (executed steps, total / ∞, windows, x / F range); chart breaks at `brk`, capture points from `capture` | §3.6 |
+| B6-04 | `generate(name, params)`, schemas with `description`, `depends_on` | `GeneratorDialog` / `SchemaForm`; hidden fields are not passed | §6.5 |
+| B6-05 | files v2 | Open / Save; FileFormatError → message, sequence unchanged | §3.6 |
+| B6-06 | `check_start`, `start(confirmed)`, `abort(reason)`, `continue_`, `results` | Start flow with C-07; Continue in WAITING_OPERATOR; Abort | §3.6 |
+| B6-07 | `SeqStatus` fields incl. `plan_len`, `marker_*` | run line; active row from `step_uid`; live marker | §3.6 |
+| B6-08 | `StepResult` | message rows, NOT_REACHED cross; Report table | §3.6, §3.7 |
+| B6-09 | `SeqWindow` (`seq.window`) | event log only | §4.4 |
+| B6-10 | end reasons | verbatim in the run line ("end: …") and the "Sequence ended" row (red for ABORTED / ERROR / NOT_REACHED / DRIVER_ALARM) | §3.6 |
+| B6-11 | `sequence_trace` in the sequence coordinate | chart trace | §3.6 |
+| B6-12 | `sequence_start` / `sequence_edit` gates real | Start enable + tooltip; editor read-only while `sequence_edit` refuses | §3.6 |
+| B6-13 | pause / resume / clear stop of a sequence | sequence Pause / Resume buttons (= toolbar); C-13 unchanged | §5.9 |
+| B6-14 | reports API | Report tab; `bend3p=False` when unticked | §3.7 |
+| B6-15 | `safety.trip_cleared` (`SwTripCleared`) | bridge maps it to `safetyEvent` (G-01b); toast info "SW limit cleared: <limit> – still latched: …" | §5.7 |
+| B6-16 | session trim / k fields | not shown (session file only) | – |
+| B6-17 | simulator specimen extras | not used by the GUI tests | – |
+
 ### 11.2 Contract used (summary by GUI element)
 | GUI element | Backend API used | B § |
 |---|---|---|
@@ -1411,7 +1473,15 @@ fakes first and then aligned to B's M3 working tree of 2026-10-05 (engines, sess
 | GRQ-B-27 | `MarksAPI.delete_preset(path)` (§3.3 [Delete]); the GUI offers no Delete until it exists | Test-marks presets | M4 | **closed** by B5-22 (backend; GUI button M4) |
 | OBS-D-M3-01 | (info, to B and F) A real `Backend` started by the GUI tests once read a session from the **default data directory** (travel limits 1…5 mm enabled, written by another test run). Every suite that builds a real `Backend` should set `data_dir` / `BEND_STAND_DATA_DIR` to a temporary directory; the GUI suite now does (conftest) | test isolation | M3 | info |
 
-**Remaining API gaps (M1–M2): none.**
+**M4 requests (2026-10-05) — to Implementer B:**
+
+| ID | Request | Why (GUI element) | MS | Status |
+|---|---|---|---|---|
+| GRQ-B-28 | (low) `Sequence` helpers for the index-moving edits — `delete_steps(rows)`, `move_step(i, delta)`, `duplicate_steps(rows)` — so the loop-index bookkeeping lives in one place with `insert_block`; the GUI does it in `seq_access` meanwhile (pure, unit-tested) | Sequence editor | M4+ | open |
+| GRQ-B-29 | (low) `ReportPaths.csv` (path of `data.csv`); the GUI derives `<folder>/data.csv` for [Open CSV] | Report tab | M4+ | open |
+| GRQ-B-30 | (info) confirm the GUI's `bend3p` mapping: ticked → `Bend3pGeometry(L, b, h)`, unticked → `False`; the box is pre-ticked with the session geometry when one is set | Report tab | M4 | open |
+
+**Remaining API gaps (M1–M4): none blocking.**
 
 
 ---
@@ -1484,7 +1554,7 @@ Legend for "Share": **G** = GUI-owned; **S** = shared (the GUI triggers and disp
 | SW-SEQ-003 | Run line (`SeqStatus` phases, `plan_total_s`, `remaining_s`; executor in the backend) | §3.6 | sequence_tab | B | G-30 |
 | SW-SEQ-004 | VALID shown in the indicator bar and lanes during capture | §2.4, §4.1 | indicator_bar, lanes | B | G-30 |
 | SW-SEQ-005 | `sequence_start` REFUSE list at Start (incl. D-33 b reasons, B3-05) | §3.6 | sequence_tab | B | G-30 |
-| SW-SEQ-006 | k_est / pull_dir / on_trim_fail settings; APPROACH/TRIM phases; NOT_REACHED (D-32) shown | §3.6 | sequence_tab | B | G-30 |
+| SW-SEQ-006 | k_est / pull_dir settings (no on_trim_fail: removed by B6-01, SRS v0.6.2); APPROACH/TRIM phases; NOT_REACHED (D-32) shown | §3.6 | sequence_tab | B | G-30 |
 | SW-SEQ-007 | Start/Pause/Resume/Stop/Abort controls; guard events shown | §3.6 | sequence_tab | S | G-30 |
 | SW-WIZ-001 | Generator wizard G1–G3, 5 generators, forms from `generator_schemas()` | §6.5 | generator, schema_form | S | G-29 |
 | SW-WIZ-002 | Insert append/after/replace (`insert_block`); editable afterwards; preview | §6.5 | generator, sequence_tab | G | G-29 |
@@ -1561,6 +1631,28 @@ Tests are in `03_SW/tests/gui/`; `fake` = FakeBackend, `sim` = B's real Backend 
 | SW-RT-001 (prefs) | test_m3_main_window :: test_last_tab_and_unit_restored |
 
 ---
+
+### 12.4 M4 verification map (as built, 2026-10-05)
+
+`fake` = FakeBackend with the fake sequencer over B's pure sequencer code; `sim` = B's real Backend + in-process
+simulator (lock-step).
+
+| Req | Tests (file :: test) |
+|---|---|
+| SAF-SW-005 / SAF-SW-001 (MC3-5) | test_m4_sequence :: test_trip_announcement_new_trip_vs_clear, test_trip_clear_toast_in_window, test_trip_latched_before_window_is_not_announced_again · Validator F test_v_gui_m3 :: test_tc_saf_sw_005_06 (`--runxfail`) |
+| SW-SEQ-001 | test_m4_sequence :: test_sequence_tab_present_with_stop, test_typed_steps_and_applicability, test_cell_edit_and_backend_validation, test_kind_change_resets_target, test_insert_duplicate_delete_reorder_undo, test_settings_row_edits_sequence, test_edit_refused_by_sequence_edit_gate, test_issue_mapping_pure · test_sim_sequence :: test_travel_sequence_runs_on_simulator |
+| SW-SEQ-002 | test_m4_sequence :: test_loops_wrap_unwrap_and_bookkeeping, test_loop_dialog_count_and_stop, test_loop_bookkeeping_pure · test_sim_sequence (loop ×2 on the wire) |
+| SW-SEQ-003 | test_m4_sequence :: test_run_controls_and_run_line · test_sim_sequence (run to FINISHED, active rows) |
+| SW-SEQ-005 | test_m4_sequence :: test_start_refused_items_listed_one_per_reason, test_start_with_confirm_items_needs_c07, test_start_warn_only_needs_c07_too · test_sim_sequence (C-07 → confirmed start) |
+| SW-SEQ-006 / SW-SEQ-007 | test_m4_sequence :: test_not_reached_and_driver_alarm_shown, test_run_controls_and_run_line, test_abort_and_until_stopped_remaining · test_sim_sequence :: test_sequence_pause_resume_and_stop_on_simulator |
+| SW-STOP-004 | test_m4_sequence :: test_run_controls_and_run_line, test_resume_refused_shows_clear_stop_first · test_sim_sequence :: test_sequence_pause_resume_and_stop_on_simulator (PAUSE / RESUME on the wire) |
+| SW-WIZ-001 / SW-WIZ-002 | test_m4_sequence :: test_generator_form_from_backend_schema_and_insert, test_generator_value_error_shown_verbatim, test_generator_replace_and_insert_modes |
+| SW-SEQF-001 | test_m4_sequence :: test_save_open_round_trip, test_invalid_file_keeps_current_sequence, test_new_with_unsaved_changes_needs_c08 |
+| SW-SCH-001 | test_m4_sequence :: test_chart_shows_backend_planned_path_with_labels |
+| SW-SCH-002 | test_m4_sequence :: test_chart_live_marker_active_step_and_trace, test_chart_marker_rate_at_least_10_hz (real timer) · test_sim_sequence (marker updates during the run) |
+| SW-REP-001…004, SW-ACQ-002 | test_m4_report :: test_recordings_list_and_step_results, test_result_table_follows_display_unit, test_build_with_reapplied_cal_tare_and_bend, test_open_html_in_system_browser, test_build_failure_and_report_ready_refresh · test_sim_sequence (report built at the end, listed, step table filled) |
+| SAF-SW-004 (C-07, C-08) | test_confirm_dialog (keyboard rules for every TEXTS id incl. C-07) · test_m4_sequence (C-07 / C-08 flows) |
+| SW-STOP-001 (new windows) | test_m4_sequence :: test_sequence_tab_present_with_stop, test_loop_dialog_count_and_stop, test_generator_form_from_backend_schema_and_insert |
 
 ## 13. GUI preferences (GQ-01…20) — decided by the PO (D-32, Q27: defaults accepted)
 
@@ -1696,6 +1788,58 @@ release = exactly one MOVE_ABS; hold-to-jog = JOG + backend refreshes + JOG 0; n
 wizard to DONE (800 steps/mm on the board) and a cancelled run restoring spm0; load wizard (zero + 1 kg + 10 kg) to
 DONE, tare DONE, F_N readout ≈ 98 N with 10 kg, X-Y pane on force.
 
+### 15.4 M4 work breakdown — GUI (Sequencer, D-46)
+
+**M4 GUI scope:** MC3-5 / SWD-M3-02 first (trip-clear toast); Sequence tab (step table editor, loops, insert /
+duplicate / delete / reorder, per-cell validation from the backend, file save / recall, run controls with gates and
+C-07 / C-08 / C-13, run line); generator wizard (forms from `generator_schemas()`, preview, append / insert / replace);
+sequence chart (planned path + labels, live marker ≥ 10 Hz, active step, measured trace, NOT_REACHED marks); Report
+tab (recordings, step results, build CSV + JSON + HTML with optional 3-point bend, re-apply calibration / tare, open
+HTML in the system browser). B publishes the M4 API delta (`SW_design.md` §15.5f) in parallel: the GUI is built
+against the `core.api` Protocols and the §10 / §11 design through **one adapter module** (`gui/seq_access.py`) so
+that B's final names land in one place.
+
+**M4 SRS IDs (GUI part):** SW-SEQ-001…007 (editor, controls, run display), SW-STOP-004 (sequence Pause / Resume),
+SW-WIZ-001/002, SW-SEQF-001, SW-SCH-001/002, SW-REP-001…004 (Report tab), SAF-SW-004 (C-07, C-08, C-13),
+SAF-SW-005 / SAF-SW-001 (MC3-5).
+
+| WP | Content (modules) | Tests (`@pytest.mark.req`) | Req |
+|---|---|---|---|
+| WP-D15 MC3-5 | `main_window.py`: `trip_announcement` (new trip → error "… STOP sent"; clear → info "SW limit cleared"; B's clear signal or the remaining-latch publish of B5-25), trips latched before the window are seeded from `status().safety.trips`; `event_log` clear row = info | `test_m4_sequence.py::test_trip_clear_*`; Validator F `test_tc_saf_sw_005_06` with `--runxfail` | SAF-SW-005, SAF-SW-001 |
+| WP-D16 adapter + model | `seq_access.py` (type resolution `core.api` exports → `typing.get_type_hints` of `sequencer.new()`; issue → cell mapping; generator call; plan / path / status / report normalisation), `models/step_table_model.py` (columns, applicability table, display units, edit → `dataclasses.replace`, loop gutter) | G-29 model part | SW-SEQ-001/002 |
+| WP-D17 Sequence tab | `tabs/sequence_tab.py`: toolbar (New / Open / Save / Save as / Generate / + Step / Duplicate / Delete / Up / Down / Loop / Unloop / Undo / Redo), settings row (travel ref, pull dir, k_est, defaults), validation (debounced 200 ms, cell colours + tooltips, badge), run controls (Start → C-07, Pause, Resume, Continue, Stop, Abort), run line + messages, read-only while `sequence_edit` refuses | G-29, G-30 (fake) | SW-SEQ-001…007, SW-SEQF-001, SW-STOP-004, SAF-SW-004 |
+| WP-D18 generator wizard | `wizards/schema_form.py` (FieldSpec → editor, min / max / default, `depends_on`), `wizards/generator.py` (`GeneratorDialog(SafeDialog)`, pages G1…G3, preview table + mini chart, insert mode) | G-29 wizard part | SW-WIZ-001/002 |
+| WP-D19 chart | `plots/sequence_chart.py` (planned path polyline with HOME breaks, labels, capture points, estimated segments dashed, active step, trace, live marker, NOT_REACHED cross; explicit ranges; ≥ 10 Hz from the main refresh) | G-31 (+ rate test) | SW-SCH-001/002 |
+| WP-D20 Report tab | `tabs/report_tab.py` (recordings list, result summary + warnings, step result table, options: re-apply calibration file / tare raw, 3-point bend L / b / h, [Build report] → `reports.build_async`, [Open HTML] via `QDesktopServices`, [Open folder] / [Open CSV], `report.ready` refresh) | G-32 | SW-REP-001…004 |
+| WP-D21 tests + sim | fake sequencer / reports per B §10–§11 (`tests/gui/fakes.py`); `test_m4_sequence.py`, `test_m4_report.py`; sim-backed end-to-end once B's engine is in the tree (`test_sim_sequence.py`, skipped otherwise) | GUI suite fixed + random order, sim smoke | SYS-008 |
+| WP-D22 close-out | this document (§3.6 / §3.7 as built, §11.1f adoption of B §15.5f, §11.3 requests, §12.4 M4 verification map, history) | – | – |
+
+**Order:** WP-D15 → WP-D16 → (WP-D17 ∥ WP-D18 ∥ WP-D19 ∥ WP-D20) → WP-D21 → WP-D22.
+**M4 exit criteria (GUI part):** suite green fixed and random order; MC3-5 reproducer passes with `--runxfail`;
+every new control gate-driven (no rule logic in the GUI, P1); STOP in every new window / dialog; sim smoke exit 0.
+
+### 15.5 As-built status (M4, WP-D15…WP-D22, 2026-10-05)
+
+| WP | State | Notes / deviations |
+|---|---|---|
+| D15 MC3-5 | done | `trip_announcement` / `trip_key` (pure) in `main_window.py`; `safety.trip_cleared` mapped in the bridge (B6-15); a remaining-latch republish and payload None are also treated as clears (B5-25 behaviour); 2 s grace before an announced identity leaves the seen set |
+| D16 adapter + model | done | `seq_access.py`, `models/step_table_model.py` (§3.6 as built) |
+| D17 Sequence tab | done | §3.6 as built |
+| D18 generator wizard | done | `GeneratorDialog(SafeDialog)` (not a `SafeWizard`: no engine behind it) with a `QStackedWidget` G1…G3; Enter never inserts |
+| D19 chart | done | `plots/sequence_chart.py` |
+| D20 Report tab | done | §3.7 as built |
+| D21 tests | done | `fake_sequencer.py` (B's pure code + scripted executor), `test_m4_sequence.py` (30), `test_m4_report.py` (5), `test_sim_sequence.py` (2, B's real sequencer on the lock-step simulator) |
+| D22 doc | done | this version |
+
+**Evidence (2026-10-05, offscreen):** GUI suite `pytest tests/gui -p no:randomly` **297 passed**; `-p randomly`
+(seed 1186900966) **297 passed** (a further random run: 297 passed). Validator F
+`tests/validation/test_v_gui_m3.py --runxfail` 5 passed (TC-SAF-SW-005-06 passes; without `--runxfail` the strict
+xfail now XPASSes → F removes the marker). SW-SCH-002 marker repaint with the real 33 ms timer ≈ 30 Hz (≥ 10 Hz
+asserted). Sim end-to-end (lock-step): a travel sequence of 3 steps with a ×2 loop built in the tab → C-07 →
+FINISHED, MOVE_ABS = x_zero + (2, 4, 2, 4, 1) mm, report built and listed with its step table; Pause → PAUSE,
+Resume → RESUME, Stop → STOPPED. Smoke `python -m bend_stand --sim` (offscreen, `BEND_STAND_GUI_QUIT_AFTER_MS=8000`,
+hotkey off, temp data dir) exit 0: link CONNECTED sim, 80.4 SPS, 0 lost / 0 CRC, 242 ticks p50 33.0 ms / p95 33.6 ms.
+
 ---
 
 ## 16. Change history
@@ -1707,6 +1851,7 @@ DONE, tare DONE, F_N readout ≈ 98 N with 10 kg, X-Y pane on force.
 | 0.3 | 2026-10-03 | Implementer D | Final P1 alignment to `SW_design.md` v0.3 §15.5a (B3-01…B3-21, new §11.1a), SRS v0.4 (same IDs) and ICD v0.4: Resume = RESUME + re-issue (manual RESUME only), `resume.ignored` toasts; Clear stop of a paused sequence = new C-13 (`clear_stop_async(confirmed=True)`, end reason CLEARED); `REFUSED_PAUSED` shown as info; sequence-start items DRV_PWR_OFF / ALM / PAUSED / POS_UNCERTAIN / AFE_RATE_MISMATCH; end reasons NOT_REACHED / DRIVER_ALARM / CLEARED, step error BOUND_NOT_AHEAD; travel-bound column removed, LOAD step time hidden; link counters `dup_frames` / `seq_anomalies`; indicator alias table removed (lower-case generated keys); TCAL actions via `resolve_travel_difference_async` (GRQ-B-19 closed); entry contract with `args.endpoint`; `sequencer.start(seq, confirmed=True)`; lockstep test hooks. GF-11…17 closed (GF-15 by SRS v0.4, GF-16 by ICD v0.4). Remaining API gaps: none. |
 | 0.3.1 | 2026-10-03 | Implementer D | M1 implementation WP-D0…WP-D7: as-built table §15.1 (layout deviation banner/indicator toolbars, D-36 texts, B31-01 adopted, `NONE` source display rule, smoke seam, package-root import). |
 | 0.4.1 | 2026-10-04 | Implementer D | **M2 backend alignment (B §15.5d, B4-01…11, new §11.1d) and D-41** (E-stop = MCU / FW stop, no K1 contactor): E-STOP banner, C-03, STOP tooltip and §1.3 / GQ-18 wording; PC_LOAD_LIMITS_OFF notice; MOV homing / jogging; feature-bit UNKNOWN; real `StopConfirmation`; `dimension` for pane grouping (GRQ-B-21 closed); real hotkey status. |
+| 0.6 | 2026-10-05 | Implementer D | **M4 (Sequencer) GUI as built (§15.4 work breakdown WP-D15…D22, §15.5 as-built + evidence):** MC3-5 / SWD-M3-02 (a new SW trip toasts "… STOP sent" as error; a clear — topic `safety.trip_cleared` (B6-15), payload None or the remaining-latch publish — toasts info "SW limit cleared"; trips latched before the window are seeded; the event-log row of a clear is info); Sequence tab (step table over B's `Sequence`: typed steps, applicability table, N / kgf load cells, backend validation per cell + badge, loop bracket in the row header, Loop… / Unloop, + Step / Duplicate / Delete / Up / Down, Undo / Redo snapshots, settings name / travel ref / pull dir / k_est / step defaults; files with C-08 and "current sequence unchanged" on a bad file; run controls Start (check_start → C-07 → start(confirmed=True)) / Pause / Resume / Continue / Stop / Abort + STOP; run line; step results with NOT_REACHED red; read-only while running or while `sequence_edit` refuses); generator wizard G1…G3 from `generator_schemas()` (SchemaForm with `depends_on`, ValueError verbatim, preview table + mini chart + plan summary + issues, append / insert / replace with C-08); SequenceChart (planned path with HOME breaks, labels, capture points, estimated segments dashed, live marker + point from `SeqStatus.marker_*`, active step, trace, NOT_REACHED cross; ≈ 30 Hz); Report tab (recordings, result summary + warnings, step result table, re-apply calibration file / tare raw, 3-point bend, build, open HTML / folder / CSV). §11.1f adopts B §15.5f; §11.3 M4 requests GRQ-B-28…30; §12.4 M4 verification map. Tests: 297 GUI tests (37 new, 2 sim end-to-end on B's real sequencer) fixed + random order; sim smoke. |
 | 0.5 | 2026-10-05 | Implementer D | **M3 (SW application) GUI as built (§15.2 work breakdown WP-D9…D13, §15.3 as-built + evidence):** Manual tab on the real MotionController (slider one move on release, go-to absolute / distance, ±0.1/1/10 mm latest-wins, hold-to-jog with exactly-once JOG 0 on release / focus loss / hide / gate close / backend end, speed / accel / jog fields checked by `motion.check`, enable bound to the FW state, DISABLE C-02, HOME C-01, test zero, VALID, PAUSED line + Resume, STOP); Safety limits tab (travel / load limits, warning level, FW level, thresholds incl. clamped, re-send, manual / default thresholds, motion-disabled notice, no-specimen mode C-10); Test marks tab (marks, custom fields, presets, 3-point bend, snapshot, recording footer); Calibration & Tare tab; `SafeWizard` + travel / load wizards over B's engines (start page, generic page, C-05 / C-06 / C-08 / C-12, finish early, re-take, abort / restoring pages, phase-view completeness); TARE popup; Pause/Break key test dialog; View ▸ Units N / kgf (readouts, X-Y force, limits fields); File ▸ Open / Save session; first-use banner [Enter no-specimen mode…]; SW-trip banner text from `SwTrip`; K1 chip hidden while `drv.k1_check_enable` false (M2 gate condition). §11.1e adopts B §15.5e B5-01…17; new requests GRQ-B-23…27, OBS-D-M3-01 (§11.3); §12.3 M3 verification map; K1 row of §2.4; §8 module list. Tests: 258 GUI tests (70 new) fixed + random order; sim smoke. |
 | 0.4 | 2026-10-04 | Implementer D | **D-38 / SW-RT-006 (M1 add-on):** new §4.7 plot panes (grid 1–4 columns, + Pane, + X-Y pane, plot in / move to pane, drag reorder, move to window, rename / close, D-63 placement rules, X link, persistence, one snapshot per time window, Thrust_Stand rendering fix); §8 module list (plot_pane, pane_grid, quantity; lanes / single time view removed); tests G-45…G-52; traceability SW-RT-006; GRQ-B-21 (`ChannelSpec.dimension`). §4.1 inner layout and §4.5 JSON superseded by §4.7. |
 | 0.3.2 | 2026-10-03 | Implementer D | M1 gate items: SWD-M1-06 (confirmation banner names STOP / HALT / PAUSE from a str or `.cmd` payload), SWD-M1-07 (`Implements:` tags in every GUI module), SWD-M1-10 ("LINK LOST – STOP sent" only after a sent STOP within 5 s, else "LINK LOST – reconnecting…"); D-36 wording test for GUI-owned texts; GF-19 (backend HALT clear hint) stays with B. |

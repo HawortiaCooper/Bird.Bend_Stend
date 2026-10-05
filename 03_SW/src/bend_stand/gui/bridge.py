@@ -54,6 +54,9 @@ TOPIC_SIGNALS: Mapping[str, str] = {
     "log": "logMessage",
 }
 
+if "safety.trip_cleared" in TOPICS:          # B6-15 (MC3-5): trip clear on its own topic
+    TOPIC_SIGNALS = {**TOPIC_SIGNALS, "safety.trip_cleared": "safetyEvent"}
+
 #: topics deliberately not subscribed (with the reason) — none at present (G-01b)
 IGNORED_TOPICS: Mapping[str, str] = {}
 

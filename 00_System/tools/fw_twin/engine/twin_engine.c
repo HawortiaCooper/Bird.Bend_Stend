@@ -105,15 +105,44 @@ static double rnd_u(void)
 }
 static double rnd_n(void) { return sqrt(-2.0 * log(rnd_u())) * cos(6.283185307179586 * rnd_u()); }
 
+/* Specimen elastic force (N, + = tension) at the world position; M4 model (tools/README "specimen"):
+ * deflection d = x - xc (mm); side pull: only d > 0, push: only d < 0 (force negative), both: either sign;
+ * |F| = k|d| (bilinear: fy + k2 (|d| - fy/k) above fy) + k3 |d|^3, never below 0 (a softening k3 saturates
+ * at 0); grip slip (once, world state): when |F| first reaches slip_at the contact point moves by slip_um in the
+ * deflection direction (the force drops by about k * slip); break (latched, world state) when |F| >= f_break or
+ * |d| >= break travel: the force drops to the residual fraction of the intact curve (0 = a clean break). */
+static double specimen_elastic(double a)
+{
+    double f = T.spec_k * a;
+    if (T.spec_kind == 2 && T.spec_fy > 0.0 && T.spec_k > 0.0 && f > T.spec_fy) f = T.spec_fy + T.spec_k2 * (a - T.spec_fy / T.spec_k);
+    f += T.spec_k3 * a * a * a;
+    return f < 0.0 ? 0.0 : f;
+}
+
 static double specimen_force_n(void)
 {
-    if (T.spec_kind == 0 || T.spec_broken) return 0.0;
+    if (T.spec_kind == 0) return 0.0;
     double d_mm = (tw_x_um() - T.spec_xc) / 1000.0;
-    if (d_mm <= 0.0) return 0.0;
-    double f = T.spec_k * d_mm;
-    if (T.spec_kind == 2 && T.spec_fy > 0.0 && f > T.spec_fy) f = T.spec_fy + T.spec_k2 * (d_mm - T.spec_fy / T.spec_k);
-    if (T.spec_fb > 0.0 && f >= T.spec_fb) { T.spec_broken = true; tw_out("L %llu specimen_break", (unsigned long long)T.now); return 0.0; }
-    return f;
+    if (T.spec_side == 0 && d_mm <= 0.0) return 0.0;
+    if (T.spec_side == 1 && d_mm >= 0.0) return 0.0;
+    double a = fabs(d_mm), sg = d_mm < 0.0 ? -1.0 : 1.0;
+    double f = specimen_elastic(a);
+    if (!T.spec_slipped && T.spec_slip_at > 0.0 && f >= T.spec_slip_at) {
+        T.spec_slipped = true;
+        T.spec_xc += sg * T.spec_slip_um;
+        tw_out("L %llu specimen_slip %.6f %.6f", (unsigned long long)T.now, sg * f, T.spec_xc);
+        d_mm = (tw_x_um() - T.spec_xc) / 1000.0;
+        if (d_mm * sg <= 0.0) return 0.0;
+        a = fabs(d_mm);
+        f = specimen_elastic(a);
+    }
+    if (!T.spec_broken && ((T.spec_fb > 0.0 && f >= T.spec_fb) || (T.spec_bt > 0.0 && a * 1000.0 >= T.spec_bt))) {
+        T.spec_broken = true;
+        T.relax_n = 0.0;                                   /* the relaxing material is gone with the break */
+        tw_out("L %llu specimen_break %.6f %.3f", (unsigned long long)T.now, sg * f, tw_x_um());
+    }
+    if (T.spec_broken) return sg * T.spec_res * f;
+    return sg * f;
 }
 
 /* M3 load model (ICD v0.7.2): force on the cell = specimen (elastic - relaxation) + hung weights; the cell adds
@@ -131,7 +160,7 @@ static void load_update(void)
     } else T.relax_n = 0.0;
     if (T.creep_frac > 0.0 && T.creep_tau_s > 0.0) {
         double fs = specimen_force_n();
-        double fc = T.afe_cpn * ((fs > 0.0 ? fs - T.relax_n : 0.0) + T.weight_n);
+        double fc = T.afe_cpn * ((fs != 0.0 ? fs - T.relax_n : 0.0) + T.weight_n);
         T.creep_counts += (T.creep_frac * fc - T.creep_counts) * (1.0 - exp(-dt / T.creep_tau_s));
     } else T.creep_counts = 0.0;
 }
@@ -139,7 +168,7 @@ static void load_update(void)
 static double world_force_n(void)
 {
     double fs = specimen_force_n();
-    if (fs > 0.0) fs -= T.relax_n;
+    if (fs != 0.0) fs -= T.relax_n;                     /* relaxation acts on either side (M4) */
     return fs + T.weight_n;
 }
 
@@ -372,6 +401,8 @@ static void cmd_world(char *args)
         else if (!strcmp(k2, "creep_state")) T.creep_counts = v;
         else if (!strcmp(k2, "nonlin")) { double fs; if (sscanf(a, "%*s %*f %lf", &fs) == 1) T.fs_n = fs; T.nonlin_frac = v; }
     }
+    else if (!strcmp(key, "specslipped")) { double xc; if (sscanf(a, "%lf", &xc) == 1) { T.spec_xc = xc; T.spec_slipped = true; } }
+    else if (!strcmp(key, "specbroken")) { int v; if (sscanf(a, "%d", &v) == 1) T.spec_broken = v != 0; }   /* world state over a reset */
     else if (!strcmp(key, "weight")) { double v; if (sscanf(a, "%lf", &v) == 1) { load_update(); T.weight_n = v; } }
     else if (!strcmp(key, "relax")) {                    /* "W relax <frac> <tau_s> [<state_n>]" */
         double fr, tau, st;
@@ -385,9 +416,13 @@ static void cmd_world(char *args)
         while (T.afe_script_n < 256u && sscanf(p, "%ld%n", &v, &n) == 1) { T.afe_script[T.afe_script_n++] = (int32_t)v; p += n; }
     }
     else if (!strcmp(key, "spec")) {
-        T.spec_kind = 0; T.spec_k = T.spec_xc = T.spec_k2 = T.spec_fy = T.spec_fb = 0; T.spec_broken = false;
         load_update();
-        sscanf(a, "%d %lf %lf %lf %lf %lf", &T.spec_kind, &T.spec_k, &T.spec_xc, &T.spec_k2, &T.spec_fy, &T.spec_fb);
+        T.spec_kind = 0; T.spec_k = T.spec_xc = T.spec_k2 = T.spec_fy = T.spec_fb = 0; T.spec_broken = false;
+        T.spec_side = 0; T.spec_k3 = T.spec_bt = T.spec_res = T.spec_slip_at = T.spec_slip_um = 0; T.spec_slipped = false;
+        /* "W spec <kind> <k> <xc> <k2> <fy> <fb> [<side> <k3> <break_travel_um> <residual_frac> <slip_at_n> <slip_um>]"
+         * (M4 fields optional) */
+        sscanf(a, "%d %lf %lf %lf %lf %lf %d %lf %lf %lf %lf %lf", &T.spec_kind, &T.spec_k, &T.spec_xc, &T.spec_k2,
+               &T.spec_fy, &T.spec_fb, &T.spec_side, &T.spec_k3, &T.spec_bt, &T.spec_res, &T.spec_slip_at, &T.spec_slip_um);
         T.relax_n = 0.0;
     }
     else if (!strcmp(key, "cong")) { unsigned long long u; if (sscanf(a, "%llu", &u) == 1) T.congestion_until = u; }
@@ -457,6 +492,7 @@ static void cmd_query(void)
     load_update();
     tw_out("Y load_n %.6f", world_force_n());
     tw_out("Y spec_n %.6f", specimen_force_n());
+    tw_out("Y spec_broken %d", T.spec_broken ? 1 : 0);
     tw_out("Y weight_n %.6f", T.weight_n);
     tw_out("Y relax_n %.6f", T.relax_n);
     tw_out("Y creep_counts %.6f", T.creep_counts);

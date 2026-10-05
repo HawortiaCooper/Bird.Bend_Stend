@@ -59,6 +59,8 @@ class TestHooks:
             be.device.tick(now)
         if "worker" not in self._stalled:
             be.worker.step(now)
+        if "sequencer" not in self._stalled:
+            be.seq.runner.step(now)
         if "recorder" not in self._stalled:
             be.recorder.step(now)
 

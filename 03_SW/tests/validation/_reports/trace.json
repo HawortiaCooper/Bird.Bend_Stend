@@ -1,43 +1,248 @@
 {
- "SAF-SW-001": [
+ "IF-001": [
   {
-   "node": "tests/validation/test_v_m3.py::test_tc_saf_sw_001_01_pull_trip_stops_within_50ms",
+   "node": "tests/validation/test_v_static.py::test_tc_if_001_01_every_name_used_is_in_the_icd",
    "outcome": "passed",
-   "tc": "TC-SAF-SW-001-01"
+   "tc": "TC-IF-001-01"
   },
   {
-   "node": "tests/validation/test_v_m3.py::test_tc_saf_sw_001_02_no_calibration_motion_refused",
+   "node": "tests/validation/test_v_static.py::test_tc_if_001_02_no_retired_icd_name_in_backend_or_gui",
    "outcome": "passed",
-   "tc": "TC-SAF-SW-001-02"
+   "tc": "TC-IF-001-02"
   },
   {
-   "node": "tests/validation/test_v_m3.py::test_tc_saf_sw_001_04_second_limit_supervised_while_a_trip_is_latched",
+   "node": "tests/validation/test_v_static.py::test_tc_if_001_01_no_hand_written_code_tables_no_oracle_imports",
    "outcome": "passed",
-   "tc": "TC-SAF-SW-001-04"
+   "tc": "TC-IF-001-01"
+  }
+ ],
+ "IF-002": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_if_002_01_serial_settings_once_and_no_port_opened",
+   "outcome": "passed",
+   "tc": "TC-IF-002-01"
+  }
+ ],
+ "IF-006": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_r4_tv_l_unwrap_and_budget",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  }
+ ],
+ "IF-007": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[None-5-first-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
   },
   {
-   "node": "tests/validation/test_v_m3.py::test_tc_saf_sw_001_02_load_input_lost_while_moving_stops",
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[5-6-next-0]",
    "outcome": "passed",
-   "tc": "TC-SAF-SW-001-02"
+   "tc": "TC-SW-PLT-002-02"
   },
   {
-   "node": "tests/validation/test_v_m3.py::test_tc_saf_sw_001_04_pull_limit_supervised_while_travel_latch_is_set",
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[5-9-lost-3]",
    "outcome": "passed",
-   "tc": "TC-SAF-SW-001-04"
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[65535-1-lost-1]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[65535-0-next-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[7-7-dup-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[100-50-anomaly-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  }
+ ],
+ "IF-010": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_if_001_01_no_hand_written_code_tables_no_oracle_imports",
+   "outcome": "passed",
+   "tc": "TC-IF-001-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_if_010_01_generators_check[gen_params.py]",
+   "outcome": "passed",
+   "tc": "TC-IF-010-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_if_010_01_generators_check[gen_vectors.py]",
+   "outcome": "passed",
+   "tc": "TC-IF-010-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_if_010_01_dictionary_hash_matches",
+   "outcome": "passed",
+   "tc": "TC-IF-010-01"
+  }
+ ],
+ "IF-012": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_if_001_01_every_name_used_is_in_the_icd",
+   "outcome": "passed",
+   "tc": "TC-IF-001-01"
   }
  ],
  "SAF-SW-005": [
   {
-   "node": "tests/validation/test_v_m3.py::test_tc_saf_sw_001_01_pull_trip_stops_within_50ms",
+   "node": "tests/validation/test_v_static.py::test_tc_if_001_02_no_retired_icd_name_in_backend_or_gui",
    "outcome": "passed",
-   "tc": "TC-SAF-SW-001-01"
+   "tc": "TC-IF-001-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_saf_sw_005_04_no_text_refers_to_a_physical_stop_button",
+   "outcome": "passed",
+   "tc": "TC-SAF-SW-005-04"
   }
  ],
- "SW-LIM-004": [
+ "SW-CAL-004": [
   {
-   "node": "tests/validation/test_v_m3.py::test_tc_saf_sw_001_02_no_calibration_motion_refused",
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_001_02_private_data_dir_per_test[1]",
    "outcome": "passed",
-   "tc": "TC-SAF-SW-001-02"
+   "tc": "TC-SW-PLT-001-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_001_02_private_data_dir_per_test[2]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-001-02"
+  }
+ ],
+ "SW-PLT-001": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_001_01_runtime_and_requirements_inspection",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-001-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_001_02_private_data_dir_per_test[1]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-001-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_001_02_private_data_dir_per_test[2]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-001-02"
+  }
+ ],
+ "SW-PLT-002": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_01_backend_imports_without_qt",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_01_calc_is_pure",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_r4_tv_tc_um_steps",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_r4_tv_l_unwrap_and_budget",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[None-5-first-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[5-6-next-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[5-9-lost-3]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[65535-1-lost-1]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[65535-0-next-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[7-7-dup-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_frame_gap_rule[100-50-anomaly-0]",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_r4_tv_m_planner",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  }
+ ],
+ "SW-STOP-002": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_saf_sw_005_04_no_text_refers_to_a_physical_stop_button",
+   "outcome": "passed",
+   "tc": "TC-SAF-SW-005-04"
+  }
+ ],
+ "SYS-003": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sw_plt_002_02_r4_tv_tc_um_steps",
+   "outcome": "passed",
+   "tc": "TC-SW-PLT-002-02"
+  }
+ ],
+ "SYS-010": [
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sys_010_01_origin_notes",
+   "outcome": "passed",
+   "tc": "TC-SYS-010-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sys_010_01_implements_tags_backend[core]",
+   "outcome": "passed",
+   "tc": "TC-SYS-010-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sys_010_01_implements_tags_backend[io]",
+   "outcome": "passed",
+   "tc": "TC-SYS-010-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sys_010_01_implements_tags_backend[calc]",
+   "outcome": "passed",
+   "tc": "TC-SYS-010-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sys_010_01_implements_tags_gui",
+   "outcome": "passed",
+   "tc": "TC-SYS-010-01"
+  },
+  {
+   "node": "tests/validation/test_v_static.py::test_tc_sys_010_01_reuse_mentions_have_an_origin_line",
+   "outcome": "passed",
+   "tc": "TC-SYS-010-01"
   }
  ]
 }

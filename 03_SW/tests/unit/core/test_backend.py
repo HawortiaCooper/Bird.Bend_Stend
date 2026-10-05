@@ -207,7 +207,7 @@ def test_clear_and_resume_gates_need_confirmation() -> None:
         assert be.limits.thresholds().state == "DEFAULT_ONLY"
         assert h.result(be.limits.recheck_async()).state == "DEFAULT_ONLY"
         assert not be.limits.set(be.limits.get()) and not be.limits.set_no_specimen_mode(True).ok
-        assert not be.sequencer.start(None).ok and be.sequencer.status().state == "IDLE"
+        assert not be.sequencer.start(be.sequencer.new()).ok and be.sequencer.status().state == "IDLE"   # M4: not homed
         assert be.tare_engine.state().kind == "tare" and not be.load_cal.start().ok
     finally:
         be.shutdown()

@@ -559,3 +559,100 @@ def test_load_model_scenario_keys(probe_exe, tmp_path):
         w = t.act("query", what="world")
         assert w["weight_n"] == pytest.approx(9.80665)
         assert w["drift_counts"] == pytest.approx(10.0 * 2.0, abs=0.1)
+
+
+# ---------------------------------------------------------------------------------------------- M4 specimen model
+def _spec_at(t, x_um: float) -> dict:
+    """World state with the carriage moved (lost-step shift, probe core never steps) to x_um."""
+    w = t.act("query", what="world")
+    t.act("world_shift", um=x_um - w["x_um_true"])
+    return t.act("query", what="world")
+
+
+def test_specimen_m4_sides_and_contact_point(tw):
+    """M4 specimen: pull side (default, M1–M3 model) only beyond the contact point; push side = compression
+    (force < 0 only below the contact point); both = clamped, linear through the contact point."""
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=10_000.0)
+    assert _spec_at(tw, 9_000)["specimen_n"] == 0.0
+    assert _spec_at(tw, 14_000)["specimen_n"] == pytest.approx(200.0)
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=10_000.0, side="push")
+    assert _spec_at(tw, 14_000)["specimen_n"] == 0.0
+    w = _spec_at(tw, 6_000)
+    assert w["specimen_n"] == pytest.approx(-200.0) and w["load_n"] == pytest.approx(-200.0)
+    tw.advance_ms(50)                                   # the cell sees the compression: raw below the offset
+    conv = tw.act("query", what="conversions", since_us=tw.now_us - 30_000)["conversions"]
+    assert conv and all(c["raw"] == round(50_000 - 3285.0 * 200.0) for c in conv)
+    tw.act("specimen", kind="spring", k_n_per_mm=20.0, x_contact_um=10_000.0, side="both")
+    assert _spec_at(tw, 7_500)["specimen_n"] == pytest.approx(-50.0)
+    assert _spec_at(tw, 12_500)["specimen_n"] == pytest.approx(50.0)
+    r = tw.act("specimen", kind="spring", k_n_per_mm=20.0, side="sideways")
+    assert r["ok"] is False and "sideways" in r["error"]
+    assert _spec_at(tw, 12_500)["specimen_n"] == pytest.approx(50.0)      # refused action: model unchanged
+
+
+def test_specimen_m4_nonlinearity(tw):
+    """Cubic term k3 (odd in the deflection) on top of the linear / bilinear curve; softening never inverts."""
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=0.0, side="both", k3_n_per_mm3=0.5)
+    assert _spec_at(tw, 4_000)["specimen_n"] == pytest.approx(50 * 4 + 0.5 * 64)
+    assert _spec_at(tw, -4_000)["specimen_n"] == pytest.approx(-(50 * 4 + 0.5 * 64))
+    tw.act("specimen", kind="bilinear", k_n_per_mm=50.0, x_contact_um=0.0, k2_n_per_mm=10.0, f_yield_n=100.0,
+           k3_n_per_mm3=-1.0)
+    assert _spec_at(tw, 4_000)["specimen_n"] == pytest.approx(100 + 10 * 2 - 64)
+    assert _spec_at(tw, 20_000)["specimen_n"] == 0.0                  # 100 + 180 − 8000 < 0 → 0 (no inversion)
+
+
+def test_specimen_m4_break_by_force_and_travel_latched_over_reset(tw):
+    """Break at a force (clean: load → 0) or at a deflection with a residual fraction of the intact curve; the
+    break is latched in the world (survives an MCU reset; cleared by a new specimen action); seam log entry."""
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=0.0, f_break_n=150.0)
+    assert _spec_at(tw, 2_900)["specimen_n"] == pytest.approx(145.0)
+    w = _spec_at(tw, 3_100)
+    assert w["specimen_n"] == 0.0 and w["specimen_broken"] is True
+    assert _spec_at(tw, 1_000)["specimen_n"] == 0.0                   # stays broken when unloaded
+    brk = [e for e in tw.seam_log if e["call"] == "specimen_break"]
+    assert len(brk) == 1 and float(brk[0]["args"].split()[0]) == pytest.approx(155.0)
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=0.0, side="push", break_travel_um=4_000.0,
+           break_residual_pct=30.0)
+    assert _spec_at(tw, -3_000)["specimen_n"] == pytest.approx(-150.0)
+    w = _spec_at(tw, -4_000)
+    assert w["specimen_broken"] is True and w["specimen_n"] == pytest.approx(-0.3 * 200.0)
+    tw.act("reset", cause="pin")
+    tw.advance_ms(5)
+    w = tw.act("query", what="world")
+    assert w["specimen_broken"] is True and w["specimen_n"] == pytest.approx(-60.0)
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=0.0, side="push")
+    assert tw.act("query", what="world")["specimen_broken"] is False
+
+
+def test_specimen_m4_relaxation_on_the_compression_side(tw):
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=0.0, side="push", relax_pct=10.0,
+           relax_tau_s=1.0)
+    _spec_at(tw, -4_000)
+    tw.advance_ms(1000)
+    w = tw.act("query", what="world")
+    assert w["relax_n"] == pytest.approx(-20.0 * (1 - math.exp(-1.0)), rel=1e-3)
+    assert w["load_n"] == pytest.approx(-200.0 - w["relax_n"])
+
+
+def test_specimen_m4_scenario_keys(probe_exe, tmp_path):
+    scn = {"schema": "bird.bend.simscenario", "version": 1,
+           "world": {"specimen": {"kind": "spring", "k_n_per_mm": 10.0, "x_contact_um": 0, "side": "both",
+                                  "break_travel_um": 5000, "break_residual_pct": 50}}}
+    with Twin("lockstep", exe=probe_exe, run_dir=tmp_path, scenario=scn) as t:
+        assert _spec_at(t, -2_000)["specimen_n"] == pytest.approx(-20.0)
+        w = _spec_at(t, 6_000)
+        assert w["specimen_broken"] and w["specimen_n"] == pytest.approx(30.0)
+
+
+def test_specimen_m4_grip_slip_once_and_kept_over_reset(tw):
+    """Grip slip (the simulator's test extra, SW_design B6-17): at |F| ≥ slip_at_n the contact point moves once by
+    slip_mm in the deflection direction (force drop ≈ k·slip); a world state (kept over an MCU reset)."""
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=0.0, slip_at_n=100.0, slip_mm=0.5)
+    assert _spec_at(tw, 1_900)["specimen_n"] == pytest.approx(95.0)
+    assert _spec_at(tw, 2_500)["specimen_n"] == pytest.approx(100.0)          # 125 N → slipped 0.5 mm → 100 N
+    assert _spec_at(tw, 3_000)["specimen_n"] == pytest.approx(125.0)          # once only
+    slips = [e for e in tw.seam_log if e["call"] == "specimen_slip"]
+    assert len(slips) == 1 and float(slips[0]["args"].split()[1]) == pytest.approx(500.0)
+    tw.act("reset", cause="pin")
+    tw.advance_ms(5)
+    assert tw.act("query", what="world")["specimen_n"] == pytest.approx(125.0)

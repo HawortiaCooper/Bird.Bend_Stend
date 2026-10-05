@@ -1,6 +1,6 @@
 # 00_System/tools — Integrator tools (owner: Implementer C)
 
-Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.7.3, `params.yaml` dict_version 6 and `protocol.yaml`
+Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.7.4, `params.yaml` dict_version 6 and `protocol.yaml`
 (protocol name registry, ICD §0.3).
 Python ≥ 3.11, standard library + PyYAML (generators only). Use the project venv: `.venv\Scripts\python`.
 
@@ -10,9 +10,10 @@ Python ≥ 3.11, standard library + PyYAML (generators only). Use the project ve
 | `gen_protocol.py` | `protocol.yaml` → `02_FW/src/gen/proto_gen.h` (C), `03_SW/src/bend_stand/core/protocol_gen.py` (Python `IntEnum`/`IntFlag`, `<ID>_BITS`, `<ID>_DESC`, `CMD_REQ_LEN`, `CMD_RETRY`), ICD tables between `GENERATED protocol:<id>` markers + Appendix B (GF-08). |
 | `ref_codec.py` | Reference codec (oracle): CRC-16/CCITT-FALSE, frame encoder, ICD §2.3 parser with resync, encode/decode of every request, response, DATA and EVENT payload. Stdlib only. |
 | `ref_loadlim.py` | Reference FW load limit (M2, D-40 d): violations, trip samples, rails, regrow window; the docstring is the definition behind `loadlim_vectors.json` (ICD §5.5). |
+| `ref_linkwdg.py` | Reference FW link watchdog (M4, D-47 a, ICD v0.7.4 §9.1): VALID cleared at the timeout in every motion state, stop / LINK_WDG / EVENTs only while moving; the docstring is the definition behind `linkwdg_vectors.json`. |
 | `ref_motion.py` | Reference step-period generator (M2): exact sqrt ramp with max rule and fractional carry (R4 §1.5), controlled stop, JOG on-the-fly changes, ICD §6.5 stop-path rule, planner. The docstring is the normative definition behind `motion_vectors.json`. |
 | `ref_cmdcheck.py` | Reference acceptance model of ICD §4–§6 (check order, BLOCK mask, busy, clears, SET_PARAM checks, hard rules). Acceptance only, no execution. |
-| `gen_vectors.py` | **The single vector generator** → `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (M1), `vectors/motion_vectors.json` (M2, from `ref_motion.py`), `vectors/loadlim_vectors.json` (M2, from `ref_loadlim.py`). |
+| `gen_vectors.py` | **The single vector generator** → `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json` (M1), `vectors/motion_vectors.json` (M2, from `ref_motion.py`), `vectors/loadlim_vectors.json` (M2, from `ref_loadlim.py`), `vectors/linkwdg_vectors.json` (M4, from `ref_linkwdg.py`). |
 | `vectors/` | Generated shared vectors (never hand-edited). |
 | `fw_twin/` | **FW host twin** (P2/M1): `build.py` (host gcc build of A's unmodified `02_FW/src/{pure,core,gen}` + twin seams), `engine/` (C: scheduler, seam implementations, world model), `twin.py` (launcher: virtual time, TCP ports, vocabulary v2, logs; Python API `Twin` / `TwinLink`), `contract/` (seam v1 header copies, used only while A's headers are absent), `probe/` (harness probe core — **not the FW**). See "FW host twin — how to run it" below. |
 | `tests/` | pytest proving the codec, the model and the generators against the vectors; `test_fw_twin.py` = twin harness self-tests (probe core). |
@@ -43,6 +44,7 @@ Both implementations MUST pass the same files; the vectors are the oracle for by
 | `units_vectors.json` (ICD §0.1) | `units.c` `um_to_steps` / `steps_to_um` / rate cap with `spm` = the binary32 from `spm_f32_hex`: every value exact | `calc.motion.um_to_steps` / `steps_to_um` and the simulator's step model: every value exact |
 | `motion_vectors.json` (M2) | `ramp.c` / `stepgen_core` from the case parameters and events: every period within `tolerance.period_ticks` (±1) and the sum within `tolerance.sum_ticks` (±N/1000) of `periods`; `ctrl_stop_path()` equals every `ctrl_stop_paths` row; v0.7.2 `immediate_stops` (MOVE_UNTIL_LOAD threshold): the generator of `base_case` stopped immediately after `after_step` periods emits no further pulse; `threshold_in_controlled_stop`: the same after the base case's controlled stop, MOVE_DONE stays STOPPED (OI-FW-43 b) | the simulator's step model: every period and sum exact (binary64); `immediate_stops` the same |
 | `loadlim_vectors.json` (M2) | `loadlim.c`: replay each case (init, then sample / fault_clear / config steps): `trip` and `regrow_window` equal after every step | the simulator's load limit: same |
+| `linkwdg_vectors.json` (M4, ICD v0.7.4) | twin replay `03_SW/tests/integration/test_twin_m4_linkwdg.py` (state set up, silence from the end of the last request, trip / no trip, VALID after, LINK_WDG status, EVENT set at the trip and at the next frame); A's FW link watchdog | the simulator's link watchdog: same (finding SWC-M4-05) |
 | `check_vectors.json` `hw_meas_vectors` (v0.6) | only against a HW_MEAS build (FEAT_HW_MEAS = 1); release / twin builds replay `vectors` (DIAG_MEAS → NOT_IN_BUILD) | the simulator answers NOT_IN_BUILD (no HW_MEAS model) |
 | `check_vectors.json` | set up the pure command-check context from `state_defaults` ⊕ `state` (and the param overrides), run the command check on `request.payload_hex`, compare STATUS/detail and, for NACKs, the encoded response with `response_frame_hex`; no side effect on NACK | the simulator (`io.sim.fw_logic`) in the same state answers identically (differential check of the SimBoard) |
 
@@ -224,6 +226,13 @@ first advances the twin to the same instant (`Device.transport_for` → in-proce
 clock, `VirtualTransportPair`) behind one PC-side driver for the SIM-vs-twin differentials;
 `io_client.LockstepIoClient` is B's io layer waiting in virtual time. No integration result depends on the wall
 clock any more except `test_backend_connect_sequence_tcp_realtime` (TcpTransport smoke, event-driven waits).
+**M4 (D-46):** `test_backend_twin_m4.py` drives B's sequencer through its public API only (a `bird.bend.sequence`
+file loaded by `Backend.sequencer.load`, `start / pause / resume / stop / abort / status / results`, `reports.*`)
+and judges the outcome on the FW side of the wire (`seq_support.py`: decoded requests, responses, EVENTs and DATA
+frames from the twin's `wire_log`; VALID windows from the SET_VALID response times, which fix VALID frame by frame
+per ICD §4: a frame is VALID iff `t_on ≤ t_us < t_off`); `test_sim_vs_twin_m4.py` = the SIM-vs-twin differential of
+a short sequence (board level with `lockstep_boards.Link`, and backend level: B's Backend on the simulator vs on the
+twin). Tests needing B's sequencer are xfail (reason given) until it is delivered and flip by themselves.
 
 ```powershell
 .venv\Scripts\python 00_System\tools\fw_twin\build.py                  # --core auto: fw if 02_FW/src/core/*.c exists, else probe
@@ -280,6 +289,16 @@ $env:BEND_TWIN_CORE="probe"; .venv\Scripts\python -m pytest 03_SW\tests\integrat
   time it is set; relaxation first order toward `relax_pct`·F_elastic with `relax_tau_s` (follows the elastic
   force while moving). All terms 0 by default (M1/M2 results unchanged); the states advance with virtual time at
   each conversion / query and survive MCU resets (world).
+  **M4 specimen model (twin side; vocabulary additions ICD v0.7.4, D-47 b):** deflection
+  d = x − `x_contact_um`; `side` `pull` (default, the M1–M3 model: force only for d > 0), `push` (compression side:
+  only d < 0, force negative) or `both` (clamped specimen, linear through the contact point);
+  |F| = k|d| (bilinear above `f_yield_n`) + `k3_n_per_mm3`·|d|³, never below 0 (a softening k3 saturates at 0);
+  **grip slip** `slip_at_n` + `slip_mm` (the simulator's B6-17 test extra): when |F| first reaches `slip_at_n` the
+  contact point moves once by `slip_mm` in the deflection direction; **break** when |F| ≥ `f_break_n` or
+  |d| ≥ `break_travel_um`: the force drops to `break_residual_pct` % of the intact curve (0 = clean break),
+  relaxation state cleared. Break and slip are world states (kept over MCU resets, cleared by the next `specimen`
+  action); seam-log entries `specimen_break <F_N> <x_um>` and `specimen_slip <F_N> <new x_contact_um>`; `query
+  world` adds `specimen_broken`. Relaxation acts on either side (it follows the signed elastic force).
   Flash: sectors 1+2 (0x0800 4000…0x0800 BFFF) in `flash.bin`, program = AND (a 0→1 bit returns false), sector =
   1/2 or an address in it. IWDG armed by the first kick / `set_timeout`; window per the seam semantics at the model LSI (`iwdg lsi_hz`,
   default 32 kHz: run window 47.75 ms, long window 4.10 s).
@@ -337,7 +356,9 @@ delays both the start of the move and the reaction by up to 1 ms each: |Δ| ≤ 
 conversion phase: |Δ| ≤ ceil(v·12.5 ms) + 1 steps and the raw value of the trip sample is not compared; the rest
 of those transcripts stays exact. Boot-time EVENT order (BOOT / PARAMS_DEFAULTED, not specified in ICD §11.3) and
 all times are not compared. POS_UNCERTAIN after an E-stop edge while moving = the step output was running
-(ICD v0.7.2 §6.2).
+(ICD v0.7.2 §6.2). M4 sequence differential (`test_sim_vs_twin_m4.py`): a VALID window is compared by its VALID
+frame count (±1: conversion phase) and its set of raw values (exact: noise 0, world-determined position); status
+after a threshold stop is taken ≥ 50 ms later (PEND is a driver-model signal with a 5 ms lag, not FW behaviour).
 
 **E-stop wiring in the world (CR-03 / D-41, ICD v0.7).** Release 1 has no power-removal contactor: the driver's
 48 V stays present when the E-stop opens. The world default `estop drv_power_follows: true` (vocabulary FROZEN)
@@ -395,7 +416,7 @@ T = twin, S = simulator, both = both (differential tests use only "both" actions
 | `chatter` | `input: <as wire>`, `period_ms: float`, `duration_ms: int` | periodic toggling (e.g. ALM 1 kHz chatter) |  | T |
 | `alm` / `pend` | `active: bool` | driver outputs | ✓ | both |
 | `driver` | `dir_wiring_inverted?: bool`, `pend_auto?: bool`, `pend_lag_ms?: float` (default 5) | DIR wiring / driver SW5 inverted in the world (x follows the DIR pin); automatic PEND (REQ-C-M2-06/07, v0.6) |  | T (S: PEND model optional) |
-| `specimen` | `kind: "none"\|"spring"\|"bilinear"`, `k_n_per_mm`, `x_contact_um`, `k2_n_per_mm?`, `f_yield_n?`, `f_break_n?`, `relax_pct?`, `relax_tau_s?` | load model (relaxation modelled in the twin since v0.7.2) | ✓ | both |
+| `specimen` | `kind: "none"\|"spring"\|"bilinear"`, `k_n_per_mm`, `x_contact_um`, `k2_n_per_mm?`, `f_yield_n?`, `f_break_n?`, `relax_pct?`, `relax_tau_s?`; M4 (ICD v0.7.4): `side?: "pull"\|"push"\|"both"`, `k3_n_per_mm3?`, `break_travel_um?`, `break_residual_pct?`, `slip_at_n?`, `slip_mm?` | load model (relaxation modelled in the twin since v0.7.2; M4 sides / non-linearity / break by travel with residual / grip slip: see the M4 specimen model above) | ✓ | both (M4 args: T; S has `break_residual_pct`, `slip_at_n`, `slip_mm` per B6-17; `side` / `k3` / `break_travel_um` = finding SWC-M4-01) |
 | `weight` | `kg?: float`, `n?: float` (instead of kg), `g_mps2?: float` (default 9.80665) | v0.7.2 (M3 load calibration): known masses hung on the cell, force = kg·g (+ = tension, the sign of a pushed spring), adds to the specimen; 0 = removed |  | T (S: finding SWC-M3-02) |
 | `load_offset` | `counts: int` | cell zero offset (default scenario 50 000 counts ≤ 1 % FS, SWD-P1-15) | ✓ | both |
 | `afe` | `rate_error?: float`, `noise_counts?: float`, `stall?: bool`, `saturate?: "pos"\|"neg"\|null`, `drop_every?: int`, `miss_next?: int` (single missed DOUT edges), `sck_overrun?: bool` (power-down symptom on the next read), `raw_script?: [int]` (next samples verbatim); v0.7.2: `drift_counts_per_s?`, `creep_pct?`, `creep_tau_s?`, `nonlin_pct_fs?`, `fs_n?` (cell model, see the AFE model above) | HX711 model | stall / rate / rails ✓ | both (`sck_overrun`, v0.7.2 cell terms: T) |
@@ -425,6 +446,8 @@ Scenario file (`bird.bend.simscenario` v1, JSON, shared by simulator and twin):
                {"t_ms": 5100, "action": "button", "name": "pause", "pressed": false}]
 }
 ```
+M4 scenario keys of the specimen (twin): `world.specimen.side`, `k3_n_per_mm3`, `break_travel_um`,
+`break_residual_pct`, `slip_at_n`, `slip_mm`.
 v0.7.2 scenario keys of the cell model (twin): `world.afe.drift_counts_per_s` (alias `drift_counts_per_min`, the
 simulator's name), `world.afe.creep_pct` + `creep_tau_s` (default 600 s), `world.afe.nonlin_pct_fs`, `world.weight_kg`,
 `world.specimen.relax_pct` + `relax_tau_s`.

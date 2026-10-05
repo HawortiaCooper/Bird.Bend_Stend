@@ -4,7 +4,8 @@
  * HALT burst, step fault, link watchdog, DIR polarity encoding (MOVE_UNTIL_LOAD: test_impl_mul).
  * Verifies: FW-MOT-001 (DIR before the first edge), FW-MOT-002, FW-MOT-003, FW-MOT-004, FW-MOT-005,
  *           FW-MOT-007, FW-MOT-008, SAF-FW-001, SAF-FW-002, SAF-FW-003, SAF-FW-004, SAF-FW-015,
- *           SAF-FW-016, SAF-FW-023, DEF-P1-04 (hold), DEF-M3-01 (no stale hold)
+ *           SAF-FW-016, SAF-FW-023, DEF-P1-04 (hold), DEF-M3-01 (no stale hold), D-47 a (link silence
+ *           clears VALID in every state)
  */
 #include <unity.h>
 
@@ -393,6 +394,61 @@ static void test_link_watchdog(void)               /* SAF-FW-015 */
     TEST_ASSERT_FALSE(motion_active());           /* nothing restarts */
 }
 
+static const fake_frame_t *last_data(void)
+{
+    int32_t i;
+    for (i = (int32_t)fake_cap_n - 1; i >= 0; i--) {
+        if (fake_cap[i].type == (uint8_t)ASYNC_DATA) {
+            return &fake_cap[i];
+        }
+    }
+    TEST_FAIL_MESSAGE("no DATA frame");
+    return NULL;
+}
+
+/* D-47 a: link silence clears VALID in every motion state (idle capture, NOT_ENABLED), reported once
+ * by VALID_CLEARED (arg LINK_WDG); no stop, no LINK_WDG status / EVENT while not moving */
+static void test_link_silence_clears_valid_idle(void)
+{
+    uint8_t pl[1] = {1u};
+    uint32_t from, k;
+    int32_t i;
+    h_set_param(PID_SAFETY_LINK_TIMEOUT_MS, PARAM_T_U16, 1000u);
+    mu_enable();
+    h_expect_ok(h_cmd(CMD_STREAM_START, 0x30u, NULL, 0u));       /* capture: stream on, VALID 1 */
+    h_expect_ok(h_cmd(CMD_SET_VALID, 0x31u, pl, 1u));
+    from = fake_cap_n;
+    for (k = 0u; k < 6u; k++) {                                   /* PC alive: heartbeat every 500 ms */
+        mu_run(500u);
+        h_expect_ok(h_cmd(CMD_PING, (uint8_t)(0x32u + k), NULL, 0u));
+    }
+    TEST_ASSERT_TRUE(mu_ev(EV_VALID_CLEARED, from) < 0);
+    TEST_ASSERT_EQUAL_HEX8(DF_VALID, last_data()->payload[5] & DF_VALID);
+    mu_run(998u);                                                 /* PC silent */
+    TEST_ASSERT_TRUE(mu_ev(EV_VALID_CLEARED, from) < 0);
+    TEST_ASSERT_EQUAL_HEX8(DF_VALID, last_data()->payload[5] & DF_VALID);
+    mu_run(30u);
+    i = mu_ev(EV_VALID_CLEARED, from);
+    TEST_ASSERT_TRUE(i >= 0);
+    TEST_ASSERT_EQUAL_UINT16(SC_LINK_WDG, mu_ev_arg(i));
+    TEST_ASSERT_EQUAL_HEX8(0u, last_data()->payload[5] & DF_VALID);
+    mu_run(2000u);
+    TEST_ASSERT_EQUAL_UINT32(1u, mu_ev_count(EV_VALID_CLEARED, from));   /* once */
+    TEST_ASSERT_TRUE(mu_ev(EV_LINK_WDG, from) < 0);              /* not moving: no LINK_WDG */
+    TEST_ASSERT_TRUE(mu_ev(EV_STOPPED, from) < 0);
+    TEST_ASSERT_FALSE(g_fw.in.link_wdg);
+    TEST_ASSERT_EQUAL_UINT8(MS_IDLE, g_fw.motion_state);
+    TEST_ASSERT_TRUE(fake_ena_enabled);
+    /* NOT_ENABLED as well */
+    h_expect_ok(h_cmd(CMD_DISABLE, 0x40u, NULL, 0u));
+    h_expect_ok(h_cmd(CMD_SET_VALID, 0x41u, pl, 1u));
+    TEST_ASSERT_EQUAL_HEX8(DF_VALID, h_status().b[8] & DF_VALID);
+    from = fake_cap_n;
+    mu_run(1010u);
+    TEST_ASSERT_EQUAL_UINT16(SC_LINK_WDG, mu_ev_arg(mu_ev(EV_VALID_CLEARED, from)));
+    TEST_ASSERT_EQUAL_HEX8(0u, last_data()->payload[5] & DF_VALID);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -410,5 +466,6 @@ int main(void)
     RUN_TEST(test_pause_resume_with_motion);
     RUN_TEST(test_step_fault);
     RUN_TEST(test_link_watchdog);
+    RUN_TEST(test_link_silence_clears_valid_idle);
     return UNITY_END();
 }

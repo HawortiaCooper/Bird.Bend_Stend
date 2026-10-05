@@ -223,6 +223,8 @@ class Twin:
         self.lim_forced = {"start": -1, "end": -1}
         self.afe_cfg: dict[str, float] = {}
         self.spec_line = "W spec 0"
+        self.spec_broken = False                 # M4: specimen break = world state, replayed after an MCU reset
+        self.spec_slip_xc: float | None = None   # M4: contact point after a grip slip (world state)
         # M3 load model (ICD v0.7.2): hung weights, zero drift, cell creep / non-linearity, specimen relaxation
         self.load_cfg = {"weight_n": 0.0, "drift_cps": 0.0, "creep_frac": 0.0, "creep_tau_s": 0.0,
                          "relax_frac": 0.0, "relax_tau_s": 0.0, "nonlin_frac": 0.0, "fs_n": 1961.33}
@@ -290,6 +292,10 @@ class Twin:
                   f"W spm {w.get('steps_per_mm', 800.0)}", f"W shift {self.shift_um}",
                   f"W afe cpn {w['cell_counts_per_n']}", f"W afe offset {w['load_offset_counts']}",
                   f"W afe seed {self.seed}", f"W lsi {self.lsi_hz}", self.spec_line]
+        if self.spec_slip_xc is not None:
+            lines.append(f"W specslipped {self.spec_slip_xc}")
+        if self.spec_broken:
+            lines.append("W specbroken 1")
         lines.append(f"W dirwiring {int(self.driver_cfg['dir_wiring_inverted'])}")
         lines.append(f"W pendauto {int(self.driver_cfg['pend_auto'])} {int(self.driver_cfg['pend_lag_ms'] * 1e6)}")
         if self.world_x_um is not None:
@@ -390,6 +396,10 @@ class Twin:
                 self.pul_rising += 1
         elif tag == "L":
             self.seam_log.append({"t_us": int(p[0]) / 1000, "call": p[1], "args": " ".join(p[2:])})
+            if p[1] == "specimen_break":
+                self.spec_broken = True
+            elif p[1] == "specimen_slip":
+                self.spec_slip_xc = float(p[3])
         elif tag == "O":
             self.outputs[p[1]] = int(p[2])
         elif tag == "S":
@@ -782,10 +792,21 @@ class Twin:
 
     def _a_specimen(self, kind: str, k_n_per_mm: float = 0.0, x_contact_um: float = 0.0, k2_n_per_mm: float = 0.0,
                     f_yield_n: float = 0.0, f_break_n: float = 0.0, relax_pct: float | None = None,
-                    relax_tau_s: float | None = None):
-        kc = {"none": 0, "spring": 1, "bilinear": 2}[kind]
-        self.world["specimen"] = {"kind": kind, "k_n_per_mm": k_n_per_mm, "x_contact_um": x_contact_um}
-        self.spec_line = f"W spec {kc} {k_n_per_mm} {x_contact_um} {k2_n_per_mm} {f_yield_n} {f_break_n}"
+                    relax_tau_s: float | None = None, side: str = "pull", k3_n_per_mm3: float = 0.0,
+                    break_travel_um: float = 0.0, break_residual_pct: float = 0.0, slip_at_n: float = 0.0,
+                    slip_mm: float = 0.0):
+        """Specimen load model. M4 additions (twin side; tools/README vocabulary): `side` pull (default, force
+        only for x > x_contact, the M1–M3 model) / push (only x < x_contact, force < 0: the compression side) /
+        both (clamped specimen, linear through x_contact); `k3_n_per_mm3` cubic term (odd in the deflection;
+        > 0 stiffening, < 0 softening, |F| never below 0); break at `f_break_n` (|F|) **or** at the deflection
+        `break_travel_um` = |x − x_contact|, after which the force is `break_residual_pct` % of the intact curve
+        (0 = clean break); grip slip `slip_at_n` / `slip_mm` (the simulator's test extra, SW_design B6-17): when
+        |F| first reaches slip_at_n the contact point moves once by slip_mm in the deflection direction. Break and
+        slip are world states (survive MCU resets, cleared by a new `specimen`)."""
+        self.spec_line = self._spec_line(kind, k_n_per_mm, x_contact_um, k2_n_per_mm, f_yield_n, f_break_n, side,
+                                         k3_n_per_mm3, break_travel_um, break_residual_pct, slip_at_n, slip_mm)
+        self.spec_broken = False
+        self.spec_slip_xc = None
         self._send(self.spec_line)
         # M3 (ICD v0.7.2): stress relaxation at constant position — the specimen force decays by relax_pct %
         # with the time constant relax_tau_s (first order, follows the elastic force while moving)
@@ -794,6 +815,16 @@ class Twin:
         if self.load_state:
             self.load_state["relax_n"] = 0.0
         self._send(f"W relax {self.load_cfg['relax_frac']} {self.load_cfg['relax_tau_s']} 0")
+
+    def _spec_line(self, kind: str, k: float, xc: float, k2: float, fy: float, fb: float, side: str = "pull",
+                   k3: float = 0.0, bt: float = 0.0, res_pct: float = 0.0, slip_at: float = 0.0,
+                   slip_mm: float = 0.0) -> str:
+        kc = {"none": 0, "spring": 1, "bilinear": 2}[kind]
+        sc = {"pull": 0, "push": 1, "both": 2}[side]
+        if bt < 0 or not 0.0 <= res_pct <= 100.0:
+            raise ValueError("specimen: break_travel_um >= 0 and 0 <= break_residual_pct <= 100")
+        self.world["specimen"] = {"kind": kind, "k_n_per_mm": k, "x_contact_um": xc, "side": side}
+        return f"W spec {kc} {k} {xc} {k2} {fy} {fb} {sc} {k3} {bt} {res_pct / 100.0} {slip_at} {slip_mm * 1000.0}"
 
     def _a_weight(self, kg: float | None = None, n: float | None = None, g_mps2: float = 9.80665):
         """M3 (ICD v0.7.2): known weights hung on the cell for a load calibration — force kg·g (or `n` newtons;
@@ -989,6 +1020,7 @@ class Twin:
             return {"ok": True, "now_us": self.now_us, "fw_t_us": self.fw_t_us(), "boot_us": self.boot_ns / 1000,
                     "t0_us": self.t0_us, "x_um_true": float(y["x_um_true"]), "pos_steps": int(y["pos_steps"]),
                     "load_n": float(y["load_n"]), "specimen_n": float(y["spec_n"]), "weight_n": float(y["weight_n"]),
+                    "specimen_broken": y.get("spec_broken") == "1",
                     "relax_n": float(y["relax_n"]), "creep_counts": float(y["creep_counts"]),
                     "drift_counts": float(y["drift_counts"]), "raw_ideal": float(y["load_raw_ideal"]),
                     "inputs": {n: self._level(n) for n in INPUT_ID if n != "stop"},
@@ -1061,9 +1093,11 @@ class Twin:
             self.load_cfg["relax_tau_s"] = float(w["specimen"].get("relax_tau_s", 10.0))
         self.world["steps_per_mm"] = float(sc.get("params", {}).get("motion.steps_per_mm", 800.0))
         spec = w.get("specimen", {"kind": "none"})
-        kc = {"none": 0, "spring": 1, "bilinear": 2}[spec.get("kind", "none")]
-        self.spec_line = (f"W spec {kc} {spec.get('k_n_per_mm', 0)} {spec.get('x_contact_um', 0)} "
-                          f"{spec.get('k2_n_per_mm', 0)} {spec.get('f_yield_n', 0)} {spec.get('f_break_n', 0)}")
+        self.spec_line = self._spec_line(spec.get("kind", "none"), spec.get("k_n_per_mm", 0), spec.get("x_contact_um", 0),
+                                         spec.get("k2_n_per_mm", 0), spec.get("f_yield_n", 0), spec.get("f_break_n", 0),
+                                         spec.get("side", "pull"), spec.get("k3_n_per_mm3", 0.0),
+                                         spec.get("break_travel_um", 0.0), spec.get("break_residual_pct", 0.0),
+                                         spec.get("slip_at_n", 0.0), spec.get("slip_mm", 0.0))
         self.drv_on = bool(w.get("driver", {}).get("drv_power", True))
         self.inputs["estop"] = 1 if w.get("estop_open") else 0
         self.scenario_params = dict(sc.get("params", {}))

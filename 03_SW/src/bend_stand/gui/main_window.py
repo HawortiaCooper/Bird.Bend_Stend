@@ -7,7 +7,7 @@ Layout (M1):
   · TARE · Stream · Record · Take sample · stretch · link widget. No toolbar item has a keyboard shortcut.
 * **Banner stack** in a second full-width toolbar row: stop banner, no-specimen mode banner, notice strip, toast.
 * **Tabs** (GQ-01 order) in a scroll area: Connection & Config (M1), Safety limits, Test marks, Manual,
-  Calibration & Tare (M3); Sequence and Report are placeholders (M4). The current tab is refreshed every tick.
+  Calibration & Tare (M3), Sequence, Report (M4). The current tab is refreshed every tick.
 * **Wizards / popups** (non-modal, STOP inside): travel and load calibration wizards, TARE popup (toolbar TARE on
   every tab), Pause/Break key test (Tools menu); refreshed every tick while open.
 * **Units**: View ▸ Units N / kgf (SYS-003) → readouts, X-Y pane, Manual / limits tabs (display only).
@@ -26,7 +26,8 @@ suppressed context menu, STOP handler installation, close rules); rewritten for 
 
 Implements: SW-STOP-001 (STOP first in the toolbar, synchronous), SW-STOP-002 (hotkey state, app-shortcut
 fallback, KL-01 text), SW-STOP-003/004 (Clear stop, Pause/Resume), SW-ACQ-001 (Stream on every tab), SW-TARE-001
-(TARE on every tab), SW-ACQ-002/003 (Record, Take sample on every tab), SAF-SW-005 (indicator bar), SW-RT-001
+(TARE on every tab), SAF-SW-005 / SAF-SW-001 (SW-trip toasts: a new trip "STOP sent", a clear "SW limit cleared",
+MC3-5), SW-SEQ-001 / SW-REP-001 (Sequence and Report tabs), SW-ACQ-002/003 (Record, Take sample on every tab), SAF-SW-005 (indicator bar), SW-RT-001
 (plot dock with STOP), SW-RT-005 (readouts), SW-PLT-003 (link widget), IF-008 (notices), SW-RT-006 (plot windows with panes, one snapshot
 per time window, layout persistence), SW-RT-001 (several plot windows, layout restored)
 """
@@ -35,6 +36,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import time
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -75,6 +77,8 @@ from bend_stand.gui.tabs.connection_tab import ConnectionTab
 from bend_stand.gui.tabs.limits_tab import LimitsTab
 from bend_stand.gui.tabs.manual_tab import ManualTab
 from bend_stand.gui.tabs.marks_tab import MarksTab
+from bend_stand.gui.tabs.report_tab import ReportTab
+from bend_stand.gui.tabs.sequence_tab import SequenceTab
 from bend_stand.gui.theme import BANNER_STYLE
 from bend_stand.gui.units_state import FORCE_UNITS, force_unit
 from bend_stand.gui.widgets.event_log import EventLogDock
@@ -93,10 +97,10 @@ log = logging.getLogger(__name__)
 
 TAB_NAMES = ("Connection & Config", "Safety limits", "Test marks", "Manual", "Calibration & Tare", "Sequence",
              "Report")
-PLACEHOLDER_MS = {"Sequence": "M4", "Report": "M4"}
 PARAMS_EVERY = 10                    # board values for the K1 chip (drv.k1_check_enable) every 10th tick
 SAMPLE_WINDOWS_S = (0.1, 0.5, 1.0, 2.0, 5.0, 10.0)
 TOAST_MS = 6000
+TRIP_GRACE_S = 2.0                   # MC3-5: an announced trip identity is kept ≥ 2 s
 DEFAULT_PLOT_KEYS = ("raw",)
 MAX_PLOT_WINDOWS = 4                 # GQ-04
 KEY_PLOT_LAYOUT = "plots/layout"     # SW-RT-006 / SW-RT-001: panes + curves per window (JSON)
@@ -125,6 +129,50 @@ def sample_text(row: Any) -> str:
     return txt
 
 
+def trip_key(trip: Any) -> tuple:
+    """Identity of one latched SW trip (``SwTrip``): limit class + device time + text."""
+    return (getattr(trip, "limit", None), getattr(trip, "t_us", None), getattr(trip, "text", ""))
+
+
+def is_trip_clear(payload: Any) -> bool:
+    """B's explicit clear signal (any of: payload ``None`` = all cleared; a payload flagged ``cleared`` /
+    ``kind``/``edge`` CLEAR(ED); a payload type named ``*Clear*``)."""
+    if payload is None:
+        return True
+    if getattr(payload, "cleared", False) is True:
+        return True
+    for attr in ("kind", "edge", "event"):
+        v = str(getattr(payload, attr, "") or "").upper()
+        if v in ("CLEAR", "CLEARED"):
+            return True
+    return "clear" in type(payload).__name__.lower()
+
+
+def trip_announcement(payload: Any, announced: dict[tuple, float], *, cleared: bool = False) -> tuple[str, str]:
+    """MC3-5 / SWD-M3-02 (pure; display only): classify one ``safety.trip`` publish.
+
+    * a **new** trip (identity not announced before) → ``("error", "SW limit trip: <text> – STOP sent")`` and its
+      identity is added to ``announced``;
+    * a **clear** (payload None, B's clear signal, or the publish of a *remaining* latch already announced — B5-25:
+      when one class clears the topic carries the remaining latest latch) → ``("info", "SW limit cleared …")``.
+      No clear is ever announced as a STOP (no STOP is sent at a clear).
+    """
+    if cleared or is_trip_clear(payload):
+        which = getattr(payload, "limit", None) if payload is not None else None
+        if payload is None:
+            announced.clear()
+        else:                                   # B6-15 SwTripCleared(limit, remaining, latest, t_us)
+            for k in [k for k in announced if k[0] == which or k == trip_key(payload)]:
+                announced.pop(k, None)
+        rest = [getattr(t, "limit", "") for t in (getattr(payload, "remaining", None) or ())]
+        return "info", "SW limit cleared" + (f": {which}" if which else "") +             (f" – still latched: {', '.join(r for r in rest if r)}" if rest else "")
+    key = trip_key(payload)
+    if key in announced:
+        return "info", f"SW limit cleared – still latched: {getattr(payload, 'limit', '') or payload}"
+    announced[key] = time.monotonic()
+    return "error", "SW limit trip: " + (getattr(payload, "text", "") or str(payload)) + " – STOP sent"
+
+
 def latched_count(status: Any) -> int:
     """Badge of the Clear-stop button: latched HALT / PAUSED / ESTOP / faults (display only)."""
     ind = getattr(status, "indicators", None)
@@ -133,16 +181,6 @@ def latched_count(status: Any) -> int:
     names = ["halt", "paused", "estop"] + [n.lower() for n in indicator_map.chip_members("FAULT") if n != "FAULT"] \
         + ["k1_welded", "load_limit", "limit_wiring"]
     return sum(1 for n in dict.fromkeys(names) if getattr(ind.get(n), "state", "") == "ON")
-
-
-class _Placeholder(QWidget):
-    def __init__(self, name: str, ms: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        lay = QVBoxLayout(self)
-        label = QLabel(f"{name} — implemented in milestone {ms}.", self)
-        label.setStyleSheet("color: #606060;")
-        lay.addWidget(label)
-        lay.addStretch(1)
 
 
 class MainWindow(QMainWindow):
@@ -168,6 +206,7 @@ class MainWindow(QMainWindow):
         self._status_n = 0
         self._prev_link_state = ""
         self.link_lost_diagnostics: list[str] = []      # MC3-4: one line per LINK LOST shown
+        self._announced_trips: dict[tuple, float] = {}   # MC3-5: SW trips already announced (identity → time)
 
         self._build_toolbar()
         self._build_banner_bar()
@@ -331,8 +370,13 @@ class MainWindow(QMainWindow):
                                                self.calibration_tab), strict=True):
             tab.message.connect(self.toast)
             self.tabs.addTab(tab, name)
-        for name in TAB_NAMES[5:]:
-            self.tabs.addTab(_Placeholder(name, PLACEHOLDER_MS[name], self.tabs), name)
+        self.sequence_tab = SequenceTab(self.backend, self.bridge, self.tabs)
+        self.report_tab = ReportTab(self.backend, self.bridge, self.tabs)
+        for name, tab in zip(TAB_NAMES[5:], (self.sequence_tab, self.report_tab), strict=True):
+            tab.message.connect(self.toast)
+            self.tabs.addTab(tab, name)
+        self.sequence_tab.stopResult.connect(self._show_stop_result)
+        self.sequence_tab.resumeResult.connect(self._on_resume_result)
         self.manual_tab.resumeRequested.connect(lambda: self._on_resume_result(self.backend.resume("manual")))
         self.calibration_tab.travelWizardRequested.connect(self.open_travel_wizard)
         self.calibration_tab.loadWizardRequested.connect(self.open_load_wizard)
@@ -422,6 +466,7 @@ class MainWindow(QMainWindow):
         self.last_status = status
         self._status_n += 1
         no_specimen().set(bool(getattr(status.safety, "no_specimen_mode", False)))
+        self._track_trips(status)
         if self._status_n % PARAMS_EVERY == 1:
             try:
                 self._params = self.backend.config.values()
@@ -442,6 +487,20 @@ class MainWindow(QMainWindow):
             tab.update_status(status)
         self._update_windows(status)
         self._update_banner_bar()
+
+    def _track_trips(self, status: Any) -> None:
+        """MC3-5: the first status seeds the trips latched before the window existed; later ticks drop the
+        identities no longer latched (after a 2 s grace, so a status rebuilt later than the event cannot drop a
+        just-announced trip). A new trip is announced by its ``safety.trip`` event only."""
+        latched = {trip_key(t) for t in getattr(status.safety, "trips", ()) or ()}
+        now = time.monotonic()
+        if self._status_n == 1:
+            for k in latched:
+                self._announced_trips.setdefault(k, now)
+            return
+        for k, t0 in list(self._announced_trips.items()):
+            if k not in latched and now - t0 > TRIP_GRACE_S:
+                del self._announced_trips[k]
 
     def _check_link_lost(self, status: Any) -> None:
         """MC3-4 / OBS-M3-R1: with every LINK LOST the GUI shows, log the longest GUI refresh-tick gap and the last
@@ -707,9 +766,11 @@ class MainWindow(QMainWindow):
                            "warn")
             elif on is True:
                 self.toast("No-specimen mode ON – PC load limits off for this session", "warn")
-        elif record.topic == "safety.trip":
-            p = record.payload
-            self.toast("SW limit trip: " + (getattr(p, "text", "") or str(p)) + " – STOP sent", "error")
+        elif record.topic == "safety.trip" or record.topic.startswith("safety.trip"):
+            # MC3-5 / SWD-M3-02: only a *new* trip is announced as an error with "STOP sent"; a clear is info
+            severity, text = trip_announcement(record.payload, self._announced_trips,
+                                               cleared=record.topic != "safety.trip")   # B's dedicated clear topic
+            self.toast(text, severity)
 
     def open_clear_stop(self) -> None:
         dlg = self.dialogs.get("clear")

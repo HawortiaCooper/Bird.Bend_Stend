@@ -102,6 +102,11 @@ typedef struct {
     int32_t afe_script[256]; unsigned afe_script_n, afe_script_i;
     vt_t next_sample; bool sample_pending; struct { uint32_t t_us; int32_t raw; int32_t pos; uint8_t st; } pend_sample;
     int spec_kind; double spec_k, spec_xc, spec_k2, spec_fy, spec_fb; bool spec_broken;
+    /* M4 specimen (tools/README vocabulary, ICD v0.7.3 + M4 twin additions): side 0 pull (x > xc only, M1..M3),
+     * 1 push (x < xc only, F < 0), 2 both (clamped, linear through xc); cubic term k3 (N/mm^3, odd in the
+     * deflection); break also at a deflection |x - xc| >= spec_bt (um); residual fraction after the break */
+    int spec_side; double spec_k3, spec_bt, spec_res;
+    double spec_slip_at, spec_slip_um; bool spec_slipped;   /* grip slip: xc moves once by slip_um at |F| >= slip_at */
     /* ---- M3 load model (ICD v0.7.2, calibration flows; R2 §3 cell figures) ---- */
     double weight_n;                         /* hung calibration weights (N, + = tension like the specimen) */
     double drift_cps; double drift_acc; vt_t drift_t;   /* zero drift: counts/s since drift_t + accumulated */

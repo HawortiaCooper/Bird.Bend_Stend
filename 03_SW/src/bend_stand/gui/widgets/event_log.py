@@ -77,7 +77,7 @@ def format_record(record: Any) -> LogRow:
         return LogRow(wall, getattr(payload, "source", "") or "PC", cmd, f"{topic}{detail}", sev)
     if topic == "resume.ignored":
         return LogRow(wall, "PC", "RESUME_IGNORED", _payload_text(payload), "warn")
-    sev = "error" if topic in ("rec.failure", "safety.trip") else "info"
+    sev = "error" if topic == "rec.failure" or (topic == "safety.trip" and payload is not None) else "info"
     return LogRow(wall, topic.split(".")[0], topic, _payload_text(payload), sev)
 
 

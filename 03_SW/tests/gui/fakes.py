@@ -34,6 +34,8 @@ from bend_stand.core.api import (
     WriteStatus, XYSnapshot,
 )
 
+from fake_sequencer import FakeReports, FakeSequencer  # noqa: E402  M4 (B §15.5f, B's pure sequencer code)
+
 NOT_IMPL = GateResult((GateItem("NOT_IMPLEMENTED", Severity.REFUSE, "not implemented in M1"),))
 
 
@@ -617,58 +619,6 @@ class FakeCalStore:
         return done(TravelDiffState())
 
 
-class FakeSequencer:
-    def new(self) -> Any:
-        return None
-
-    def load(self, path: str) -> Any:
-        return None
-
-    def save(self, seq: Any, path: str) -> None:
-        pass
-
-    def validate(self, seq: Any) -> list[Issue]:
-        return []
-
-    def expand(self, seq: Any) -> Any:
-        return None
-
-    def planned_path(self, seq: Any) -> Any:
-        return None
-
-    def generator_schemas(self) -> Mapping[str, Any]:
-        return {}
-
-    def start(self, seq: Any, *, confirmed: bool = False) -> GateResult:
-        return NOT_IMPL
-
-    def pause(self) -> StopResult:
-        return StopResult("PAUSE", "sequence", False, reason="not implemented")
-
-    def resume(self) -> GateResult:
-        return NOT_IMPL
-
-    def stop(self) -> StopResult:
-        return StopResult("STOP", "sequence", False, reason="not implemented")
-
-    def abort(self) -> StopResult:
-        return StopResult("HALT", "sequence", False, reason="not implemented")
-
-    def status(self) -> SeqStatus:
-        return SeqStatus()
-
-
-class FakeReports:
-    def build_async(self, rec_dir: str, cal: Any = None, tare: Any = None, bend3p: Any = None) -> Future:
-        return failed(NotImplementedError("M4"))
-
-    def list_recordings(self, root: str | None = None) -> list[str]:
-        return []
-
-    def load_result(self, rec_dir: str) -> Any:
-        return None
-
-
 # --------------------------------------------------------------------------------------------- backend
 
 class FakeBackend:
@@ -692,8 +642,8 @@ class FakeBackend:
         self.travel_cal = FakeEngine("travel_cal", self)
         self.load_cal = FakeLoadCal("load_cal", self)
         self.calibrations = FakeCalStore(self)
-        self.sequencer = FakeSequencer()
-        self.reports = FakeReports()
+        self.sequencer = FakeSequencer(self)
+        self.reports = FakeReports(self)
         self.sim = None
         self.test_hooks = None
         self.compat = Compat.OK

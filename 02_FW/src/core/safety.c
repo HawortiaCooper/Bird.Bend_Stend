@@ -8,7 +8,8 @@
  * low = powered, a broken wire reads active / unpowered); PAUSE, ALM and PEND follow their
  * parameters.
  * Implements: SAF-FW-005 (latch part, backup detection), SAF-FW-006 (closed time), SAF-FW-007,
- *             SAF-FW-013, SAF-FW-014, SAF-FW-015, SAF-FW-017, SAF-FW-018 (boot ENA / latches),
+ *             SAF-FW-013, SAF-FW-014, SAF-FW-015 (+ VALID clear in every state, D-47 a), SAF-FW-017,
+ *             SAF-FW-018 (boot ENA / latches),
  *             SAF-FW-023 (button), SAF-FW-024, SAF-FW-025, SAF-FW-026 (ALM state), FW-SW-001...005,
  *             FW-CMD-003 (cause conditions), FW-STR-006 (EVENTs)
  */
@@ -331,6 +332,12 @@ void safety_tick(uint32_t now_ms, uint32_t now_us)
         fw_event((uint16_t)EV_LINK_WDG, 0u, 0, 0);
         motion_stop((uint8_t)SC_LINK_WDG, true, (uint8_t)MD_STOPPED);
         vclear(SC_LINK_WDG, now_us);
+    }
+    /* D-47 a: link silence clears VALID in EVERY motion state (idle, capture, NOT_ENABLED), reported
+     * once by VALID_CLEARED (arg LINK_WDG) on the 1 -> 0 change; the controlled stop, the LINK_WDG
+     * status and its EVENTs stay "only while moving" (above) */
+    if ((uint32_t)(now_ms - g_fw.last_cmd_rx_ms) >= g_fw.p.safety.link_timeout_ms) {
+        vclear(SC_LINK_WDG, now_us);                   /* no-op while VALID is already 0 */
     }
 
     /* 6. idle disable (SAF-FW-017; not while the AFE is stale, D-33 g) */

@@ -33,7 +33,7 @@
 # =====================================================================================
 
 schema_version: 1
-icd_version: "0.7.3"
+icd_version: "0.7.4"
 proto_major: 1
 proto_minor: 0
 payload_version: 1

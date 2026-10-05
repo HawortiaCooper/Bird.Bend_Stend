@@ -68,7 +68,11 @@ def test_load_trip_order_latch_release_and_restop() -> None:
     r.sup.process(row(150, 10.0, 99.0, flags=int(DF.HOMED)))             # inside, but not by the 2 % band
     assert r.sup.trip is not None
     r.sup.process(row(160, 10.0, 97.0, flags=int(DF.HOMED)))
-    assert r.sup.trip is None and r.rows[-1] == ("SW_TRIP_CLEARED", "PULL") and r.topics("safety.trip")[-1] is None
+    assert r.sup.trip is None and r.rows[-1] == ("SW_TRIP_CLEARED", "PULL")
+    # MC3-5 / SWD-M3-02: the clear is published on its own topic; safety.trip carries new trips only
+    cl = r.topics("safety.trip_cleared")[-1]
+    assert cl.limit == "PULL" and cl.remaining == () and cl.latest is None
+    assert all(p is not None for p in r.topics("safety.trip"))
     r.sup.process(row(170, 10.0, -100.5, flags=int(DF.HOMED)))           # push side trips also at standstill
     assert r.sup.trip.limit == "PUSH" and r.sup.direction_refused(-1)
     r.cfg = replace(r.cfg, push_enabled=False)                           # disabling the limit releases the latch
@@ -385,12 +389,16 @@ def test_each_latch_clears_by_its_own_rule() -> None:
     r.sup.process(row(1050, 9.9, 101.0, flags=int(DF.HOMED)))          # standstill below the min, F still high
     assert set(r.sup.latches) == {"TRAVEL_MIN", "PULL"}
     r.sup.process(row(1100, 20.0, 97.0, flags=int(DF.HOMED)))          # standstill inside + force back inside
-    assert not r.sup.latches and r.topics("safety.trip")[-1] is None
+    assert not r.sup.latches
+    assert sorted(c.limit for c in r.topics("safety.trip_cleared")) == ["PULL", "TRAVEL_MIN"]
+    assert r.topics("safety.trip_cleared")[-1].remaining == ()
     r2 = Rig(ALL, FREE)
     _latch(r2, "PULL")
     _violate(r2, "TRAVEL_MAX", 1000.0, 101.0)
     r2.sup.process(row(1100, 50.2, 97.0, flags=int(DF.HOMED)))         # force inside, still beyond travel max
     assert set(r2.sup.latches) == {"TRAVEL_MAX"} and r2.topics("safety.trip")[-1].limit == "TRAVEL_MAX"
+    cl = r2.topics("safety.trip_cleared")[-1]
+    assert cl.limit == "PULL" and cl.latest.limit == "TRAVEL_MAX" and [t.limit for t in cl.remaining] == ["TRAVEL_MAX"]
     assert r2.sup.direction_refused(+1).limit == "TRAVEL_MAX" and r2.sup.direction_refused(-1) is None
 
 

@@ -1390,6 +1390,10 @@ class SimBoard:
             self.emit(EV.LINK_WDG)
             self._controlled_stop(int(SC.LINK_WDG), "STOPPED")
             self._clear_valid(int(SC.LINK_WDG))
+        # D-47 a: link silence in any motion state clears VALID (VALID_CLEARED LINK_WDG once, only on 1 → 0); while
+        # idle no stop, no LINK_WDG status / event (those stay moving-only)
+        elif self.valid and t_us - self.last_cmd_us >= int(self.p("safety.link_timeout_ms")) * 1000:
+            self._clear_valid(int(SC.LINK_WDG))
         # jog dead-man (VALID unchanged)
         m = self.motion
         if m is not None and m.kind == "JOG" and (not m.stopping or m.reverse is not None) and \

@@ -18,8 +18,11 @@ M3 (§22b): calibration store + session + marks (files under ``<data>``), ``Load
 session tare, no-specimen mode), pipeline scaling + derived channels, ``SafetySupervisor`` (SAF-SW-001 on every
 frame, before the sinks), the automatic FW-threshold rewrite whenever the SAF-SW-002 target changes, ``CaptureHub``,
 tare / load-calibration / travel-calibration engines (``terminate_all`` on stops, pauses, latches, link loss),
-take-sample, the complete recorder (derived columns, SW event rows, snapshot sidecar, failure handling). The
-sequencer and reports (M4) refuse with ``NOT_IMPLEMENTED`` or raise ``NotImplementedError``.
+take-sample, the complete recorder (derived columns, SW event rows, snapshot sidecar, failure handling).
+M4 (§22c): ``backend.sequencer`` (model / validation / plan / path / generators / files, ``check_start`` / ``start``
+/ controls) over ``core.sequencer.executor.SequenceExecutor`` (own runner: thread on the real clock, stepped after the
+Worker on the lock-step clock; owner ``SEQUENCE``; pause / resume / terminate routing, RESUME_REQUEST, ALM, recording
+failure), ``backend.reports`` (``core.report``), ``safety.trip_cleared`` (MC3-5).
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/core/backend.py @37c87471 (facade pattern; rewritten for §15).
 
@@ -27,7 +30,8 @@ Implements: SW-PLT-003, SW-ACQ-001, SW-ACQ-002 (record start/stop), SW-CFG-001�
 (backend part), SAF-SW-005 (indicators incl. UNKNOWN, D-37 b), NFR-002 (priority path from the GUI thread),
 SW-MAN-001…006 / SW-LIM-001 (M2 backend part), SW-STOP-002 (hotkey), SAF-SW-002, SAF-SW-001, SAF-SW-004
 (no-specimen confirmation), SAF-SW-005 (M3 indicators), SAF-SW-006, SW-LIM-001…004, SW-META-001/002, SW-ACQ-002…004,
-SW-CAL-001…009 (API), SW-TARE-001…003 (API), SW-RT-002/004 (channel availability)
+SW-CAL-001…009 (API), SW-TARE-001…003 (API), SW-RT-002/004 (channel availability), SW-SEQ-001…007 (API),
+SW-STOP-004 (sequence pause / resume), SW-WIZ-001/002, SW-SEQF-001, SW-SCH-001/002, SW-REP-001…004 (API)
 """
 from __future__ import annotations
 
@@ -68,7 +72,7 @@ from bend_stand.core.model import (
     INT_DF, INT_DS, INT_SYS,
     INDICATOR_UNKNOWN, BackendStatus, BoardConfigFile, CalibrationStatus, ClearResult, DeviceInfo, EndpointInfo,
     GateCode, GateId, GateItem, GateResult, HotkeyStatus, Indicator, Indicators, Issue, IssueSeverity,
-    LimitConfig, LinkState, LinkStatus, MotionStatus, OperationStatus, SafetyStatus, SampleRow,
+    LimitConfig, LinkState, LinkStatus, MotionStatus, OperationStatus, ResumeIgnored, SafetyStatus, SampleRow,
     SeqStatus, SessionSettings, Severity, StopResult, StreamStatus, TareStatus, TestMarks, ThresholdState,
     TravelDiffState, VerifyReport,
 )
@@ -78,6 +82,18 @@ from bend_stand.core.pipeline import DataRow, Pipeline
 from bend_stand.core.recorder import Recorder, append_sample
 from bend_stand.core.safety import SafetyInputs, SafetySupervisor
 from bend_stand.core.tare import TareEngine
+from bend_stand.calc.path import PathPoint
+from bend_stand.core import report as report_mod
+from bend_stand.core.model import RecordingInfo, ReportPaths, ReportResult, StepResult
+from bend_stand.core.sequencer import seqfile
+from bend_stand.core.sequencer.executor import SequenceExecutor
+from bend_stand.core.sequencer.generators import GeneratorSchema, SchemaContext, generator_schemas
+from bend_stand.core.sequencer.generators import generate as seq_generate
+from bend_stand.core.sequencer.model import Block, Sequence, SeqIssue, StepKind, ValidationContext
+from bend_stand.core.sequencer.model import validate as seq_validate
+from bend_stand.core.sequencer.plan import Plan, PlanContext
+from bend_stand.core.sequencer.plan import expand as seq_expand
+from bend_stand.core.sequencer.plan import planned_path as seq_planned_path
 from bend_stand.io import ports
 from bend_stand.io.transport import LINK_BYTES_PER_S, Transport, parse_endpoint, transport_factory
 
@@ -431,55 +447,209 @@ class CalibrationStoreAPI:
 
 
 class SequencerAPI:
-    def new(self) -> Any:
-        raise NotImplementedError("sequencer: M4")
+    """``backend.sequencer`` (§10, §15.5f B6-01…B6-13): model helpers, validation, plan, path, generators, files and
+    the execution controls of ``SequenceExecutor``."""
 
-    def load(self, path: str) -> Any:
-        raise NotImplementedError("sequencer: M4")
+    def __init__(self, be: Backend) -> None:
+        self._be = be
+        self.last_load_warnings: list[str] = []
 
-    def save(self, seq: Any, path: str) -> None:
-        raise NotImplementedError("sequencer: M4")
+    @property
+    def executor(self) -> SequenceExecutor:
+        return self._be.seq
 
-    def validate(self, seq: Any) -> list[Issue]:
-        raise NotImplementedError("sequencer: M4")
+    # ---- model / files -------------------------------------------------------------------------------
+    def new(self) -> Sequence:
+        s = self._be.session.get()
+        return Sequence(travel_ref=s.seq_travel_ref, k_est_n_mm=float(s.k_est_n_mm or 50.0), pull_dir=s.pull_dir)
 
-    def expand(self, seq: Any) -> Any:
-        raise NotImplementedError("sequencer: M4")
+    def load(self, path: str) -> Sequence:
+        """SW-SEQF-001: a new object (``FileFormatError`` on any error — the caller's sequence is untouched)."""
+        seq, self.last_load_warnings = seqfile.load(path)
+        return seq
 
-    def planned_path(self, seq: Any) -> Any:
-        raise NotImplementedError("sequencer: M4")
+    def save(self, seq: Sequence, path: str) -> None:
+        seqfile.save(path, seq)
 
-    def generator_schemas(self) -> Mapping[str, Any]:
-        return {}
+    # ---- validation / plan ---------------------------------------------------------------------------
+    def validation_context(self) -> ValidationContext:
+        be = self._be
+        m = be.motion
+        lim = m.limits() if be.device.connected else None
+        lo, hi = m.travel_range_mm() if be.device.params.values() else (None, None)
+        cfg = be.limits.get()
+        li = be.load_input
+        return ValidationContext(
+            v_travel_cap_mm_s=None if lim is None else min(lim.v_travel_mm_s, lim.v_step_rate_mm_s),
+            v_load_cap_mm_s=None if lim is None else min(lim.v_load_mm_s, lim.v_step_rate_mm_s),
+            a_max_mm_s2=None if lim is None else lim.a_max_mm_s2, travel_lo_mm=lo, travel_hi_mm=hi,
+            x_zero_mm=m.x_zero_mm, pull_trip_n=cfg.pull_trip_n if cfg.pull_enabled else None,
+            push_trip_n=cfg.push_trip_n if cfg.push_enabled else None, fw_level_n=cfg.fw_level_n,
+            f_cal_max_n=None if li.cal is None else li.cal.f_cal_max,
+            margin_check=(cfg.pull_enabled or cfg.push_enabled) and not li.no_specimen)
 
-    def start(self, seq: Any, *, confirmed: bool = False) -> GateResult:
-        return _not_implemented("sequencer", "M4")
+    def validate(self, seq: Sequence) -> list[SeqIssue]:
+        return seq_validate(seq, self.validation_context())
+
+    def plan_context(self, seq: Sequence) -> PlanContext:
+        be = self._be
+        off = be.motion.x_zero_mm if seq.travel_ref == "test" else 0.0
+        x = be.motion.position_mm() if be.device.connected else None
+        f = be.data.latest("F_N").value if be.device.connected else float("nan")
+        lim = be.motion.limits() if be.device.connected else None
+        return PlanContext(0.0 if x is None else x - off, f if f == f else 0.0,
+                           lim.a_max_mm_s2 if lim is not None else 100.0, -off, be.session.get().tare_window_s)
+
+    def expand(self, seq: Sequence) -> Plan:
+        return seq_expand(seq, self.plan_context(seq))
+
+    def planned_path(self, seq_or_plan: Sequence | Plan) -> tuple[PathPoint, ...]:
+        plan = seq_or_plan if isinstance(seq_or_plan, Plan) else self.expand(seq_or_plan)
+        return seq_planned_path(plan)
+
+    # ---- generators ----------------------------------------------------------------------------------
+    def schema_context(self) -> SchemaContext:
+        be = self._be
+        lim = be.motion.limits() if be.device.connected else None
+        lo, hi = be.motion.travel_range_mm() if be.device.params.values() else (None, None)
+        x_off = be.motion.x_zero_mm
+        s = be.session.get()
+        kw: dict[str, Any] = {}
+        if lim is not None:
+            kw.update(v_travel_max_mm_s=min(lim.v_travel_mm_s, lim.v_step_rate_mm_s),
+                      v_load_max_mm_s=min(lim.v_load_mm_s, lim.v_step_rate_mm_s), a_max_mm_s2=lim.a_max_mm_s2)
+        if lo is not None:
+            kw["travel_lo_mm"] = lo - x_off
+        if hi is not None:
+            kw["travel_hi_mm"] = hi - x_off
+        kw["speed_default_mm_s"] = min(s.manual_speed_mm_s, kw.get("v_travel_max_mm_s", 30.0))
+        return SchemaContext(**kw)
+
+    def generator_schemas(self) -> Mapping[str, GeneratorSchema]:
+        return generator_schemas(self.schema_context())
+
+    def generate(self, name: str, params: Mapping[str, Any] | None = None, **kw: Any) -> Block:
+        return seq_generate(name, params, ctx=self.schema_context(), **kw)
+
+    # ---- execution -----------------------------------------------------------------------------------
+    def check_start(self, seq: Sequence) -> GateResult:
+        """SW-SEQ-005 (§15.5f B6-06): the static ``sequence_start`` gate + the items of this sequence."""
+        be = self._be
+        snap = be._gate_snapshot()  # noqa: SLF001
+        items = list(all_gates(snap)[GateId.SEQUENCE_START].items)
+        issues = self.validate(seq)
+        errs = [i for i in issues if i.severity == IssueSeverity.ERROR]
+        rng = [i for i in errs if i.code == "TARGET_OUT_OF_RANGE"]
+        other = [i for i in errs if i.code != "TARGET_OUT_OF_RANGE"]
+        if other:
+            items.append(GateItem(GateCode.SEQ_INVALID, Severity.REFUSE, f"{len(other)} validation error(s): "
+                                  f"{other[0].text}" + (f" (+{len(other) - 1} more)" if len(other) > 1 else "")))
+        if rng:
+            items.append(GateItem(GateCode.TARGET_OUT_OF_RANGE, Severity.REFUSE, rng[0].text
+                                  + (f" (+{len(rng) - 1} more)" if len(rng) > 1 else "")))
+        kinds = set()
+        for s in seq.steps:
+            try:
+                kinds.add(StepKind(s.kind))
+            except ValueError:
+                pass
+        li = be.load_input
+        lst = li.evaluate(be.device.params.values(), be.device.info)
+        if StepKind.LOAD in kinds:
+            if li.no_specimen:
+                items.append(GateItem(GateCode.NO_SPECIMEN_MODE, Severity.REFUSE, "load steps need the PC load limits:"
+                                                                                  " leave the no-specimen mode"))
+            elif not lst.valid:
+                items.append(GateItem(GateCode.LOAD_INPUT_INVALID, Severity.REFUSE, "load steps need a valid "
+                                      f"calibration + tare: {lst.reason}", "Calibrate + Tare"))
+            if "MOVE_UNTIL_LOAD" not in snap.features:
+                items.append(GateItem(GateCode.FEATURE_MISSING, Severity.REFUSE, "not supported by this FW build "
+                                                                                 "(MOVE_UNTIL_LOAD)"))
+            if li.cal is not None and li.cal.low_span:
+                items.append(GateItem(GateCode.LOW_SPAN, Severity.WARN, "calibration LOW_SPAN (< 20 % FS): load "
+                                                                        "targets may be extrapolated"))
+        elif li.no_specimen and not any(i.severity == Severity.REFUSE for i in items):
+            items.append(GateItem(GateCode.NO_SPECIMEN_TRAVEL_ONLY, Severity.CONFIRM, "travel-only sequence in the "
+                                  "no-specimen mode (PC load limits off): confirm that no specimen is mounted"))
+        if StepKind.HOME in kinds and not any(i.severity == Severity.REFUSE for i in items):
+            over = snap.raw is not None and abs(snap.raw - snap.zero_raw) > snap.home_max_load_raw
+            if over or not snap.load_known:
+                items.append(GateItem(GateCode.HOME_LOAD_CONFIRM, Severity.CONFIRM, "HOME steps: load unknown or "
+                                      "above 5 % FS — confirm homing (SAF-SW-004)"))
+        for code in ("SAF_SW_006_MARGIN", "EXTRAPOLATED"):
+            w = [i for i in issues if i.code == code and i.severity == IssueSeverity.WARN]
+            if w:
+                items.append(GateItem(code, Severity.WARN, w[0].text + (f" (+{len(w) - 1} more steps)"
+                                                                         if len(w) > 1 else "")))
+        if be.recorder.state != "RECORDING":
+            from bend_stand.core.recorder import FREE_MIN_BYTES  # noqa: PLC0415
+
+            free = be._free_space(Path(be._recordings_root()))  # noqa: SLF001
+            if free is not None and free < FREE_MIN_BYTES:
+                items.append(GateItem(GateCode.DISK_SPACE, Severity.REFUSE, f"not enough free disk space for the "
+                                      f"recording ({free // (1024 * 1024)} MB)"))
+        return GateResult(tuple(items))
+
+    def start(self, seq: Sequence, *, confirmed: bool = False) -> GateResult:
+        """B3-20: nothing starts without ``confirmed=True`` when CONFIRM items exist (the gate itself is returned)."""
+        ex = self._be.seq
+        if ex.active:
+            return GateResult((GateItem(GateCode.SEQUENCE_RUNNING, Severity.REFUSE, "a sequence is running"),))
+        g = self.check_start(seq)
+        if not g.ok or (g.confirm_items and not confirmed):
+            return g
+        home_ok = any(i.code == GateCode.HOME_LOAD_CONFIRM for i in g.confirm_items)
+        ex.start(seq.copy(), plan_ctx=self.plan_context(seq), home_confirmed=home_ok)
+        return g
 
     def pause(self) -> StopResult:
-        return StopResult("PAUSE", "sequencer", False, None, "sequencer: M4")
+        return self._be.pause("sequence")
 
     def resume(self) -> GateResult:
-        return _not_implemented("sequencer", "M4")
+        return self._be.resume("sequence")
 
     def stop(self) -> StopResult:
-        return StopResult("STOP", "sequencer", False, None, "sequencer: M4")
+        return self._be.seq.stop("sequence")
 
-    def abort(self) -> StopResult:
-        return StopResult("HALT", "sequencer", False, None, "sequencer: M4")
+    def abort(self, reason: str = "operator") -> StopResult:
+        return self._be.seq.abort(reason)
+
+    def continue_(self) -> None:
+        self._be.seq.continue_()
 
     def status(self) -> SeqStatus:
-        return SeqStatus()
+        return self._be.seq.status()
+
+    def results(self) -> tuple[StepResult, ...]:
+        return self._be.seq.results()
 
 
 class ReportAPI:
-    def build_async(self, rec_dir: str, cal: Any = None, tare: Any = None, bend3p: Any = None) -> Future[Any]:
-        return failed_future(NotImplementedError("reports: M4"))
+    """``backend.reports`` (§11, §15.5f B6-14)."""
 
-    def list_recordings(self, root: str | None = None) -> list[str]:
-        return []
+    def __init__(self, be: Backend) -> None:
+        self._be = be
 
-    def load_result(self, rec_dir: str) -> Any:
-        raise NotImplementedError("reports: M4")
+    def build_async(self, rec_dir: str, cal: Any = None, tare: float | None = None,
+                    bend3p: Any = None) -> Future[ReportPaths]:
+        be = self._be
+        s = be.session.get()
+        geom = s.bend3p if bend3p is None else (None if bend3p is False else bend3p)
+
+        def job() -> Job:
+            paths = report_mod.build_report(rec_dir, cal=cal, tare=tare, bend3p=geom if geom is not None else False,
+                                            bend3p_compliance=s.compliance_mm_per_n)
+            be.events.publish("report.ready", paths)
+            return paths
+            yield  # pragma: no cover - makes this a generator job
+
+        return be._job(job)  # noqa: SLF001
+
+    def list_recordings(self, root: str | None = None) -> list[RecordingInfo]:
+        return report_mod.list_recordings(root or self._be._recordings_root())  # noqa: SLF001
+
+    def load_result(self, rec_dir: str) -> ReportResult:
+        return report_mod.load_result(rec_dir)
 
 
 # ============================================================================== backend
@@ -547,8 +717,11 @@ class Backend:
                                   else paths.sessions_dir(self.data_dir) / "default.bbsession.json")
         self._load_active_calibration()
         self.on_scale_changed()
-        self.sequencer = SequencerAPI()
-        self.reports = ReportAPI()
+        self.seq = SequenceExecutor(self)                 # M4 sequencer (own runner, §22c)
+        self.pipeline.sinks.append(self.seq.on_row)
+        self.data.trace_provider = self.seq.trace
+        self.sequencer = SequencerAPI(self)
+        self.reports = ReportAPI(self)
         self.test_hooks: Any = None
         if s.test_hooks:
             from bend_stand.core.testing import TestHooks  # noqa: PLC0415
@@ -579,6 +752,7 @@ class Backend:
         self._gc_watch = timing.GcWatch()
         self._gc_watch.install()
         self.worker.start()
+        self.seq.runner.start()
         self.pipeline.start()
         self._sup_stop.clear()
         self._sup_thread = threading.Thread(target=self._supervisor_loop, name="bend-supervisor", daemon=True)
@@ -608,6 +782,7 @@ class Backend:
             t, self._sup_thread = self._sup_thread, None
             if t is not None:
                 t.join(1.0)
+            self.seq.shutdown()
             self.worker.stop()
             self.pipeline.stop()
             self._stop_sim()
@@ -640,6 +815,7 @@ class Backend:
         self.liveness.beat("supervisor", now)
         self.device.tick(now)
         self.motion.tick(now)
+        self.seq.tick(now)
         self._auto_thresholds()
         hk = self.hotkey
         if hk is not None and now >= self._next_hotkey_ping_ns:
@@ -656,6 +832,7 @@ class Backend:
         self.pipeline.step(now)
         self._tick(now)
         self.worker.step(now)
+        self.seq.runner.step(now)
         self.recorder.step(now)
 
     # ---- connection ----------------------------------------------------------------------------------
@@ -759,9 +936,29 @@ class Backend:
             self.terminate_all(name)
         elif code == int(pg.Event.BOOT):
             self.terminate_all("board reset")
+        elif code == int(pg.Event.RESUME_REQUEST):          # PAUSE button pressed while PAUSED (D-26 (1), D-31)
+            self.resume("button")
+        elif code == int(pg.Event.PAUSE_CLEARED) and ev.arg != int(pg.PauseClearedReason.RESUME):
+            self.seq.on_pause_cleared()
+        elif code == int(pg.Event.ALM_CHANGED) and ev.arg == 1 and \
+                self.device.valid_status_mask() & int(pg.DataStatus.ALM):
+            self.seq.on_alm()                                 # D-33 c (also from the DATA status edge)
+
+    _PAUSE_REASONS = frozenset({"PAUSE", "PAUSED", "STOPPED (PC_PAUSE)", "STOPPED (PAUSE_BUTTON)"})
 
     def terminate_all(self, reason: str) -> None:
-        """Swap every running operation to ABORTED (no waiting, §3.5); take-sample captures are not affected."""
+        """Swap every running operation to ABORTED (no waiting, §3.5); take-sample captures are not affected. A
+        running sequence is **paused** for the pause causes (``pause_all``, §3.5) and ended ABORTED otherwise."""
+        try:
+            if reason in self._PAUSE_REASONS:
+                src = {1: "PC", 2: "BUTTON"}.get(self.device.pause_src_ev or 0)
+                if reason == "STOPPED (PAUSE_BUTTON)":
+                    src = "BUTTON"
+                self.seq.on_pause(src or "PC")
+            else:
+                self.seq.terminate(reason)
+        except Exception:  # noqa: BLE001 — never raises
+            log.exception("sequence terminate failed")
         for eng in (self.travel_cal, self.load_cal, self.tare_engine):
             try:
                 eng.terminate(reason)
@@ -852,14 +1049,18 @@ class Backend:
             log.exception("after-stop handling failed")
 
     def resume(self, source: str = "gui") -> GateResult:
-        """M1 manual Resume = RESUME 0x3C only (no motion re-issue; the sequencer's re-issue is M4)."""
-        g = self.status().gates[GateId.RESUME]
+        """RESUME 0x3C (D-31). With a PAUSED sequence the executor sends RESUME and, after its ACK, re-issues the
+        interrupted step (SW-STOP-004, B6-13); manual mode: RESUME only."""
+        g = self._gates()[GateId.RESUME]
+        if g.ok and self.seq.paused:
+            if not self.seq.request_resume(source):
+                g = GateResult((GateItem(GateCode.OPERATION_RUNNING, Severity.REFUSE, "resume already in progress"),))
+                self.events.publish("resume.ignored", ResumeIgnored("gui" if source != "button" else "button", g))
+            return g
         if g.ok:
             fut = self.device.clear_async(pg.Cmd.RESUME)       # submitted at once (CONTROL lane), no Worker job
             fut.add_done_callback(self._publish_resume)
         else:
-            from bend_stand.core.model import ResumeIgnored  # noqa: PLC0415
-
             self.events.publish("resume.ignored", ResumeIgnored("gui" if source != "button" else "button", g))
         return g
 
@@ -927,7 +1128,8 @@ class Backend:
         return free_space(path)
 
     def _on_rec_failure(self, st: Any) -> None:
-        self.events.publish("rec.failure", st)
+        self.seq.on_recording_failed()                      # SW-ACQ-004: controlled stop of a running sequence (act
+        self.events.publish("rec.failure", st)              # first, publish after)
         self.events.log(f"RECORDING FAILED: {st.failure}", logging.ERROR)
 
     def record_event(self, name: str, text: str = "") -> None:
@@ -951,7 +1153,11 @@ class Backend:
                 "travel_cal_differs": asdict(self.travel_cal.diff)}
 
     def record_start(self) -> GateResult:
-        g = self.status().gates[GateId.RECORD_START]
+        return self.record_start_with(None)
+
+    def record_start_with(self, extra_meta: Mapping[str, Any] | None) -> GateResult:
+        """``record_start`` with extra sidecar entries (the sequencer's run header, §13.7)."""
+        g = self._gates()[GateId.RECORD_START]
         if not g.ok:
             return g
         root = self._recordings_root()
@@ -962,6 +1168,8 @@ class Backend:
                 "snapshot": self._snapshot()}
         if info is not None:
             meta.update(fw_version=".".join(map(str, info.fw_version)), board_uid=info.uid, build=info.build)
+        if extra_meta:
+            meta.update(dict(extra_meta))
         cal = self.load_input.cal
         tare = self.load_input.tare_for(info.uid if info else None)
         header = {"calibration": "none" if cal is None else f"K={cal.k:.12g} N/count status={cal.status} "
@@ -981,12 +1189,19 @@ class Backend:
         return g
 
     def record_stop(self) -> GateResult:
-        g = self.status().gates[GateId.RECORD_STOP]
+        g = self._gates()[GateId.RECORD_STOP]
         if g.ok:
             self.recorder.stop({"link_stats": vars(self._link_stats()),
                                 "marks_final": marks_mod.marks_to_dict(self.marks.get()),
                                 "no_specimen_mode_at_stop": self.load_input.no_specimen})
+            if self.seq.report_pending is not None:          # a sequence ran inside the operator's recording
+                self._job(self._pending_report_job)
         return g
+
+    def _pending_report_job(self) -> Job:
+        self.seq.build_pending_report()
+        return None
+        yield  # pragma: no cover - generator job
 
     # ---- M3 state: calibration / tare / scale / thresholds / no-specimen -----------------------------------
     def _load_active_calibration(self) -> None:
@@ -1059,9 +1274,14 @@ class Backend:
         self.events.publish("safety.no_specimen", on)
 
     def _on_synced(self) -> None:
-        """Worker thread, end of the connect / BOOT resync: scale + post-sync checks (travel restore rule)."""
+        """Worker thread, end of the connect / BOOT resync: scale + post-sync checks (travel restore rule); a VALID
+        left at 1 by a link loss during a capture window is cleared (SWC-M4-03; D-47: the FW also clears it on its
+        link watchdog)."""
         self.on_scale_changed()
         self._job(self.travel_cal.post_sync_job)
+        if self.device.last_flags & INT_DF.VALID and not self.seq.capture_open and not self.device.compat.read_only:
+            self.record_event("VALID_OFF", "left over after a reconnect")
+            self._job(self.device.set_valid_job, False)
 
     def _safety_inputs(self) -> SafetyInputs:
         li = self.load_input
@@ -1113,6 +1333,8 @@ class Backend:
         return self.device.clear_async(cmd)         # priority path, written now (D-34, SWD-M1-04)
 
     def clear_stop_async(self, *, confirmed: bool = False) -> Future[ClearResult]:
+        if confirmed and self.seq.paused and self._clear_refusal(GateId.CLEAR_STOP) is None:
+            self.seq.end_cleared()                           # the paused sequence ends STOPPED (CLEARED) first
         return self._clear(GateId.CLEAR_STOP, pg.Cmd.HALT_CLEAR, confirmed=confirmed)
 
     def estop_clear_async(self, *, confirmed: bool) -> Future[ClearResult]:
@@ -1252,7 +1474,9 @@ class Backend:
             capture_kinds=self.capture.kinds(), moved_recently=recent,
             afe_synthetic=bool(d.info is not None and d.info.feature_mask & pg.Features.AFE_SYNTHETIC),
             travel_cal_differs=self.travel_cal.diff.differs and not self.travel_cal.diff.ignored,
-            travel_room_mm=room)
+            travel_room_mm=room, sequence_paused=self.seq.paused,
+            sequence_state=self.seq.run.state if self.seq.run is not None else "IDLE",
+            seq_capture=self.seq.capture_open, recording_failed=self.recorder.state == "FAILED")
 
     def _gates(self, now: int | None = None) -> Mapping[GateId, GateResult]:
         return all_gates(self._gate_snapshot(now))
@@ -1348,10 +1572,13 @@ class Backend:
                           self.load_input.can_undo())
 
     def _operation_status(self) -> OperationStatus:
+        seq = self.seq.status()
+        if self.seq.active:
+            return OperationStatus(self.owner, f"sequence:{seq.phase}", seq)
         for e in (self.travel_cal, self.load_cal, self.tare_engine):
             if e.active:
-                return OperationStatus(self.owner, f"{e.KIND}:{e.state().phase}")
-        return OperationStatus(self.owner)
+                return OperationStatus(self.owner, f"{e.KIND}:{e.state().phase}", seq)
+        return OperationStatus(self.owner, None, seq)
 
 
 __all__ = ["Backend", "BackendSettings", "TWIN_ENDPOINT", "SIM_SERVER_ENDPOINT"]

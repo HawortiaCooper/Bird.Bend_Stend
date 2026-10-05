@@ -57,7 +57,9 @@ from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.errors import CommandTimeout, LinkError
 from bend_stand.core.jobs import Job
-from bend_stand.core.model import Issue, IssueSeverity, LimitConfig, SafetyWarning, SwTrip, ThresholdState
+from bend_stand.core.model import (
+    Issue, IssueSeverity, LimitConfig, SafetyWarning, SwTrip, SwTripCleared, ThresholdState,
+)
 from bend_stand.core.params import write_plan
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -401,7 +403,10 @@ class SafetySupervisor:
                 self.latches = {k: v for k, v in self.latches.items() if k != t.limit}
                 self._last_restop_us.pop(t.limit, None)
                 self._row("SW_TRIP_CLEARED", t.limit)
-                self._publish("safety.trip", self.trip)     # the remaining latest latch, None when all cleared
+                # MC3-5 / SWD-M3-02: a clear has its own topic (no STOP is sent at a clear); ``safety.trip`` = new
+                # trips only
+                self._publish("safety.trip_cleared", SwTripCleared(t.limit, self.active_trips(), self.trip,
+                                                                   t.t_us))
 
     def _warn(self, cfg: LimitConfig, f: float) -> None:
         for code, trip, en in (("PULL_WARN", cfg.pull_trip_n, cfg.pull_enabled),

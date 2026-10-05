@@ -310,13 +310,16 @@ class MotionController:
         return 0 if accel_mm_s2 is None else max(1, _um(accel_mm_s2))
 
     def move_to(self, target_mm: float, *, speed_mm_s: float | None = None,
-                accel_mm_s2: float | None = None, owner: str = "MANUAL") -> ReleasingFuture:
+                accel_mm_s2: float | None = None, owner: str = "MANUAL",
+                accel_fw_default: bool = False) -> ReleasingFuture:
+        """``accel_fw_default=True`` (sequencer): accel 0 on the wire = ``motion.a_max_um_s2`` (ICD §5.4)."""
         target_mm = float(target_mm)
         g = self.check(MotionKind.MOVE, speed_mm_s=speed_mm_s, accel_mm_s2=accel_mm_s2, target_mm=target_mm,
                        owner=owner)
         if not g.ok:
             return failed_future(GateRefused(g))
-        v, a = self._speed_um(speed_mm_s, MotionKind.MOVE), self._accel_um(accel_mm_s2)
+        v = self._speed_um(speed_mm_s, MotionKind.MOVE)
+        a = 0 if accel_fw_default and accel_mm_s2 is None else self._accel_um(accel_mm_s2)
         ticket = ReleasingFuture()
         superseded: _Pending | None = None
         with self._lock:
@@ -388,7 +391,8 @@ class MotionController:
                 self._be.events.log(f"{exc.cmd} refused: paused — press Resume (expected, D-33 k)", logging.INFO)
             return
         if isinstance(exc, CommandDropped):
-            self._be.events.publish("motion.dropped", {"cmd": "MOVE_ABS" if act.kind == "MOVE" else "HOME"})
+            self._be.events.publish("motion.dropped", {"cmd": {"MOVE": "MOVE_ABS", "MUL": "MOVE_UNTIL_LOAD"}.get(
+                act.kind, "HOME")})
             self._finish_active(act, MoveOutcome("CANCELLED", text=str(exc)))
             return
         if isinstance(exc, CommandTimeout) and self._dev.channel is not None:
@@ -418,11 +422,50 @@ class MotionController:
                                                                        "by GET_STATUS"), drop_pending=False)
                 self._send_pending_after(act)
                 return
+        elif act.kind == "MUL":
+            executed = ms in ("MOVE_UNTIL_LOAD", "STOPPING") and st.target_um == act.target_um
         else:
             executed = ms in ("HOMING", "STOPPING") or st.home_phase not in (int(pg.HomePhase.NONE),
                                                                               int(pg.HomePhase.DONE))
         if not executed:
             self._finish_active(act, MoveOutcome("NOT_EXECUTED", text="not executed (no automatic re-send)"))
+
+    def move_until_load(self, bound_mm: float, *, speed_mm_s: float, raw_stop: int, cmp: int,
+                        accel_mm_s2: float | None = None, owner: str = "SEQUENCE") -> ReleasingFuture:
+        """FW-MOT-006 approach of a load-target step (SW-SEQ-006): MOVE_UNTIL_LOAD toward the absolute ``bound_mm``
+        (direction = sign(bound − x)); refused locally (``GateRefused``) by the LOAD_APPROACH gate, the cap
+        ``v_max_load`` and ``BOUND_NOT_AHEAD`` (a bound not strictly ahead of the axis, F-B-28). The ticket resolves
+        with MOVE_DONE (LOAD_THRESHOLD / BOUND / STOPPED); never auto-retried."""
+        bound_mm = float(bound_mm)
+        g = self.check(MotionKind.LOAD_APPROACH, speed_mm_s=speed_mm_s, accel_mm_s2=accel_mm_s2, owner=owner)
+        items = list(g.items)
+        x = self.position_mm()
+        bound_um = _um(bound_mm)
+        if x is None or bound_um == _um(x):
+            items.append(GateItem(GateCode.BOUND_NOT_AHEAD, R, "approach bound not ahead of the axis"))
+        else:
+            d = 1 if bound_um > _um(x) else -1
+            items += self._limit_toward(d) + self._trip_items(d)
+        g = GateResult(tuple(items))
+        if not g.ok:
+            return failed_future(GateRefused(g))
+        ch = self._dev.channel
+        if ch is None:
+            return failed_future(GateRefused(GateResult((GateItem(GateCode.LINK_DOWN, R, "not connected"),))))
+        ticket = ReleasingFuture()
+        with self._lock:
+            if self._active is not None or self._jog is not None or self.fw_moving():
+                return failed_future(GateRefused(GateResult((GateItem(GateCode.MOTION_ACTIVE, R, "axis moving"),))))
+            act = _Active("MUL", ticket, bound_um, ch.motion_epoch, self._be.clock.monotonic_ns())
+            self._active = act
+        v = max(1, _um(speed_mm_s))
+        a = 0 if accel_mm_s2 is None else max(1, _um(accel_mm_s2))
+        fut = self._dev.request(Cmd.MOVE_UNTIL_LOAD, P.build_request(
+            Cmd.MOVE_UNTIL_LOAD, bound_um=bound_um, v_um_s=v, a_um_s2=a, raw_stop=int(raw_stop), cmp=int(cmp)),
+            epoch=act.epoch)
+        self._be.events.publish("motion.target", {"bound_mm": bound_mm})
+        fut.add_done_callback(lambda f: self._on_motion_response(act, f))
+        return ticket
 
     def _send_pending_after(self, act: _Active) -> None:
         with self._lock:
@@ -540,8 +583,8 @@ class MotionController:
         fut.add_done_callback(lambda f: self.resync())
         return g
 
-    def home(self, *, load_confirmed: bool = False) -> ReleasingFuture:
-        g = self._static_gate(MotionKind.HOME)
+    def home(self, *, load_confirmed: bool = False, owner: str = "MANUAL") -> ReleasingFuture:
+        g = self._static_gate(MotionKind.HOME, owner)
         if not g.ok:
             return failed_future(GateRefused(g))
         if g.confirm_items and not load_confirmed:
@@ -598,7 +641,7 @@ class MotionController:
         """End point of the running motion command of this backend (MOVE_ABS target, JOG bound) for the safety
         supervisor's travel rule (§6.1 rule 3); None when unknown or unbounded."""
         act, jog = self._active, self._jog
-        if act is not None and act.kind == "MOVE":
+        if act is not None and act.kind in ("MOVE", "MUL"):
             return act.target_um
         if jog is not None and jog.bound_um != int(pg.JOG_NO_BOUND):
             return jog.bound_um

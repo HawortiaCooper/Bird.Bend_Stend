@@ -281,7 +281,8 @@ class SimControl:
                         "limit_end": w.limit_end(xt), "pause": w.pause_btn,
                         "alm": w.alm, "pend": w.pend, "load_n": b._force_n(),  # noqa: SLF001
                         "raw_last": b.last_raw, "steps": b.steps,
-                        "specimen_n": w.specimen.force_n(xt), "weight_n": w.cell_load_n,
+                        "specimen_n": w.specimen.force_n(xt), "specimen_broken": w.specimen.broken,
+                        "weight_n": w.cell_load_n,
                         "creep_counts": b.afe.creep_counts, "drift_counts": b.afe.offset_at(b.now_us())
                         - b.afe.offset_counts}
             if what == "pulses":

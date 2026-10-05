@@ -53,6 +53,7 @@ class DataView:
     def __init__(self, pipeline: Pipeline, now_ns: Callable[[], int]) -> None:
         self.pipeline = pipeline
         self.now_ns = now_ns
+        self.trace_provider: Callable[[int], tuple[np.ndarray, np.ndarray]] | None = None   # sequencer (M4)
 
     def snapshot(self, keys: Sequence[str], window_s: float, px_width: int) -> PlotSnapshot:
         px = max(1, int(px_width))
@@ -141,6 +142,11 @@ class DataView:
         return LatestSample(key, v, "OK", lt.t_dev_s)
 
     def sequence_trace(self, max_points: int = 20000) -> XYSnapshot:
-        """Running-sequence (x, F) trace — empty until the sequencer exists (M4)."""
-        z = np.zeros(0, np.float32)
-        return XYSnapshot(z, z.copy(), np.zeros(0, np.uint8), float("nan"))
+        """Measured (x, F) of the running / last sequence in the sequence coordinate (SW-SCH-002, B6-11)."""
+        tp = self.trace_provider
+        if tp is None:
+            z = np.zeros(0, np.float32)
+            return XYSnapshot(z, z.copy(), np.zeros(0, np.uint8), float("nan"))
+        x, f = tp(max_points)
+        vs = np.where(np.isfinite(f), 0, 3).astype(np.uint8)
+        return XYSnapshot(x, f, vs, self.pipeline.latest_copy().t_dev_s)

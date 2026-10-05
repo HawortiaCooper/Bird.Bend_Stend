@@ -17,7 +17,7 @@ The dialog never decides anything: the caller repeats the backend call with ``co
 
 Implements: SAF-SW-004 (Enter/Space never confirm, STOP reachable; C-01 HOME under load, C-02 DISABLE, C-03 E-stop
 clear, C-10 no-specimen mode), SW-CFG-004 (C-04), SW-CFG-003 (C-11), SW-CAL-003 (C-05), SW-CAL-007 (C-06),
-SW-CAL-001 (C-08, C-12), SW-STOP-003 (C-13)
+SW-CAL-001 (C-08, C-12), SW-STOP-003 (C-13), SW-SEQ-005 / SAF-SW-006 (C-07), SW-SEQF-001 (C-08 discard)
 """
 from __future__ import annotations
 
@@ -64,7 +64,8 @@ TEXTS: dict[str, tuple[str, str, str, str | None]] = {
              "Measured value checked"),
     "C-06": ("Accept WARN linearity", "The fit is WARN (non-linearity between 0.1 % and 0.5 % of the span).",
              "Accept", "I accept the WARN linearity"),
-    "C-08": ("Cancel calibration", "Cancel the running calibration? The active calibration stays unchanged.",
+    "C-07": ("Start the sequence", "The sequence start needs a confirmation.", "Start sequence", None),
+    "C-08": ("Cancel calibration","Cancel the running calibration? The active calibration stays unchanged.",
              "Cancel calibration", None),
     "C-09": ("Close the application",
              "Closing sends STOP, ends the recording and leaves the driver enabled (holding).", "Close", None),

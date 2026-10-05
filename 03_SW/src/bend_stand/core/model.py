@@ -351,6 +351,13 @@ class GateCode(StrEnum):
     AFE_PLACEHOLDER = "AFE_PLACEHOLDER"
     CAPTURE_RUNNING = "CAPTURE_RUNNING"
     NO_SPECIMEN_MOUNTED = "NO_SPECIMEN_MOUNTED"
+    # M4
+    RECORDING_FAILED = "RECORDING_FAILED"
+    DISK_SPACE = "DISK_SPACE"
+    SEQ_INVALID = "SEQ_INVALID"
+    NO_SPECIMEN_TRAVEL_ONLY = "NO_SPECIMEN_TRAVEL_ONLY"
+    LOW_SPAN = "LOW_SPAN"
+    EXTRAPOLATED = "EXTRAPOLATED"
 
 
 @dataclass(frozen=True)
@@ -579,6 +586,16 @@ class SafetyWarning:
 
 
 @dataclass(frozen=True)
+class SwTripCleared:
+    """A SW-limit latch cleared (topic ``safety.trip_cleared``, MC3-5 / SWD-M3-02): no STOP is sent at a clear."""
+
+    limit: str
+    remaining: tuple[SwTrip, ...] = ()
+    latest: SwTrip | None = None
+    t_us: int | None = None
+
+
+@dataclass(frozen=True)
 class SafetyStatus:
     sw_trip: str | None = None
     warnings: tuple[str, ...] = ()
@@ -632,15 +649,143 @@ class TareStatus:
 
 
 @dataclass(frozen=True)
+class StepResult:
+    """Result of one executed step / loop iteration (SW-REP-002, topic ``seq.step_result``, §15.5f B6-08). Device
+    times in seconds of the unwrapped device clock (``t_us_u / 1e6``); NaN where not computable."""
+
+    exec_idx: int
+    step_idx: int
+    uid: str
+    label: str
+    kind: str
+    loop_iters: tuple[int, ...] = ()
+    target: float | None = None
+    unit: str = ""
+    tol_n: float | None = None
+    flags: tuple[str, ...] = ()
+    n: int = 0
+    n_expected: float = float("nan")
+    f_mean_n: float = float("nan")
+    f_std_n: float = float("nan")
+    f_min_n: float = float("nan")
+    f_max_n: float = float("nan")
+    f_se_n: float = float("nan")
+    f_drift_n: float = float("nan")
+    x_mean_mm: float = float("nan")
+    x_std_mm: float = float("nan")
+    x_drift_mm: float = float("nan")
+    raw_mean: float = float("nan")
+    raw_std: float = float("nan")
+    raw_min: float = float("nan")
+    raw_max: float = float("nan")
+    raw_se: float = float("nan")
+    raw_drift: float = float("nan")
+    stats: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
+    t_reached_s: float | None = None
+    window_s: tuple[float, float] | None = None
+    k_est_n_mm: float | None = None
+    f_end_n: float = float("nan")
+    x_end_mm: float = float("nan")
+    ramp: Mapping[str, float] | None = None
+    trim_iterations: int = 0
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class SeqWindow:
+    """One capture window (topic ``seq.window``, SW-SEQ-004): planned and actual device times (s)."""
+
+    exec_idx: int
+    uid: str
+    loop_iters: tuple[int, ...]
+    planned_s: tuple[float, float]
+    t_on_s: float | None = None
+    t_off_s: float | None = None
+    discarded: bool = False
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class SeqStatus:
-    state: str = "IDLE"                      # IDLE | RUNNING | PAUSED | ENDED
+    """Sequence executor snapshot (§10.3, §15.5f B6-07). ``state``: IDLE | PREPARING | RUNNING | PAUSED |
+    WAITING_OPERATOR | STOPPING | FINISHED | STOPPED | ABORTED | ERROR."""
+
+    state: str = "IDLE"
     step_idx: int | None = None
-    loop_iter: int | None = None
+    loop_iter: int | None = None             # innermost loop iteration (1-based) or None
     phase: str | None = None
     plan_total_s: float | None = None
     remaining_s: float | None = None
     paused_source: str | None = None
     end_reason: str | None = None
+    exec_idx: int | None = None
+    step_uid: str | None = None
+    step_kind: str | None = None
+    label: str = ""
+    loop_iters: tuple[int, ...] = ()
+    plan_len: int | None = None
+    target: float | None = None
+    unit: str = ""
+    trim_iter: int = 0
+    plan_t_s: float | None = None
+    behind_s: float | None = None
+    elapsed_s: float = 0.0
+    windows_done: int = 0
+    windows_total: int | None = None
+    k_est_n_mm: float | None = None
+    message: str = ""
+    sequence_name: str = ""
+    travel_ref: str = "test"
+    x_zero_mm: float = 0.0
+    marker_x_mm: float = float("nan")
+    marker_f_n: float = float("nan")
+    marker_t_s: float = float("nan")
+    recording_folder: str | None = None
+    report_folder: str | None = None
+    last_result: StepResult | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.state in ("PREPARING", "RUNNING", "PAUSED", "WAITING_OPERATOR", "STOPPING")
+
+
+@dataclass(frozen=True)
+class ReportPaths:
+    """Files of a built report (``reports.build_async``, topic ``report.ready``, SW-REP-001)."""
+
+    folder: str
+    json: str
+    html: str
+    csv: str = ""                            # the recording's data.csv (GRQ-B-29)
+
+
+@dataclass(frozen=True)
+class RecordingInfo:
+    """One recording of ``reports.list_recordings`` (GRQ-B-11)."""
+
+    folder: str
+    started_utc: str | None
+    marks: str
+    sequence_name: str | None
+    status: Literal["COMPLETE", "PARTIAL", "FAILED"]
+    duration_s: float | None
+    has_report: bool
+
+
+@dataclass(frozen=True)
+class ReportResult:
+    """Parsed ``report.json`` (``reports.load_result``, GRQ-B-11)."""
+
+    folder: str
+    created_utc: str
+    marks: Mapping[str, Any]
+    warnings: tuple[str, ...]
+    results: tuple[StepResult, ...]
+    runs: tuple[Mapping[str, Any], ...] = ()
+    calibration: Mapping[str, Any] | None = None
+    tare_raw: float | None = None
+    bend3p: Mapping[str, Any] | None = None
+    summary: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -894,6 +1039,13 @@ class SessionSettings:
     cal_v_mm_s: float = 2.0                  # travel-calibration move speed
     bend3p: Bend3pGeometry | None = None     # optional 3-point-bend outputs (off by default)
     compliance_mm_per_n: float = 0.0         # machine compliance C_m (specimen deflection = x − C_m·F)
+    k_min_n_mm: float = 0.5                  # k_est clamp of the load-step approach (SW-SEQ-006, M4)
+    k_max_n_mm: float = 100_000.0
+    trim_kp: float = 0.5                     # trim parameters (SRS §5.2: Kp 0.5, 0.2 mm, 0.2 mm/s, 10 iterations)
+    trim_max_step_mm: float = 0.2
+    trim_v_mm_s: float = 0.2
+    trim_max_iter: int = 10
+    seq_travel_ref: Literal["test", "machine"] = "test"   # travel reference of a new sequence (D-29 k)
 
 
 @dataclass(frozen=True)

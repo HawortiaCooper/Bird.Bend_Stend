@@ -10,6 +10,8 @@ M2: link / stream / config / pause / resume / clear / record gates (M1) plus the
 invalid (D-37 b): the snapshot carries them already masked (``core.device.valid_status_mask``), so DRV_UNPOWERED /
 DRIVER_ALARM are never derived from them. Direction-dependent items (LIMIT toward a switch, SW travel limits, SW
 trip latch, speed caps, SAF-SW-006 margin) are added by ``MotionController.check()``.
+M4: ``sequence_start`` (device-state part of SW-SEQ-005 / D-33 b) and ``sequence_edit``; ``valid_toggle`` refused
+while a sequence runs; ``tare`` refused during a sequence capture window.
 M3: SAF-SW-001 load-input rule (REFUSE ``LOAD_INPUT_INVALID`` while a SW load limit is enabled outside the
 no-specimen mode), thresholds verified **for the current target**, SW trip latch (WARN, direction in ``check``),
 motion owner (wizards), gates ``tare``, ``sample``, ``cal_travel_start``, ``cal_load_start``, ``no_specimen``. The
@@ -110,6 +112,10 @@ class GateSnapshot:
     afe_synthetic: bool = False
     travel_cal_differs: bool = False
     travel_room_mm: float | None = None    # room in + direction from the position to the travel max (wizard)
+    # M4
+    sequence_state: str = "IDLE"           # SeqStatus.state of the executor
+    seq_capture: bool = False              # a sequence capture window (VALID) is open
+    recording_failed: bool = False
 
 
 def _link_items(s: GateSnapshot) -> list[GateItem]:
@@ -229,7 +235,10 @@ def g_record_stop(s: GateSnapshot) -> GateResult:
 
 
 def g_valid_toggle(s: GateSnapshot) -> GateResult:
-    return GateResult(tuple(_link_items(s) + _ro(s)))
+    items = _link_items(s) + _ro(s)
+    if s.sequence_state in SEQ_ACTIVE:
+        items.append(GateItem(GateCode.SEQUENCE_RUNNING, R, "a sequence sets VALID itself (capture windows)"))
+    return GateResult(tuple(items))
 
 
 # ============================================================================================ motion (M2)
@@ -391,6 +400,8 @@ def g_tare(s: GateSnapshot) -> GateResult:
         items.append(GateItem(GateCode.OPERATION_RUNNING, R, "tare already running"))
     if "load_cal" in s.capture_kinds:
         items.append(GateItem(GateCode.OPERATION_RUNNING, R, "load calibration capture running"))
+    if s.seq_capture:
+        items.append(GateItem(GateCode.CAPTURE_RUNNING, R, "sequence capture window open (SW-TARE-003)"))
     return GateResult(tuple(items))
 
 
@@ -455,9 +466,73 @@ def g_not_implemented(s: GateSnapshot, what: str, milestone: str) -> GateResult:
         GateItem(GateCode.NOT_IMPLEMENTED, R, f"{what}: available from {milestone}")]))
 
 
-_NOT_YET: Mapping[GateId, tuple[str, str]] = MappingProxyType({
-    GateId.SEQUENCE_START: ("sequencer", "M4"), GateId.SEQUENCE_EDIT: ("sequencer", "M4"),
-})
+SEQ_ACTIVE = frozenset({"PREPARING", "RUNNING", "PAUSED", "WAITING_OPERATOR", "STOPPING"})
+
+
+def g_sequence_start(s: GateSnapshot) -> GateResult:
+    """SW-SEQ-005 / D-33 b - the device-state part (one REFUSE item with its own text per condition, SWD-P1-08); the
+    sequence-dependent items are added by ``sequencer.check_start(seq)`` (§15.5f B6-06, B6-12)."""
+    items = _link_items(s) + _ro(s)
+    if items:
+        return GateResult(tuple(items))
+    items += _feature_items(s, "MOTION")
+    if s.sequence_state in SEQ_ACTIVE:
+        items.append(GateItem(GateCode.SEQUENCE_RUNNING, R, "a sequence is running"))
+    if not s.stream_on or not s.data_fresh:
+        items.append(GateItem(GateCode.STREAM_STALE, R, "data stream off or no DATA for 500 ms"))
+    items += _latched(s)
+    if s.status & DS.PAUSED:
+        items.append(GateItem("PAUSED", R, "PAUSED — Resume or Clear stop first", CLEAR_HINTS["PAUSED"]))
+    if not s.flags & DF.ENABLED:
+        items.append(GateItem("NOT_ENABLED", R, "driver not enabled", CLEAR_HINTS["NOT_ENABLED"]))
+    if not s.flags & DF.HOMED:
+        items.append(GateItem("NOT_HOMED", R, "axis not homed", CLEAR_HINTS["NOT_HOMED"]))
+    if _drv_power_off(s):
+        items.append(GateItem("DRV_PWR_OFF", R, "driver power off (DRV_PWR)", CLEAR_HINTS["DRV_UNPOWERED"]))
+    if s.valid_status & DS.ALM and s.status & DS.ALM:
+        items.append(GateItem("ALM", R, "driver alarm (ALM) active", CLEAR_HINTS["DRIVER_ALARM"]))
+    if s.status & DS.POS_UNCERTAIN:
+        items.append(GateItem("POS_UNCERTAIN", R, "position uncertain after an immediate stop — re-home first",
+                              "Home the axis"))
+    if s.status & DS.AFE_RATE_MISMATCH:
+        items.append(GateItem("AFE_RATE_MISMATCH", R, "HX711 rate differs from the configured rate"))
+    if s.status & DS.AFE_STALE:
+        items.append(GateItem("AFE_STALE", R, "HX711 stale", CLEAR_HINTS["AFE_STALE"]))
+    if s.status & (DS.LIMIT_START | DS.LIMIT_END):
+        items.append(GateItem("LIMIT", R, "limit switch active or latched", CLEAR_HINTS["LIMIT"]))
+    if s.sw_trip is not None:
+        items.append(GateItem(GateCode.SW_TRIP, R, f"SW limit {s.sw_trip} tripped", CLEAR_HINTS["SW_TRIP"]))
+    if s.thresholds_state not in ("VERIFIED", "DEFAULT_ONLY") or not s.thresholds_match:
+        items.append(GateItem(GateCode.THRESHOLDS_UNVERIFIED, R, "FW load thresholds not verified for the active "
+                                                                 "calibration + tare — Recheck thresholds"))
+    if s.load_limits_on and not s.load_input_valid:
+        items.append(GateItem(GateCode.LOAD_INPUT_INVALID, R, f"PC load limits enabled without a valid input: "
+                              f"{s.load_input_reason}", "Calibrate + Tare, or enter the no-specimen mode"))
+    if s.owner not in ("MANUAL", "SEQUENCE") or s.operation is not None:
+        what = (s.operation or s.owner).lower().replace("_", " ")
+        items.append(GateItem(GateCode.OPERATION_RUNNING, R, f"{what} running"))
+    if s.moving or s.jogging:
+        items.append(GateItem(GateCode.MOTION_ACTIVE, R, "axis moving"))
+    if s.hotkey_test:
+        items.append(GateItem(GateCode.HOTKEY_TEST, R, "Pause/Break key test running"))
+    if s.recording_failed:
+        items.append(GateItem(GateCode.RECORDING_FAILED, R, "the recording failed — stop it first"))
+    if not any(i.severity == R for i in items):
+        if not s.hotkey_available:
+            items.append(GateItem(GateCode.HOTKEY_UNAVAILABLE, C, "Pause/Break key unavailable — stop the sequence "
+                                                                  "with the GUI STOP / the red E-stop only"))
+        if s.travel_cal_differs:
+            items.append(GateItem(GateCode.TRAVEL_CAL_DIFFERS, C, "board steps/mm differs from the active travel "
+                                                                  "calibration"))
+    if s.no_specimen:
+        items.append(GateItem(GateCode.NO_SPECIMEN_MODE, W, "no-specimen mode: PC load limits off"))
+    return GateResult(tuple(items))
+
+
+def g_sequence_edit(s: GateSnapshot) -> GateResult:
+    if s.sequence_state in SEQ_ACTIVE:
+        return GateResult((GateItem(GateCode.SEQUENCE_RUNNING, R, "the sequence is running or paused"),))
+    return GateResult()
 
 
 def all_gates(s: GateSnapshot) -> Mapping[GateId, GateResult]:
@@ -472,7 +547,6 @@ def all_gates(s: GateSnapshot) -> Mapping[GateId, GateResult]:
         GateId.TEST_ZERO: g_test_zero(s), GateId.HOTKEY_TEST: g_hotkey_test(s),
         GateId.TARE: g_tare(s), GateId.SAMPLE: g_sample(s), GateId.CAL_TRAVEL_START: g_cal_travel_start(s),
         GateId.CAL_LOAD_START: g_cal_load_start(s), GateId.NO_SPECIMEN: g_no_specimen(s),
+        GateId.SEQUENCE_START: g_sequence_start(s), GateId.SEQUENCE_EDIT: g_sequence_edit(s),
     }
-    for gid, (what, ms) in _NOT_YET.items():
-        out[gid] = g_not_implemented(s, what, ms)
     return MappingProxyType(out)

@@ -52,6 +52,8 @@ def _isolated_gui_state(tmp_path, monkeypatch):
     prev = stop_mod.stop_handler()
     yield
     safe_dialog.FILE_DIALOG_HOOK[0] = None
+    from bend_stand.gui.tabs import report_tab
+    report_tab.OPEN_URL_HOOK[0] = None
     stop_mod.set_stop_handler(prev)
     try:
         no_specimen().set(False)

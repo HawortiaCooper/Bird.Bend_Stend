@@ -2,12 +2,12 @@
 
 | Doc | ICD_protocol |
 |---|---|
-| Version | **0.7.3 — D-45 e pulse-timing defaults (dict_version 6); twin fidelity (HIL dry run)** (change history §15) |
+| Version | **0.7.4 — D-47: link watchdog clears VALID in every motion state; M4 twin vocabulary (specimen)** (change history §15) |
 | Date | 2026-10-03 |
 | Owner | Implementer C — Integrator (changes only with a version bump + change-history entry, IF-001) |
 | Implements | SRS v0.6: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34, D-36, D-37, D-40…D-43; FW_test_plan v0.3 §6.4 / §8.4 (REQ-C-M2-01…11); SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
 | Protocol | **PROTO_VERSION 1.0**, **PAYLOAD_VERSION 1**, dictionary `params.yaml` dict_version 6 (hash in Appendix A) |
-| Machine-readable companions | `00_System/specs/protocol.yaml` (names and codes, §0.3, Appendix B), `00_System/specs/params.yaml` (parameters, Appendix A), `00_System/tools/ref_codec.py` (codec oracle), `ref_cmdcheck.py` (acceptance oracle), `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json`, `vectors/motion_vectors.json`, `vectors/loadlim_vectors.json` (§12) |
+| Machine-readable companions | `00_System/specs/protocol.yaml` (names and codes, §0.3, Appendix B), `00_System/specs/params.yaml` (parameters, Appendix A), `00_System/tools/ref_codec.py` (codec oracle), `ref_cmdcheck.py` (acceptance oracle), `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json`, `vectors/motion_vectors.json`, `vectors/loadlim_vectors.json`, `vectors/linkwdg_vectors.json` (§12) |
 | Origin | framing, CRC, parser, PARAM_ENTRY, NVM and versioning rules follow Thrust_Stand_HAW `00_System/specs/ICD_protocol.md` @9473c68 (trimmed per R3 §1.6) |
 
 ---
@@ -384,7 +384,8 @@ every DATA frame whose `t_us` is **not earlier** than this value (32-bit modular
 **Automatic clear** (SAF-FW-001): every operational stop of §6.2 (incl. STOP while idle, HALT, PAUSE, button
 stops, limit, load limit, AFE fault, link watchdog, step fault, homing failure, E-stop, driver power loss) —
 **except the jog dead-man** — clears VALID; if it was 1, EVENT VALID_CLEARED (arg = stop cause §8.2) is sent
-and the next DATA frame carries VALID = 0.
+and the next DATA frame carries VALID = 0. **v0.7.4 (D-47 a):** the link-watchdog timeout clears VALID in **every**
+motion state (also idle / not enabled, §9.1), with the same EVENT VALID_CLEARED (arg LINK_WDG 13).
 
 ### 5.4 Motion (FW-MOT-004…009, SAF-FW-020, SAF-FW-021, FW-HOM-001…002)
 Common rules:
@@ -613,6 +614,7 @@ NOT_ENABLED.
 | FW load limit / rail sample | immediate (≤ 200 µs after DRDY) | kept | fault LOAD_LIMIT → FAULT_CLEAR (always; regrow window until a sample is inside the thresholds or a re-trip, §5.5, D-40d) | kept | cleared | FAULT_SET, STOPPED |
 | AFE stale while moving | immediate | kept | fault AFE_FAULT → fresh samples + FAULT_CLEAR | kept | cleared | AFE_STALE, FAULT_SET, STOPPED |
 | link watchdog (moving) | controlled | kept | LINK_WDG status → next valid frame | kept | cleared | LINK_WDG, STOPPED, LINK_RESTORED |
+| link watchdog (not moving, v0.7.4, D-47 a; not a stop) | none | kept | none (no LINK_WDG status) | kept | **cleared** | VALID_CLEARED (LINK_WDG) only if VALID was 1 |
 | jog dead-man | controlled | kept | none | kept | **unchanged** | STOPPED (JOG_DEADMAN) |
 | step overrun / count fault | immediate | kept | fault STEP_FAULT → FAULT_CLEAR | **cleared** | cleared | FAULT_SET, STOPPED |
 | homing failure | immediate | kept | fault HOME_NOT_FOUND / HOME_WIRING → FAULT_CLEAR (ABORTED: no latch) | cleared | cleared | HOME_FAILED, STOPPED |
@@ -1039,10 +1041,14 @@ Argument enums of the other EVENTs (`source`, `pause_cleared_reason`, `home_fail
 ## 9. Link supervision and timing (IF-005, IF-011, SAF-FW-015, SAF-SW-003)
 
 ### 9.1 FW side (normative)
-- **Link watchdog** (SAF-FW-015, D-15): while moving (motion states 3–7), no valid command frame (§3.1) for
-  `safety.link_timeout_ms` (default 1000 ms) → controlled stop (driver kept enabled), LINK_WDG set, VALID
-  cleared, EVENTs LINK_WDG + STOPPED; LINK_WDG clears at the next valid command frame (EVENT LINK_RESTORED);
-  no motion restarts. Checked at ≥ 1 kHz (deceleration starts ≤ timeout + 2 ms).
+- **Link watchdog** (SAF-FW-015, D-15, D-47 a): no valid command frame (§3.1) for `safety.link_timeout_ms`
+  (default 1000 ms) → in **every** motion state VALID is cleared (EVENT VALID_CLEARED, arg LINK_WDG 13, if it was
+  1; v0.7.4, D-47 a: a PC unheard during a capture window must not leave VALID = 1); **while moving** (motion
+  states 3–7) additionally a controlled stop (driver kept enabled), LINK_WDG set, EVENTs LINK_WDG + STOPPED
+  (cause LINK_WDG); LINK_WDG clears at the next valid command frame (EVENT LINK_RESTORED); no motion restarts.
+  Not moving: no stop, no LINK_WDG status bit, no LINK_WDG / STOPPED / LINK_RESTORED EVENT. The trip happens once
+  per silence period. Checked at ≥ 1 kHz (reaction starts ≤ timeout + 2 ms; a silence of timeout − 1 ms never
+  trips). Reference model and vectors: `ref_linkwdg.py`, `vectors/linkwdg_vectors.json` (§12).
 - **Response time**: ≤ 10 ms from the last command byte to the first response byte; SAVE/LOAD/DEFAULT_PARAMS
   ≤ 2.5 s (NFR-008); commands received during a SAVE flash operation: after it (§2.4 SAVE exemption, D-37a). STOP/HALT: no further PUL edge ≤ 2 ms after the last command byte (SAF-FW-002).
 - **Input capacity**: bursts of up to 4 commands back-to-back (RX DMA ring ≥ 1 KB, overflow counted).
@@ -1214,6 +1220,10 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
   - `vectors/loadlim_vectors.json` (v0.6, D-40d; definitions in `ref_loadlim.py`): FW load-limit sample sequences
     (trip, trip samples, rails, regrow window open / unload / end inside / new reference / config / at the rail)
     with `trip` and `regrow_window` after every step.
+  - `vectors/linkwdg_vectors.json` (v0.7.4, D-47 a; definitions in `ref_linkwdg.py`): link watchdog per motion
+    state (NOT_ENABLED, IDLE, MOVE_ABS, MOVE_UNTIL_LOAD) × VALID before × timeout (default, minimum) × silence
+    (timeout − 1 ms: no trip; timeout + 2 ms: trip): stop, VALID after, LINK_WDG status, the EVENT set at the trip
+    and at the next valid command frame. Replayed against the twin by `03_SW/tests/integration/test_twin_m4_linkwdg.py`.
   - `check_vectors.json` `hw_meas_vectors` (v0.6): DIAG_MEAS acceptance in a HW_MEAS build (op / field ranges,
     MEAS_STATE); the main `vectors` hold the release / twin verdict (NOT_IN_BUILD) and the LIMIT_WIRING clear rule
     (D-40a).
@@ -1296,6 +1306,8 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 | OI-B-M2-04 | **Answered (v0.7, tools/README):** coordinate convention of the twin world and the simulator: x [µm] = world position integrated per completed pulse (pulse end) from the DIR pin; START active iff x ≤ `start_switch_um`, END active iff x ≥ `end_switch_um`, evaluated after every completed step; the HAL fixed reaction stops CLEAN at that step: the last executed step is the first one at which the switch is active (step-exact, no extra step). Machine x after HOME = x_world − x_edge − `home.offset_um`, x_edge = world x of that first active step on the slow approach. | B: same convention in the simulator |
 | OI-FW-35 | **Closed (v0.7):** the twin no longer calls `step_isr()` after a HAL fixed-reaction halt at a counted step (twin_seams.c). | — |
 | MC2-2 / OI-F-M2-03 | **Closed (v0.7):** §9.3 rationale reworded (Pause/Break-key HALT). | — |
+| SD-18 | **D-47 a SRS delta** (v0.7.4): SAF-FW-015 to read "no valid frame for `safety.link_timeout_ms` clears VALID in every motion state (EVENT VALID_CLEARED); while moving additionally …" (today: "while moving (any mode) … clear VALID"); §6 budget row unchanged. | Orchestrator (SRS) |
+| OI-C-M4-01 / OI-C-M4-02 | **Closed (v0.7.4, D-47 b / a):** M4 twin `specimen` vocabulary entered with the version bump; link watchdog clears VALID in every motion state (§4, §6.2, §9.1, `linkwdg_vectors.json`). | A: FW (`linkwdg` in every state); B: simulator mirror; E/F: vectors |
 | SD-17 | **CR-03 / D-41…D-43 SRS deltas** (SRS v0.6): E-stop MCU/FW only + hardwired ENA cut, FW tolerates the forced ENA; K1_WELDED / DRV_PWR optional; un-homed travel window from a latched origin; new parameter `drv.k1_check_enable` (0x0706, bool, default 0, reboot required; gates K1_WELDED, needs `drv.pwr_sense_enable`; SRS OI-18) — Table 5.1 row. | Orchestrator |
 | SD-16 | **D-40 SRS deltas:** SAF-FW-014 (LIMIT_WIRING clear rule, aligned in SRS), FW-MOT-003 (±ceil(N/1000), aligned), SAF-FW-011 regrow window end (§5.5), CR-02 DIAG_MEAS / FEAT_HW_MEAS (SYS-009, NFR-007 HW-gate evidence). | Orchestrator: SRS v0.5.x |
 
@@ -1303,6 +1315,7 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 
 | ICD | Date | PROTO / PAYLOAD / dict | Change |
 |---|---|---|---|
+| 0.7.4 | 2026-10-05 | 1.0 / 1 / 6 | **M4 integration (D-47), no wire change, dictionary unchanged (dict_version 6, hash 0xF8BCDCB8).** (a) OI-C-M4-02: the link-watchdog timeout clears VALID in **every** motion state (EVENT VALID_CLEARED, arg LINK_WDG, if VALID was 1); the controlled stop, LINK_WDG status and the LINK_WDG / STOPPED / LINK_RESTORED EVENTs stay moving-only (§4 SET_VALID automatic clear, §6.2 new row, §9.1); reference `ref_linkwdg.py` + new `vectors/linkwdg_vectors.json` (32 cases: NOT_ENABLED / IDLE / MOVE_ABS / MOVE_UNTIL_LOAD × VALID × timeout 1000 / 200 ms × silence timeout − 1 / + 2 ms); SRS delta SD-18 (SAF-FW-015). (b) OI-C-M4-01: shared vocabulary v2 additions for the M4 twin (tools/README): `specimen` `side` (pull / push / both: compression side), `k3_n_per_mm3` (cubic non-linearity), `break_travel_um` (break at a deflection), `break_residual_pct` (force kept after a break), `slip_at_n` + `slip_mm` (grip slip, names as the simulator's B6-17 extra); `query world` `specimen_broken`; seam-log entries `specimen_break` / `specimen_slip`; break and slip are world states over MCU resets (twin side; simulator: finding SWC-M4-01). Generated files regenerated (`proto_gen.h`, `protocol_gen.py`: ICD version string only); all vector files regenerated (icd_version). |
 | 0.7.3 | 2026-10-05 | 1.0 / 1 / 6 | **D-45 e (OI-E-HG-05), dict_version 6, hash 0xF8BCDCB8, no wire change:** defaults `motion.pulse_high_ns` and `motion.pulse_low_min_ns` 10 000 → **12 500 ns**, `motion.max_step_rate_hz` 50 000 → **40 000 Hz** (margin over the HBS86H 10 µs minimum; H3: 1e9 / 40 000 = 25 000 ≥ 12 500 + 12 500; 30 mm/s at 800 steps/mm = 24 kHz stays reachable, STATUS `v_limit_um_s` at the defaults = 30 000, step-rate cap 50 mm/s). Vectors regenerated; H3 check vectors re-based on the new defaults (`rule_h3_rate` 40 001 Hz, new `rule_h3_width_edge` 12 501 ns, new `rule_h3_old_rate_ok` 50 kHz with 10 + 10 µs). Twin DIAG_MEAS model fidelity from Validator E's HIL dry run (tools/README, no FW change): OBS-E-HG-01 RX probe triggers at the start bit of the byte; OBS-E-HG-02 STIM_RUN without the extra idle gap (next delay starts at the end of the hold); OBS-E-HG-03 captures of zero-latency reactions report ≥ 1 tick (the zero-latency reaction itself documented); OBS-E-HG-05 / DEF-HG-01 PWM input as on the target: first capture after arming discarded, min / max / count from the second rising edge. OI-FW-43 closed (§14). |
 | 0.7.2 | 2026-10-05 | 1.0 / 1 / 5 | **M3 (D-44), no wire change.** §6.2: POS_UNCERTAIN at an E-stop edge = step output running at the edge (MC2-6 finding SWC-M3-01; A's FW unchanged, simulator to align). Vocabulary v2 additions for the M3 calibration flows (tools/README, side T, simulator optional): `weight` (`kg` \| `n`, `g_mps2`: known masses on the cell), `afe` `drift_counts_per_s` / `creep_pct` + `creep_tau_s` / `nonlin_pct_fs` + `fs_n` (R2 §3 cell figures), `specimen` `relax_pct` + `relax_tau_s` now modelled; `query world` adds `specimen_n`, `weight_n`, `relax_n`, `creep_counts`, `drift_counts`, `raw_ideal`. §5.4 MOVE_UNTIL_LOAD execution rules (a)–(e) and a §6.2 row for the threshold stop (OI-FW-43, A's FW_design v0.7 §5.4.4 / §9.10). Vectors: 21 MOVE_UNTIL_LOAD check vectors (incl. a bound within one step) (argument edges, every refusal reason, already-beyond) ; motion vectors: case `mul_to_bound_5mm` and the new list `immediate_stops` (3 MOVE_UNTIL_LOAD threshold stops = prefixes of a base case, no ramp-down) and `threshold_in_controlled_stop` (1 entry: a threshold sample cuts the controlled stop of the new case `mul_stop_in_cruise`, reason STOPPED, OI-FW-43 b); a separate list so the replays of `cases` are unaffected). tools/README coordinate convention clarified: world travel per pulse = 1000 / the world's steps_per_mm (mechanics), independent of the board parameter (SWC-M3-03). Twin / integration (OBS-M2-09): per-run private twin binary (`build.ensure_built_private`, `Twin(private=True)` copies a shared exe), atomic exe install; backend ⇄ twin and SIM ⇄ twin runs in one lock-step virtual time; SIM-vs-twin comparison rule (tools/README). |
 | 0.7.1 | 2026-10-04 | 1.0 / 1 / 5 | **Appendix C only (OI-FW-41, no wire change):** DIAG_MEAS NOINIT w4 prev_valid, w5 previous last PUL, w6 previous heartbeat, w7 previous hang start, w8 boot counter (sel 1 clears all); op 9 DWT = per-section statistics with table C.1 (23 sections 0…22; count / min / max / 64-bit sum / 10 log2 bins), INFO w0 = MEAS \| DWT and w6 = empty-pair overhead in DWT builds (the "main-loop section" wording withdrawn); twin DIAG_MEAS model mirrors w4…w8 (REQ-C-M2-12); `fw_twin/build.py` prints absolute paths for a build dir outside the repo. |
