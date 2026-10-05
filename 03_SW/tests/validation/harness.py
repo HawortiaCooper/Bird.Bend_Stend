@@ -657,3 +657,67 @@ def meta(folder: str) -> dict:
 
     with open(os.path.join(folder, "meta.json"), encoding="utf-8") as fh:
         return json.load(fh)
+
+
+# =============================================================================================== M4 verbs
+# Only this block names the M4 API (SW_design §15.5f B6-01…21).
+
+def step(kind: str, target=None, **kw):
+    from bend_stand.core.api import Step, StepKind  # noqa: PLC0415
+    from bend_stand.core.sequencer.model import new_uid  # noqa: PLC0415
+
+    return Step(new_uid(), StepKind(kind), target, **kw)
+
+
+def sequence(steps, loops=(), **kw):
+    from bend_stand.core.api import Loop, Sequence  # noqa: PLC0415
+
+    s = Sequence(**kw)
+    s.steps = list(steps)
+    s.loops = [Loop(*lp) for lp in loops]
+    return s
+
+
+def seq_status(be):
+    return be.sequencer.status()
+
+
+def seq_start(be, seq, confirmed: bool = True):
+    return be.sequencer.start(seq, confirmed=confirmed)
+
+
+def seq_wait_end(be, timeout_ms: float = 600_000.0, chunk_ms: float = 50.0):
+    """Advance until the sequence is no longer active; then 2.5 s more (1 s tail + recording stop + report)."""
+    t = 0.0
+    while t < timeout_ms:
+        st = seq_status(be)
+        if st.state not in ("IDLE",) and not st.active:
+            break
+        advance(be, chunk_ms)
+        t += chunk_ms
+    advance(be, 2500)
+    return seq_status(be)
+
+
+def seq_until(be, pred, timeout_ms: float = 120_000.0, chunk_ms: float = 20.0) -> bool:
+    t = 0.0
+    while t < timeout_ms:
+        if pred(seq_status(be)):
+            return True
+        advance(be, chunk_ms)
+        t += chunk_ms
+    return bool(pred(seq_status(be)))
+
+
+def seq_run_log(folder: str, i: int = -1) -> dict:
+    return meta(folder)["sequence_runs"][i]
+
+
+def ready_for_sequence(be, *, calibrate: bool = True) -> None:
+    """Calibrated + tared (load steps), enabled, homed, no-specimen mode off (PC limits active)."""
+    if calibrate:
+        calibrate_and_tare(be)
+    m2_ready(be)
+    if be.status().safety.no_specimen_mode and calibrate:
+        g = be.limits.set_no_specimen_mode(False)
+        assert g.ok, g

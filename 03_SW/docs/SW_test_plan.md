@@ -2,11 +2,12 @@
 
 | Doc | SW_test_plan |
 |---|---|
-| Version | **0.4 — M3 gate execution (SW application, D-44)** · 0.3.2 — M2 close-out re-test (ICD v0.7 / CR-03, D-43) · 0.3.1 — M2 gate execution (armed §3.14, D-41/D-42) · 0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
+| Version | **0.5 — M4 gate execution (Sequencer, D-46…D-48)** · 0.4 — M3 gate execution (SW application, D-44) · 0.3.2 — M2 close-out re-test (ICD v0.7 / CR-03, D-43) · 0.3.1 — M2 gate execution (armed §3.14, D-41/D-42) · 0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
 | Date | 2026-10-04 |
 | Owner | Validator F — SW (`03_SW/docs/SW_test_plan.md`, `03_SW/docs/SW_test_report*.md`, `03_SW/tests/validation/**`) |
 | Verifies | SRS **v0.5.1**: SW-* (61, incl. new SW-RT-006), SAF-SW-* (6), NFR-001…004, the SW side of IF-001…012, SYS-003, SYS-008, SYS-010 (**86 requirements**; v0.2: 85 of SRS v0.3) |
 | Binding inputs | `DECISIONS.md` D-01…**D-39** (v0.3: D-36 one red button = E-stop, CR-01; D-37 M1-gate interface decisions a–d; D-38 plot panes; D-39 M2 start). Earlier: D-30: PAUSED blocks motion. **D-31: dedicated RESUME command 0x3C**, clears only PAUSED, refused while HALT/ESTOP/fault latched; HALT_CLEAR clears HALT and PAUSED. **D-32 (PO Q26)**: a load step that does not reach its target travels to the soft limit in the step direction and stops there, the step is NOT_REACHED and the sequence stops; the approach bound is that soft limit; the timeout must not abort earlier; BREAK_DETECTED still aborts. PO accepted the GUI defaults GQ-01…20 and KL-01. |
+| M4 gate (v0.5) | commit **5daf3b8**; SW_design **v0.6** (§22c, §15.5f B6-01…21), SW_design_GUI **v0.6**; SRS v0.6.3; ICD v0.7.4 (D-47 a link watchdog clears VALID in every motion state); D-46, D-47, D-48 (guard parameters) |
 | M3 gate (v0.4) | commit **2d36eec** + the Integrator's OI-B-M3-03 fix + D's GUI follow-ups; SW_design **v0.5** (§22b, §15.5e B5-01…24), SW_design_GUI **v0.5**; ICD v0.7.3 / dict **6** (D-45 e: pulse 12 500 / 12 500 ns, 40 kHz); D-44, D-45 |
 | M2 close-out (v0.3.2) | ICD **v0.7** (dict 5, **48** params, PARAM_DICT_HASH **0xB7B0263F**, state_schema 3; `drv.pwr_sense_enable` default **false**, new `drv.k1_check_enable` 0x0706 default false, both reboot-required = boot-latched); D-43 (b un-homed travel window from a latched origin, e K1 check parameter); simulator NVM flash stall (SAVE 500 ms default), world `ena_hardwired_cut` (D-42) |
 | M2 gate (v0.3.1) | commit **099af88** (M2 implementation, ICD v0.6 incl. DIAG_MEAS 0x3D, `loadlim_vectors.json`) + D's GUI alignment B4-01…11 (SW_design_GUI v0.4.1); SW_design **v0.4** (§22a, §15.5d); DECISIONS **D-41** (no power-removal contactor: E-stop MCU/FW only; `drv.pwr_sense_enable` default 0 with CR-03 / ICD v0.7) and **D-42** (hardwired ENA-disable NO contact on the E-stop) |
@@ -369,7 +370,7 @@ Independence rules (binding for `tests/validation/**`):
 | TC-SW-SEQ-007-01 | C | DEV | M4 | std | FI-28 slip (> 5 %), break (drop > 20 %), TRAVEL-step timeout (no MOVE_DONE within 3× planned + 10 s: driver lag model stalled) | priority STOP, step failed, sequence STOPPED, event with values (AC: per guard) |
 | TC-SW-SEQ-007-04 [D-32] | C | DEV | M4 | LOAD step, approach toward the soft limit | (a) `step_time` 0: compute the timeout; let the sim stall the move (DRV lag) so the bound is never reached; (b) specimen break (`f_break`) at 60 % of the target during a long approach | (a) timeout = travel time from the start to the bound at the step speed (trapezoid, VV-SEQ-05) + margin, never shorter; STOP only after it; (b) BREAK_DETECTED aborts at once (STOP, sequence STOPPED) even though the bound is far away |
 | TC-SW-SEQ-007-02 | C | DEV | M4 | std | controls start / pause / resume [D-31] / stop / abort | stop → STOP mode 1, STOPPED; abort → HALT, ABORTED, HALT latched; pause/resume per TC-SW-STOP-004-01 |
-| TC-SW-SEQ-007-03 | C | DEV | M4 | sequence running | FI-16 ALM becomes active during a step | the running move completes; the next step's motion is refused (DRIVER_ALARM); the sequence ends STOPPED with reason "driver alarm" without retrying (SWD-P1-14) |
+| TC-SW-SEQ-007-03 | C | DEV | M4 | sequence running | FI-16 ALM becomes active during a step | (v0.5, SRS SW-SEQ-007 / D-33 c, D-47 c) the SW sends a **controlled STOP** (STOP mode 1) at once and terminates the sequence with end reason DRIVER_ALARM ("driver alarm"); no retry, no further motion command; the step result carries DRIVER_ALARM |
 | TC-SW-WIZ-001-01 | U | DEV | M4 | – | VV-GEN-01…07 | step lists equal; invalid arguments → ValueError (AC) |
 | TC-SW-WIZ-002-01 | G | DEV | M4 | – | insert append / replace / after; edit the inserted steps | inserted and editable; preview updates (AC; Should) |
 | TC-SW-SEQF-001-01 | U | DEV | M4 | – | round trip of a sequence with every field and loop; corrupt files (truncated, wrong schema, newer version, invalid step, overlapping loops) | round trip byte-identical; `FileFormatError`; the current sequence is unchanged (identity + deep equality) (AC) |
@@ -755,11 +756,31 @@ Validation suite (v0.4): `test_v_m3.py` (C: tare, load / travel wizards, PC limi
 marks, recording, sample, SAF-SW-006, test zero, channel availability), `test_v_m3_calc.py` (U: VV-LC / TC / LIM / M / D,
 mass and plausibility rules), `test_v_gui_m3.py` (G: slider, hold-to-jog, TARE popup); harness M3 verbs.
 
+## 10d. M4 execution corrections (v0.5)
+
+| # | TC | Correction | Reason |
+|---|---|---|---|
+| M4-C1 | TC-SW-SEQ-007-03 | ALM during a sequence → **controlled STOP** at once + terminate (end reason DRIVER_ALARM), no retry — replaces "the running move completes, the next step is refused" | SRS SW-SEQ-007, D-33 c, D-47 c |
+| M4-C2 | VV-GEN-04 / -05 | count = number of levels incl. start and end; `return_to_zero` inserts a zero after every non-zero level **incl. the last** → 0, 5, 0, 10, 0 (the P1 "order to confirm" is resolved by SW_design §10.6 / B3-12) | SWD-P1-12 c answered |
+| M4-C3 | TC-SW-SEQ-006-03 | `on_trim_fail` removed: a trim that does not converge is NOT_REACHED and the sequence stops; stimulus = a target between two reachable step positions with the noise off (deterministic) | SRS v0.6.2 SW-SEQ-006 |
+| M4-C4 | TC-SW-SEQ-006-04 | the D-32 bound is checked with an enabled SW travel limit nearer than the soft limit (D-33 d) — 60 mm instead of the 290 mm soft limit (same rule, shorter run) | D-33 d |
+| M4-C5 | TC-SW-SEQF-001-01 | a structurally valid file with overlapping loops loads; the sequence is then invalid (ERROR, start refused). Corrupt / wrong schema / newer version / unknown step type → FileFormatError, current sequence unchanged | design (§10.7) |
+| M4-C6 | TC-SW-REP-001-01 | the "JSON metadata" checklist is checked over `meta.json` + `report.json` (events, board params, versions live in `meta.json`) | SRS SW-REP-001 wording |
+| M4-C7 | TC-SW-SEQ-007-01 | guards per D-48: armed at \|F\| ≥ max(5 % target, 1 % FS), SLIP floor 0.5 % FS, BREAK evaluated before SLIP and only while a command increases \|F\|; a slip that also drops > 20 % is reported BREAK_DETECTED (accepted outcome) | D-48 |
+
+Validation suite (v0.5): `test_v_m4_calc.py` (U: TV-SS, VV-SS mask bits, INCOMPLETE / ON_TARGET boundaries, TV-C / VV-C,
+timeout vector, VV-SEQ, VV-GEN, insert_block, seqfile, VV-PATH, TV-D), `test_v_m4.py` (C: 50-step VALID windows vs plan,
+start refusals, load approach + trim, NOT_REACHED at the nearer bound, BREAK, SLIP, ALM, stop / abort, pause / resume,
+resume refused with HALT, recording failure, status rate + marker, report files + live = report = F's recomputation from
+data.csv, offline CLI with tare / cal / 3-point bend, test vs machine travel reference); oracles `f_ref.steady_ok`,
+`window_select`, `band`, `raw_stop`, `move_time_s`; harness M4 verbs.
+
 ## 11. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 0.1 | 2026-10-03 | Validator F | First plan for the P1 gate: strategy and levels, 167 TCs for 85 requirements, R4 + VV vectors (R4 §12 independently verified 22/22 × 3 runs), 29 fault-injection scenarios, REF runs PR-1…5, demonstrations DM-01…10, milestone criteria, findings SWD-P1-01…18, P1 verdict YES WITH CONDITIONS (C1…C7). Includes D-30, D-31 (RESUME 0x3C) and D-32 (load step travels to the soft limit, NOT_REACHED) per Orchestrator messages. |
+| 0.5 | 2026-10-05 | Validator F | M4 gate execution: baseline 5daf3b8 / SW_design v0.6 / GUI v0.6 / D-46…D-48; corrections M4-C1…C7 (TC-SW-SEQ-007-03 aligned to D-33 c / D-47 c); M4 validation modules (U / C). Results: `SW_test_report_M4.md`. |
 | 0.4 | 2026-10-05 | Validator F | M3 gate execution: baseline 2d36eec / SW_design v0.5 / GUI v0.5 / dict 6; corrections M3-C1…C5; M3 validation modules (U / C / G). Results: `SW_test_report_M3.md`. |
 | 0.3.2 | 2026-10-04 | Validator F | M2 close-out re-test: ICD v0.7 / CR-03 defaults (sense and K1 check off; sense cases via scenario params), D-43 b/e, MC2-4 real SAVE stall, SWD-M2-01/02 regression; correction M2-C10. |
 | 0.3.1 | 2026-10-04 | Validator F | M2 gate execution: §3.14 armed; new TC-SYS-008-06 (loadlim vectors) / -07 (D-41), TC-SAF-SW-002-01 early / -05, TC-SW-STOP-001-05 (F-MC-4), -002-05 (hotkey); D-41 / D-42 effects (FI-14, C-03 text); DM-11 (SW-RT-006 on REF, D's request). Results: `SW_test_report_M2.md`. |

@@ -1,6 +1,6 @@
 # Project status
 
-**Phase:** P2 Implementation — M1, M2, **M3 ACCEPTED WITH CONDITIONS (2026-10-05)** · **M4 (Sequencer) in progress** (D-46) · baseline SRS v0.6.2, ICD v0.7.3 (dict 6, 0xF8BCDCB8) · D-06 in force (HW gate pending PO approval of bench procedure) · **Date:** 2026-10-05
+**Phase:** P2 Implementation — **M1–M4 all ACCEPTED WITH CONDITIONS (M4 gate 2026-10-05)** · next: P3 Integration & validation (HW gate, reference-PC runs, PO demonstrations, PO acceptance) · baseline SRS v0.6.3, ICD v0.7.4 (dict 6, 0xF8BCDCB8) · D-06 in force · **Date:** 2026-10-05
 
 ## P0 gate (Orchestrator, 2026-10-03) — ACCEPTED
 R1–R4 written; conflicts resolved: (a) Stefan step-timer error: checked `Stefan/FW/stanok/Core/Src/main.c:136-158` + `tim.c:45` → TIM2 84 MHz / (9+1) = 8.4 MHz vs assumed 10 MHz → 16 % slow (R1/R4 correct, R2's 6.7 % ignores the prescaler); irrelevant for us (D-09). (b) Step timing: SRS takes R2's conservative defaults (≥ 10 µs high/low, ≤ 50 kHz, DIR setup 20 µs) as parameters; R4's TIM2 PWM-mode-2 scheme stays (CCR scaled). Key safety finding R2 §8: motor force ≈ 9 kN ≫ cell safe overload 2.35 kN → FW per-sample load limit is safety-critical.
@@ -154,3 +154,16 @@ Evidence: FW_test_report_M3 (Validator E **GO WITH CONDITIONS** M3-C1…C4, FW-M
 - M4: D GUI done (SW_design_GUI v0.6): Sequence tab (editor, loops, generators, files, run controls, chart with ~30 Hz marker), Report tab, MC3-5 fix; GUI 297 ×3; sim e2e travel sequence ×2 loop FINISHED + report; smoke 80.4 SPS 0 lost. Requests GRQ-B-28…30 (low) → B.
 - M4: Integrator ICD v0.7.4 (D-47 a/b; ref_linkwdg + 32 linkwdg vectors; twin replay 32/32 vs A's FW); integration 168 ×2 (0 xfail; SWC-M4-02/03/04 pass after B's fixes); tools+HIL 980 ×2. A: D-47 a FW (native 177/177 ×2). SRS v0.6.3 SAF-FW-015 (SD-18). Open: B SWC-M4-05 sim link watchdog parity; E replays linkwdg vectors + updates test_set_valid_boundary_across_wrap.
 - **M4 implementation complete** (2026-10-05): B sequencer backend (SW_design v0.6 §22c, API §15.5f B6-01…21: calc steady/trim/path, sequencer model/plan/generators/seqfile/executor, report JSON/HTML/CSV + offline rebuild, MC3-5 `safety.trip_cleared`, sim specimen + D-47 a parity); unit 2263 ×2, GUI 297, integration 168, validation 559 + 2 housekeeping (F). D-48 guard parameters. → M4 verification (E, F).
+- **Validator E M4: GO WITH CONDITIONS** (FW_test_report_M4.md, plan v0.4.3): D-47 a verified with an independent oracle from SRS v0.6.3 SAF-FW-015 — 32/32 linkwdg vectors replayed on the twin; regression: Unity 34 ×2, native 211, twin 246 ×2, images + check_map + TC-SYS-009-02 PASS, static 15/15, HIL 39 ×2, HIL quick dry run 0 FAIL. Conditions M4-C1…C4 = carried HW-gate items (D-06, HG-18 DWT, PO approval §6.8, HG-12 / DEF-HG-01 on target). OBS-M4-01 (info → Integrator): response to the link-restoring command may still carry LINK_WDG (≤ 1 ms) — ICD note.
+
+## M4 gate (Orchestrator, 2026-10-05) — ACCEPTED WITH CONDITIONS
+Evidence: FW_test_report_M4 (Validator E **GO WITH CONDITIONS**, D-47 a 32/32 vs own oracle, regression green); SW_test_report_M4 (Validator F **ACCEPTED WITH CONDITIONS**, 3340 tests ×3 identical: 3339 passed + 1 strict xfail SWD-M4-01; live = report = F's recomputation from data.csv). SWD-M3-02 / MC3-5 closed.
+| Condition | Owner | Due |
+|---|---|---|
+| M4-C1…C4 (= M3-C1…C4) HW gate: D-06, HG-18 DWT bounds, PO approval §6.8 + approved row, HG-12 / DEF-HG-01 on target | PO, E, A | HW gate |
+| MC4-1 SWD-M4-01 (S3) capture-during-move validation rule | B | before P3 |
+| OBS-M4-01 staircase count without by="count" ignored (S4) · OBS-M4-03 SEQ_START/SEQ_STEP meta events lack t_us (S4) | B | before P3 |
+| OBS-M4-01 (E) ICD note: response to link-restoring command may carry LINK_WDG ≤ 1 ms | C | before P3 |
+| MC4-2 reference-PC runs NFR-001…004, Win32 hotkey | PO, F | P3 |
+| MC4-3 PO demonstrations DM-01/02/03/05/07/08/09/10/11 + wizard walk-through with real weights | PO, F | P3 / HW gate |
+| MC4-4 PO decision OBS-M4-02: BREAK detection at standstill (D-48 limits it to load-raising commands) | PO | P3 |

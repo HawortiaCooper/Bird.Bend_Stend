@@ -201,3 +201,24 @@ def stale_stop_window(last_sample_ms: float, timeout_ms: int) -> tuple[float, fl
 def timeout_rule_ok(timeout_ms: int, rate_sps: int) -> bool:
     """Hard rule H5 (SRS SAF-FW-012): afe.timeout_ms >= 2 x conversion period."""
     return timeout_ms >= 2 * (1000.0 / rate_sps)
+
+
+# ------------------------------------------------------------------ link watchdog (v0.4.3 of the plan, D-47 a)
+LW_MOVING = {"MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOMING", "STOPPING"}
+
+
+def link_watchdog(motion_state: str, valid: bool, silence_ms: float, timeout_ms: int) -> dict:
+    """Validator oracle of SRS v0.6.3 SAF-FW-015 (written from the SRS text, not from ref_linkwdg.py): no valid frame
+    for `safety.link_timeout_ms` -> in every motion state VALID is cleared (VALID_CLEARED arg LINK_WDG only on a
+    1 -> 0 change); while moving additionally a controlled stop with LINK_WDG set, EVENTs LINK_WDG + STOPPED(LINK_WDG)
+    and the move's MOVE_DONE(STOPPED); LINK_WDG clears at the next valid frame (LINK_RESTORED); idle never stops."""
+    trip = silence_ms >= timeout_ms
+    moving = motion_state in LW_MOVING
+    ev = []
+    if trip and valid:
+        ev.append(("VALID_CLEARED", 13))
+    if trip and moving:
+        ev += [("LINK_WDG", 0), ("STOPPED", 13), ("MOVE_DONE", 5)]
+    return {"trip": trip, "stop": "controlled" if trip and moving else "none", "valid_after": valid and not trip,
+            "link_wdg_status": trip and moving, "events": sorted(ev),
+            "after_frame_events": [("LINK_RESTORED", 0)] if trip and moving else [], "link_wdg_after_frame": False}

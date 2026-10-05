@@ -216,8 +216,20 @@ def test_status_counters_each_condition(v: V, tw):
         assert v.status()["reset_cause"] == name
 
 
+def _advance_with_heartbeat(v: V, ms: float, period_ms: float = 200.0) -> None:
+    """Let `ms` pass with a PING every `period_ms` (SW heartbeat, SAF-SW-003): since ICD v0.7.4 / D-47 a the link
+    watchdog clears VALID in every motion state after `safety.link_timeout_ms` (1 s) of PC silence."""
+    left = ms
+    while left > 0:
+        step = min(period_ms, left)
+        v.advance(step)
+        left -= step
+        v.link.send("PING")
+
+
 def test_set_valid_boundary_across_wrap(twin_exe, tmp_path):
-    """TC-FW-CMD-002-01: frames with t_us >= response t carry the new VALID (modular across 2^32)."""
+    """TC-FW-CMD-002-01: frames with t_us >= response t carry the new VALID (modular across 2^32). The PC keeps a
+    heartbeat (v0.4.3: without it the D-47 a link watchdog clears VALID after 1 s of silence)."""
     # Verifies: FW-CMD-002, SAF-FW-001 (boot VALID 0)
     # TC: TC-FW-CMD-002-01
     with Twin("lockstep", exe=twin_exe, run_dir=tmp_path / "r", t0_us=0xFFFFFFFF - 1_500_000) as tw:
@@ -225,15 +237,15 @@ def test_set_valid_boundary_across_wrap(twin_exe, tmp_path):
         r = v.ok("SET_VALID", {"valid": 1})                       # stream off: stored
         t1 = r["t_us"]
         v.ok("STREAM_START")
-        v.advance(1000)
+        _advance_with_heartbeat(v, 1000)
         assert all("VALID" in d["flags"] for d in v.data())
-        v.advance(300)
+        _advance_with_heartbeat(v, 300)
         r0 = v.ok("SET_VALID", {"valid": 0})
         t0 = r0["t_us"]
-        v.advance(400)
+        _advance_with_heartbeat(v, 400)
         r1 = v.ok("SET_VALID", {"valid": 1})
         t2 = r1["t_us"]
-        v.advance(700)
+        _advance_with_heartbeat(v, 700)
         data = v.data()
         wrapped = any(a["t_us"] > b["t_us"] for a, b in zip(data, data[1:]))
         assert wrapped, "test must cross the 2^32 wrap"

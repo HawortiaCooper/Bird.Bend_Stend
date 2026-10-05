@@ -240,3 +240,42 @@ def all_rules_ok(v: dict) -> bool:
 def f32(x: float) -> float:
     import struct as _s
     return _s.unpack("<f", _s.pack("<f", float(x)))[0]
+
+
+# ---------------------------------------------------------------------------------------------- M4 (from the ICD / SRS)
+
+def steady_ok(flags: int, status: int) -> bool:
+    """ICD §7.6: VALID = 1, MOVING = 0, none of flags bits 4–7 and status bits 0–8, 13, 14 set."""
+    if not flags & 1 or flags & 2 or flags & 0xF0:
+        return False
+    return not status & (0x1FF | (1 << 13) | (1 << 14))
+
+
+def window_select(rows, t0_us: float, t1_us: float):
+    """SW-REP-002 selection over rows ``(t_us_u, flags, status, setpoint_um, raw, F)``: steady frames in [t0, t1] whose
+    setpoint equals the setpoint of the first such frame → list of the selected rows."""
+    cand = [r for r in rows if t0_us <= r[0] <= t1_us and steady_ok(r[1], r[2])]
+    if not cand:
+        return []
+    pos = cand[0][3]
+    return [r for r in cand if r[3] == pos]
+
+
+def band(tol_n: float, k_est: float, v_mm_s: float) -> float:
+    """SW-SEQ-006: band = max(tol, k_est·v·0.065 s)."""
+    return max(tol_n, k_est * v_mm_s * 0.065)
+
+
+def raw_stop(f_target: float, sgn: int, tol_n: float, k_est: float, v_mm_s: float, k: float, tare: float):
+    """MOVE_UNTIL_LOAD stop: F_stop = F_target − sgn·band; raw rounded so the FW stops at or before F_stop (VV-C)."""
+    f_stop = f_target - sgn * band(tol_n, k_est, v_mm_s)
+    raw = tare + f_stop / k
+    rising = sgn * (1 if k > 0 else -1) > 0
+    return (math.floor(raw), "GE") if rising else (math.ceil(raw), "LE")
+
+
+def move_time_s(d_mm: float, v: float, a: float) -> float:
+    d = abs(d_mm)
+    if v * v / a <= d:
+        return d / v + v / a
+    return 2 * math.sqrt(d / a)

@@ -1,6 +1,6 @@
 """Validator E - MOVE_UNTIL_LOAD (FW-MOT-006, pulled forward to M3 by D-44) on A's FW in the twin.
 
-TC-FW-MOT-006-01 (plan §3.3) and the execution rules (a)-(e) of ICD v0.7.3 §5.4 / §6.2, independent of A's and the
+TC-FW-MOT-006-01 (plan §3.3) and the execution rules (a)-(e) of ICD v0.7.4 (unchanged since v0.7.3) §5.4 / §6.2, independent of A's and the
 Integrator's tests. Sample values are scripted (`afe raw_script`: the next HX711 samples verbatim, one per 12.5 ms
 at 80 SPS), so every threshold crossing is placed on a known sample; step periods are reconstructed from the PUL
 edge log and compared with the shared motion vectors (`mul_to_bound_5mm`, `mul_stop_in_cruise`, and the prefix

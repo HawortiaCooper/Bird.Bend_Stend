@@ -172,9 +172,6 @@ def test_tc_sw_tare_001_01_tare_from_toolbar_non_modal_popup(vbe, window, qtbot)
 
 @pytest.mark.req("SAF-SW-005", "SAF-SW-001")
 @pytest.mark.defect("SWD-M3-02")
-@pytest.mark.xfail(strict=True, reason="SWD-M3-02 open (D): gui/main_window.py:710-712 toasts every safety.trip "
-                                       "publish incl. the clear (payload None / remaining latch) as 'SW limit trip: … – "
-                                       "STOP sent' (error)")
 def test_tc_saf_sw_005_06_trip_clear_does_not_announce_a_new_stop(vbe, window, monkeypatch):
     """SAF-SW-005 / SW-RT: when a SW-limit latch clears, the operator must not be told 'SW limit trip … – STOP sent'
     (no STOP is sent at a clear). Stimulus: calibrated + tared, pull trip 150 N into a spring, then unload → latch
