@@ -81,7 +81,7 @@
 # =====================================================================================
 
 schema_version: 1
-dict_version: 5
+dict_version: 6
 # dict_version history:
 #   1  ICD v0.1 — initial 48 parameters
 #   2  ICD v0.2 — D-29: home.ref_switch (0x0401) removed (homing only at START, D-29b);
@@ -97,6 +97,9 @@ dict_version: 5
 #                 the driver-power sense is an optional 48 V presence input); SRS OI-18: new
 #                 drv.k1_check_enable (0x0706, bool, default false, reboot) gates the K1_WELDED check
 #                 -> 48 parameters.
+#   6  ICD v0.7.3 — D-45 e (OI-E-HG-05): pulse-timing margin over the driver minimum: motion.pulse_high_ns
+#                 and motion.pulse_low_min_ns 10 000 -> 12 500 ns, motion.max_step_rate_hz 50 000 -> 40 000
+#                 (H3: 1e9 / 40 000 = 25 000 >= 12 500 + 12 500; 30 mm/s at 800 steps/mm needs 24 kHz).
 
 retired_ids: [0x0401, 0x0603]   # home.ref_switch (dict_version 1), io.stop_active_level (dict_version 3)
 
@@ -256,7 +259,7 @@ groups:
         unit: ns
         min: 2500
         max: 100000
-        default: 10000
+        default: 12500
         moving_ok: false
         description: >-
           Step pulse active width. Hard rule H3 with max_step_rate_hz and pulse_low_min_ns.
@@ -269,7 +272,7 @@ groups:
         unit: ns
         min: 2500
         max: 100000
-        default: 10000
+        default: 12500
         moving_ok: false
         description: >-
           Minimum inactive time between two step pulses. Hard rule H3.
@@ -282,7 +285,7 @@ groups:
         unit: Hz
         min: 100
         max: 100000
-        default: 50000
+        default: 40000
         moving_ok: false
         description: >-
           Pulse-rate cap. The effective speed limit of every motion command is

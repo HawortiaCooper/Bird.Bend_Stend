@@ -20,6 +20,7 @@ KEY_GEOMETRY = "main/geometry"
 KEY_STATE = "main/state"
 KEY_LAST_TAB = "ui/last_tab"
 KEY_LAST_ENDPOINT = "ui/last_endpoint"
+KEY_UNITS = "ui/units"
 
 
 def settings_path() -> Path:

@@ -524,7 +524,7 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         dict(mv, v_um_s=30000), srs=S)
     add("move_speed_load_cap", "speed 20 001 um/s while loaded (5 % FS) > v_max_load -> E_RANGE 4",
         {"raw": 322123}, "MOVE_ABS", dict(mv, v_um_s=20001), srs=S)
-    add("move_speed_steprate_cap", "steps_per_mm 10 000: 10 mm/s exceeds 50 kHz cap (5 mm/s) -> E_RANGE 4",
+    add("move_speed_steprate_cap", "steps_per_mm 10 000: 10 mm/s exceeds the 40 kHz cap (4 mm/s) -> E_RANGE 4",
         {"params": {"motion.steps_per_mm": 10000.0}}, "MOVE_ABS", dict(mv, v_um_s=10000),
         srs=("FW-MOT-009",))
     add("move_accel_cap", "accel above a_max_um_s2 -> E_RANGE 8", {}, "MOVE_ABS",
@@ -719,6 +719,50 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         "MOVE_UNTIL_LOAD", dict(mul, bound_um=100000, cmp=2), srs=("FW-MOT-006",))
     add("mul_not_homed", "MOVE_UNTIL_LOAD not homed -> E_STATE NOT_HOMED", {"homed": False},
         "MOVE_UNTIL_LOAD", mul, srs=S)
+    # v0.7.2 (D-44: MOVE_UNTIL_LOAD pulled forward to M3, Implementer A): every argument edge and refusal reason
+    M = ("FW-MOT-006",)
+    add("mul_bound_above_soft_max", "bound above soft_max_um -> E_RANGE 0", {}, "MOVE_UNTIL_LOAD",
+        dict(mul, bound_um=290001), srs=M + S)
+    add("mul_bound_at_soft_max", "bound = soft_max_um accepted", {}, "MOVE_UNTIL_LOAD",
+        dict(mul, bound_um=290000), srs=M)
+    add("mul_bound_below_soft_min", "bound below soft_min_um -> E_RANGE 0", {}, "MOVE_UNTIL_LOAD",
+        dict(mul, bound_um=499, cmp=1), srs=M + S)
+    add("mul_speed_zero", "speed 0 -> E_RANGE 4", {}, "MOVE_UNTIL_LOAD", dict(mul, v_um_s=0), srs=M + S)
+    add("mul_speed_at_load_cap", "speed = v_max_load_um_s (20 000) accepted", {}, "MOVE_UNTIL_LOAD",
+        dict(mul, v_um_s=20000), srs=M)
+    add("mul_accel_cap", "accel above a_max_um_s2 -> E_RANGE 8", {}, "MOVE_UNTIL_LOAD",
+        dict(mul, a_um_s2=100001), srs=M + S)
+    add("mul_raw_stop_min_edge", "raw_stop = -8 388 608 (24-bit minimum), cmp 1, toward 50 mm -> accepted", {},
+        "MOVE_UNTIL_LOAD", dict(mul, bound_um=50000, raw_stop=rc.RAW_MIN, cmp=1), srs=M)
+    add("mul_raw_stop_below_min", "raw_stop = -8 388 609 -> E_RANGE 12", {}, "MOVE_UNTIL_LOAD",
+        dict(mul, raw_stop=rc.RAW_MIN - 1), srs=M)
+    add("mul_raw_stop_max_edge", "raw_stop = 8 388 607 (24-bit maximum) accepted", {}, "MOVE_UNTIL_LOAD",
+        dict(mul, raw_stop=rc.RAW_MAX), srs=M)
+    add("mul_already_beyond", "last sample already beyond raw_stop -> accepted (executes as MOVE_DONE "
+        "LOAD_THRESHOLD without a pulse, ICD §5.4)", {"raw": 1300000}, "MOVE_UNTIL_LOAD", mul, srs=M)
+    add("mul_during_move", "MOVE_UNTIL_LOAD during MOVE_ABS -> E_BUSY 1", moving, "MOVE_UNTIL_LOAD", mul,
+        srs=M + S)
+    add("mul_during_mul", "MOVE_UNTIL_LOAD while one runs -> E_BUSY 1", {"motion_state": "MOVE_UNTIL_LOAD"},
+        "MOVE_UNTIL_LOAD", mul, srs=M + S)
+    add("mul_not_enabled", "after boot -> E_STATE NOT_ENABLED | NOT_HOMED", boot, "MOVE_UNTIL_LOAD", mul,
+        srs=M + S)
+    add("mul_estop", "E-stop latched -> E_STATE", dict(boot, estop_latched=True), "MOVE_UNTIL_LOAD", mul,
+        srs=M + S)
+    add("mul_halt", "HALT latched -> E_STATE HALT", {"halt_latched": True}, "MOVE_UNTIL_LOAD", mul, srs=M + S)
+    add("mul_fault_load_limit", "LOAD_LIMIT fault latched -> E_STATE FAULT", {"faults": ["LOAD_LIMIT"]},
+        "MOVE_UNTIL_LOAD", mul, srs=M + S)
+    add("mul_toward_limit_end", "END limit latched, bound toward it -> E_STATE LIMIT", {"limit_end": True},
+        "MOVE_UNTIL_LOAD", mul, srs=M + ("SAF-FW-013",))
+    add("mul_away_limit_end", "END limit latched, bound away (cmp 1) -> accepted", {"limit_end": True},
+        "MOVE_UNTIL_LOAD", dict(mul, bound_um=50000, raw_stop=-644245, cmp=1), srs=M + ("SAF-FW-013",))
+    add("mul_afe_stale", "AFE stale -> E_STATE AFE_STALE", {"afe_stale": True}, "MOVE_UNTIL_LOAD", mul,
+        srs=M + ("SAF-FW-012",))
+    add("mul_bound_within_one_step", "100 steps/mm: bound 1 um from the position (0.1 step, rounds to the current "
+        "step, != position) -> accepted; executes at once without a pulse: BOUND, or LOAD_THRESHOLD if the last "
+        "sample is beyond (OI-FW-43 c)", {"params": {"motion.steps_per_mm": 100.0}}, "MOVE_UNTIL_LOAD",
+        dict(mul, bound_um=100001), srs=M)
+    add("mul_alarm_powered", "ALM active with driver power present -> E_STATE DRIVER_ALARM (D-28)",
+        {"alm_active": True}, "MOVE_UNTIL_LOAD", mul, srs=M + ("D-28",))
 
     add("home_ok", "HOME unloaded", {"homed": False}, "HOME", {"flags": 0}, srs=("FW-HOM-001",))
     add("home_load_refused", "HOME at 6 % FS without confirmation -> E_CONFIRM",
@@ -913,12 +957,18 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
     add("rule_h2_min_above_max", "load_raw_min >= load_raw_max -> E_CONFIG (H2)",
         {"params": {"safety.load_raw_max": 1000}}, "SET_PARAM", payload=spk("safety.load_raw_min", 1000),
         srs=("SAF-FW-010",))
-    add("rule_h3_rate", "max_step_rate 50 001 Hz with 10 + 10 us pulses -> E_CONFIG (H3)", {},
-        "SET_PARAM", payload=spk("motion.max_step_rate_hz", 50001), srs=("FW-MOT-001",))
-    add("rule_h3_width", "pulse_high 15 us at 50 kHz -> E_CONFIG (H3)", {}, "SET_PARAM",
+    # dict_version 6 (D-45 e): defaults 12.5 + 12.5 us at 40 kHz = exactly the H3 boundary (25 000 ns)
+    add("rule_h3_rate", "max_step_rate 40 001 Hz with 12.5 + 12.5 us pulses -> E_CONFIG (H3)", {},
+        "SET_PARAM", payload=spk("motion.max_step_rate_hz", 40001), srs=("FW-MOT-001", "D-45"))
+    add("rule_h3_width", "pulse_high 15 us at 40 kHz -> E_CONFIG (H3)", {}, "SET_PARAM",
         payload=spk("motion.pulse_high_ns", 15000), srs=("FW-MOT-001",))
-    add("rule_h3_ok", "pulse_high 5 us at 50 kHz -> OK", {}, "SET_PARAM",
+    add("rule_h3_ok", "pulse_high 5 us at 40 kHz -> OK", {}, "SET_PARAM",
         payload=spk("motion.pulse_high_ns", 5000), srs=("FW-MOT-001",))
+    add("rule_h3_width_edge", "pulse_low_min 12 501 ns at 40 kHz with 12.5 us high -> E_CONFIG (H3, 1 ns over)", {},
+        "SET_PARAM", payload=spk("motion.pulse_low_min_ns", 12501), srs=("FW-MOT-001", "D-45"))
+    add("rule_h3_old_rate_ok", "max_step_rate back to 50 kHz with 10 + 10 us pulses -> OK (pre-D-45 setting)",
+        {"params": {"motion.pulse_high_ns": 10000, "motion.pulse_low_min_ns": 10000}}, "SET_PARAM",
+        payload=spk("motion.max_step_rate_hz", 50000), srs=("FW-MOT-001", "D-45"))
     add("rule_h4_load_above_travel", "v_max_load 30 001 > v_max_travel -> E_CONFIG (H4)", {},
         "SET_PARAM", payload=spk("motion.v_max_load_um_s", 30001), srs=("R5 §2.3",))
     add("rule_h4_travel_below_load", "v_max_travel 19 999 < v_max_load -> E_CONFIG (H4)", {},
@@ -1118,6 +1168,19 @@ def make_motion(pd: gen_params.Dictionary) -> dict[str, Any]:
          a_stop=1000000, events=[{"after_step": 7990, "event": "controlled_stop"}],
          periods=rm.move_with_stop(8000, f, s8(30000), s8(100000), s8(100000), 7990, s8(1000000)),
          srs=("SAF-FW-003",), spm=800.0, v=30000, a=100000, d=100000)
+    # v0.7.2 MOVE_UNTIL_LOAD (FW-MOT-006, D-44): the segment to the bound is planned like MOVE_ABS (ends exactly at
+    # the bound, MOVE_DONE BOUND); a sample beyond raw_stop is an immediate CLEAN stop (no ramp-down): see
+    # "immediate_stops" (a separate list, so replays of "cases" with controlled-stop / jog events are unaffected)
+    mul_n = 4000
+    case("mul_to_bound_5mm", "MOVE_UNTIL_LOAD 5 mm at 2 mm/s, 100 mm/s^2, threshold never reached: planned like "
+         "MOVE_ABS, stops exactly at the bound (MOVE_DONE BOUND)", n=mul_n,
+         periods=rm.ramp_move(mul_n, f, s8(2000), s8(100000), s8(100000)), srs=("FW-MOT-006", "FW-MOT-003"),
+         spm=800.0, v=2000, a=100000, d=100000)
+    case("mul_stop_in_cruise", "MOVE_UNTIL_LOAD 5 mm at 2 mm/s, controlled stop (PAUSE / STOP 1) at a_stop 10 mm/s^2 "
+         "requested after step 2 000: r0 = 160 more steps", n=mul_n, a_stop=10000,
+         events=[{"after_step": 2000, "event": "controlled_stop"}],
+         periods=rm.move_with_stop(mul_n, f, s8(2000), s8(100000), s8(100000), 2000, s8(10000)),
+         srs=("FW-MOT-006", "SAF-FW-003"), spm=800.0, v=2000, a=100000, d=100000)
     segs = [(s8(2000), 2000), (s8(5000), 3000), (s8(1000), 2000), (0.0, 0)]
     case("jog_speed_changes", "JOG at 800 steps/mm: 2 mm/s for 2 000 steps, on the fly to 5 mm/s (3 000 steps), "
          "down to 1 mm/s (2 000 steps), then JOG 0 (a_stop 1 m/s^2)", n=0, a_stop=1000000,
@@ -1152,6 +1215,28 @@ def make_motion(pd: gen_params.Dictionary) -> dict[str, Any]:
                      "ctrl_stop_paths: ICD §6.5 / FW_design §5.6.4 path selection (CLEAN / ISR / STRETCH)"],
         "icd_version": rc.ICD_VERSION, "param_dict_hash": f"0x{pd.hash:08X}",
         "cases": cases, "ctrl_stop_paths": paths, "planner": plans,
+        # v0.7.2: immediate CLEAN stops of a running segment (MOVE_UNTIL_LOAD threshold sample, FW-MOT-006 /
+        # SAF-FW-002): the generator emits exactly the first `after_step` periods of `base_case` and no further
+        # pulse (no ramp-down, the pulse in flight completes and is counted); MOVE_DONE LOAD_THRESHOLD
+        "immediate_stops": [
+            {"name": "mul_threshold_in_cruise", "base_case": "mul_to_bound_5mm", "after_step": 2400,
+             "reason": "LOAD_THRESHOLD", "srs": ["FW-MOT-006", "SAF-FW-002"],
+             "description": "threshold sample during the cruise (step 2 400 of 4 000)"},
+            {"name": "mul_threshold_in_accel", "base_case": "mul_to_bound_5mm", "after_step": 10,
+             "reason": "LOAD_THRESHOLD", "srs": ["FW-MOT-006"],
+             "description": "threshold sample during the acceleration (step 10)"},
+            {"name": "mul_threshold_before_first_pulse", "base_case": "mul_to_bound_5mm", "after_step": 0,
+             "reason": "LOAD_THRESHOLD", "srs": ["FW-MOT-006"],
+             "description": "last sample already beyond raw_stop: no pulse at all (ICD §5.4)"},
+        ],
+        # v0.7.2 (OI-FW-43 b): a threshold sample during the controlled stop of `base_case` (its controlled_stop
+        # event applied first) cuts the deceleration with a CLEAN halt after `after_step` periods; MOVE_DONE stays
+        # STOPPED (first cause kept). Separate list: replays of `immediate_stops` need no controlled stop.
+        "threshold_in_controlled_stop": [
+            {"name": "mul_threshold_cuts_controlled_stop", "base_case": "mul_stop_in_cruise", "after_step": 2080,
+             "reason": "STOPPED", "srs": ["FW-MOT-006", "SAF-FW-003"],
+             "description": "threshold sample half-way through the 160-step deceleration requested after step 2 000"},
+        ],
     }
 
 

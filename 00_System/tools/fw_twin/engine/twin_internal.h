@@ -102,6 +102,13 @@ typedef struct {
     int32_t afe_script[256]; unsigned afe_script_n, afe_script_i;
     vt_t next_sample; bool sample_pending; struct { uint32_t t_us; int32_t raw; int32_t pos; uint8_t st; } pend_sample;
     int spec_kind; double spec_k, spec_xc, spec_k2, spec_fy, spec_fb; bool spec_broken;
+    /* ---- M3 load model (ICD v0.7.2, calibration flows; R2 §3 cell figures) ---- */
+    double weight_n;                         /* hung calibration weights (N, + = tension like the specimen) */
+    double drift_cps; double drift_acc; vt_t drift_t;   /* zero drift: counts/s since drift_t + accumulated */
+    double creep_frac, creep_tau_s, creep_counts;       /* cell creep: first-order toward frac * load counts */
+    double relax_frac, relax_tau_s, relax_n;            /* specimen relaxation: first-order toward frac * F */
+    double nonlin_frac, fs_n;                           /* cell non-linearity (fraction of FS at half scale) */
+    vt_t load_t;                                        /* last update of the creep / relaxation states */
     uint64_t rng;
     /* ---- flash ---- */
     uint8_t flash[FLASH_SIZE];

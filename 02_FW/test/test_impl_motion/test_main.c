@@ -1,10 +1,10 @@
 /* Motion executor on the fake step timer (twin semantics): ENABLE settle, MOVE_ABS exact count and
  * duration, JOG (dead-man, refresh, bound, JOG 0, reversal), STOP 0 / 1, HALT, PAUSE / RESUME with
  * real motion, controlled-stop paths (ISR / stretch / clean halt), sniffed-stop hold with a MOVE_ABS +
- * HALT burst, step fault, link watchdog, MOVE_UNTIL_LOAD not in build, DIR polarity encoding.
+ * HALT burst, step fault, link watchdog, DIR polarity encoding (MOVE_UNTIL_LOAD: test_impl_mul).
  * Verifies: FW-MOT-001 (DIR before the first edge), FW-MOT-002, FW-MOT-003, FW-MOT-004, FW-MOT-005,
  *           FW-MOT-007, FW-MOT-008, SAF-FW-001, SAF-FW-002, SAF-FW-003, SAF-FW-004, SAF-FW-015,
- *           SAF-FW-016, SAF-FW-023, DEF-P1-04 (hold)
+ *           SAF-FW-016, SAF-FW-023, DEF-P1-04 (hold), DEF-M3-01 (no stale hold)
  */
 #include <unity.h>
 
@@ -261,6 +261,56 @@ static void test_move_halt_burst_zero_pulses(void) /* DEF-P1-04 sniffed-stop hol
     TEST_ASSERT_TRUE(g_fw.lat.halt);
 }
 
+/* DEF-M3-01: the main loop dispatches the stop frame before the 1 kHz sniffer scans it; a MOVE_ABS
+ * dispatched right after (same tick period) must run to its target - the late sniffer hit neither
+ * holds nor stops it */
+static void dispatched_stop_then_move(uint8_t type, uint8_t mode)
+{
+    uint8_t pl[1];
+    uint32_t from;
+    int32_t i;
+    mu_boot();
+    mu_enable();
+    g_fw.homed = true;
+    h_expect_ok(mu_move(100000, 10000u, 0u));
+    mu_run(300u);
+    pl[0] = mode;
+    h_expect_ok(h_cmd(type, 0x21u, pl, (type == (uint8_t)CMD_STOP) ? 1u : 0u));   /* main loop only */
+    mu_run(200u);                                                 /* stop completes; sniffer scans */
+    TEST_ASSERT_FALSE(motion_active());
+    if (type == (uint8_t)CMD_HALT) {
+        h_expect_ok(h_cmd(CMD_HALT_CLEAR, 0x22u, NULL, 0u));
+    }
+    if (type == (uint8_t)CMD_PAUSE) {
+        h_expect_ok(h_cmd(CMD_RESUME, 0x22u, NULL, 0u));
+    }
+    /* second stop frame and a MOVE_ABS in the same main-loop pass, no tick in between */
+    h_expect_ok(h_cmd(type, 0x23u, pl, (type == (uint8_t)CMD_STOP) ? 1u : 0u));
+    if (type == (uint8_t)CMD_HALT) {
+        h_expect_ok(h_cmd(CMD_HALT_CLEAR, 0x24u, NULL, 0u));
+    }
+    if (type == (uint8_t)CMD_PAUSE) {
+        h_expect_ok(h_cmd(CMD_RESUME, 0x24u, NULL, 0u));
+    }
+    from = fake_cap_n;
+    h_expect_ok(mu_move(20000, 10000u, 0u));                     /* < link timeout (5 s) away */
+    TEST_ASSERT_TRUE(link_motion_start_allowed());
+    (void)mu_run_until_idle(10000u);
+    i = mu_ev(EV_MOVE_DONE, from);
+    TEST_ASSERT_TRUE(i >= 0);
+    TEST_ASSERT_EQUAL_UINT16(MD_TARGET, mu_ev_arg(i));
+    TEST_ASSERT_EQUAL_INT32(16000, fake_step_count());
+    TEST_ASSERT_TRUE(mu_ev(EV_STOPPED, from) < 0);
+}
+
+static void test_dispatched_stop_then_move(void)   /* DEF-M3-01 */
+{
+    dispatched_stop_then_move(CMD_STOP, 0u);
+    dispatched_stop_then_move(CMD_STOP, 1u);
+    dispatched_stop_then_move(CMD_HALT, 0u);
+    dispatched_stop_then_move(CMD_PAUSE, 0u);
+}
+
 static void test_sniffed_stop_while_moving(void)   /* SAF-FW-002: STOP last byte -> <= 2 ms */
 {
     uint32_t n;
@@ -343,17 +393,6 @@ static void test_link_watchdog(void)               /* SAF-FW-015 */
     TEST_ASSERT_FALSE(motion_active());           /* nothing restarts */
 }
 
-static void test_move_until_load_not_in_build(void)  /* M4 */
-{
-    uint8_t pl[17] = {0};
-    mu_enable();
-    g_fw.homed = true;
-    le_put32(pl, 50000u);
-    le_put32(&pl[4], 1000u);
-    h_expect_nack(h_cmd(CMD_MOVE_UNTIL_LOAD, 7u, pl, 17u), ST_E_INTERNAL, INTERNAL_NOT_IN_BUILD);
-    TEST_ASSERT_FALSE(motion_active());
-}
-
 int main(void)
 {
     UNITY_BEGIN();
@@ -367,9 +406,9 @@ int main(void)
     RUN_TEST(test_controlled_stop_paths);
     RUN_TEST(test_move_halt_burst_zero_pulses);
     RUN_TEST(test_sniffed_stop_while_moving);
+    RUN_TEST(test_dispatched_stop_then_move);
     RUN_TEST(test_pause_resume_with_motion);
     RUN_TEST(test_step_fault);
     RUN_TEST(test_link_watchdog);
-    RUN_TEST(test_move_until_load_not_in_build);
     return UNITY_END();
 }

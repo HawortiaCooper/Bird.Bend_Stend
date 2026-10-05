@@ -1,6 +1,6 @@
 # 00_System/tools — Integrator tools (owner: Implementer C)
 
-Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.7, `params.yaml` dict_version 5 and `protocol.yaml`
+Shared FW⇄SW interface tooling for `ICD_protocol.md` v0.7.3, `params.yaml` dict_version 6 and `protocol.yaml`
 (protocol name registry, ICD §0.3).
 Python ≥ 3.11, standard library + PyYAML (generators only). Use the project venv: `.venv\Scripts\python`.
 
@@ -41,7 +41,7 @@ Both implementations MUST pass the same files; the vectors are the oracle for by
 | `frames` `framing_only` / `invalid` | frame layer only / must be dropped with `crc_errors += 1` | same |
 | `streams` | feed `chunks_hex` in order to a fresh `frame.c` parser; call the 20 ms timeout hook if `idle_timeout_at_end`; frames **and** counters equal | same with `io.framing.FrameDecoder` |
 | `units_vectors.json` (ICD §0.1) | `units.c` `um_to_steps` / `steps_to_um` / rate cap with `spm` = the binary32 from `spm_f32_hex`: every value exact | `calc.motion.um_to_steps` / `steps_to_um` and the simulator's step model: every value exact |
-| `motion_vectors.json` (M2) | `ramp.c` / `stepgen_core` from the case parameters and events: every period within `tolerance.period_ticks` (±1) and the sum within `tolerance.sum_ticks` (±N/1000) of `periods`; `ctrl_stop_path()` equals every `ctrl_stop_paths` row | the simulator's step model: every period and sum exact (binary64) |
+| `motion_vectors.json` (M2) | `ramp.c` / `stepgen_core` from the case parameters and events: every period within `tolerance.period_ticks` (±1) and the sum within `tolerance.sum_ticks` (±N/1000) of `periods`; `ctrl_stop_path()` equals every `ctrl_stop_paths` row; v0.7.2 `immediate_stops` (MOVE_UNTIL_LOAD threshold): the generator of `base_case` stopped immediately after `after_step` periods emits no further pulse; `threshold_in_controlled_stop`: the same after the base case's controlled stop, MOVE_DONE stays STOPPED (OI-FW-43 b) | the simulator's step model: every period and sum exact (binary64); `immediate_stops` the same |
 | `loadlim_vectors.json` (M2) | `loadlim.c`: replay each case (init, then sample / fault_clear / config steps): `trip` and `regrow_window` equal after every step | the simulator's load limit: same |
 | `check_vectors.json` `hw_meas_vectors` (v0.6) | only against a HW_MEAS build (FEAT_HW_MEAS = 1); release / twin builds replay `vectors` (DIAG_MEAS → NOT_IN_BUILD) | the simulator answers NOT_IN_BUILD (no HW_MEAS model) |
 | `check_vectors.json` | set up the pure command-check context from `state_defaults` ⊕ `state` (and the param overrides), run the command check on `request.payload_hex`, compare STATUS/detail and, for NACKs, the encoded response with `response_frame_hex`; no side effect on NACK | the simulator (`io.sim.fw_logic`) in the same state answers identically (differential check of the SimBoard) |
@@ -208,6 +208,23 @@ the twin keeps the seam-call log and the edge log itself (OI-FW-31).
 
 ### FW host twin — how to run it (Integrator, `00_System/tools/fw_twin/`, P2/M1)
 
+**Private binary per run (OBS-M2-09, ICD v0.7.2).** Concurrent roles must never run, rebuild or lock the same
+`fw_twin.exe`: (1) `build.py` compiles into a per-process temporary file and installs it with one atomic
+`os.replace` (retried while Windows keeps an old file locked); (2) test suites call
+`build.ensure_built_private(core)`: built once per process into `build.private_build_dir()` — `$BEND_TWIN_BUILD_DIR`
+if set (kept, e.g. a role's scratchpad), else a temp dir removed at exit — and **pinned** for the whole run;
+(3) `Twin(..., private=True)` (default) runs a binary that lies in the shared `fw_twin/build/` from a per-process
+private copy (also for the engine restarts after resets), so callers that still pass the shared exe are
+protected too. Validators' `VAL_TWIN_BUILD_DIR` keeps working (a private dir, used in place).
+
+**Lock-step SW ⇄ twin (OBS-M2-09).** `03_SW/tests/integration/twin_rig.py` runs Implementer B's `Backend`
+(`BackendSettings(clock="lockstep", test_hooks=True)`) and the twin in one virtual time: every 1 ms backend step
+first advances the twin to the same instant (`Device.transport_for` → in-process `TwinTransport`; the
+`Backend.sim_endpoint` stepper slot → the twin). `lockstep_boards.py` puts the twin and B's `SimBoard` (lock-step
+clock, `VirtualTransportPair`) behind one PC-side driver for the SIM-vs-twin differentials;
+`io_client.LockstepIoClient` is B's io layer waiting in virtual time. No integration result depends on the wall
+clock any more except `test_backend_connect_sequence_tcp_realtime` (TcpTransport smoke, event-driven waits).
+
 ```powershell
 .venv\Scripts\python 00_System\tools\fw_twin\build.py                  # --core auto: fw if 02_FW/src/core/*.c exists, else probe
 .venv\Scripts\python 00_System\tools\fw_twin\build.py --core fw        # build\fw_twin.exe  (A's firmware)
@@ -256,6 +273,13 @@ $env:BEND_TWIN_CORE="probe"; .venv\Scripts\python -m pytest 03_SW\tests\integrat
   `hal_hx711_config` select 10/80 SPS, conversions at `1/(sps·(1+rate_error))`, raw = round-half-away(offset +
   `cell_counts_per_n`·F(x) + N(0, noise)) clamped to the rails, `afe_sample_t.status` per the seam semantics
   (bit 0 = `afe sck_overrun`, bit 1 = after `afe miss_next`); `hold` = conversions continue, none delivered.
+  **M3 load model (ICD v0.7.2)**: F = specimen (elastic − relaxation) + hung weights (`weight`); raw =
+  round-half-away(offset + cpn·F + cell non-linearity + creep + zero drift + N(0, noise)): non-linearity
+  `nonlin_pct_fs`·FS·4u(1−u), u = |F|/FS, odd in F (`fs_n` default 1961.33 N = 200 kg); creep first order toward
+  `creep_pct`·(cpn·F) with `creep_tau_s` (R2: 0.02 % FS / 30 min); zero drift `drift_counts_per_s`, linear from the
+  time it is set; relaxation first order toward `relax_pct`·F_elastic with `relax_tau_s` (follows the elastic
+  force while moving). All terms 0 by default (M1/M2 results unchanged); the states advance with virtual time at
+  each conversion / query and survive MCU resets (world).
   Flash: sectors 1+2 (0x0800 4000…0x0800 BFFF) in `flash.bin`, program = AND (a 0→1 bit returns false), sector =
   1/2 or an address in it. IWDG armed by the first kick / `set_timeout`; window per the seam semantics at the model LSI (`iwdg lsi_hz`,
   default 32 kHz: run window 47.75 ms, long window 4.10 s).
@@ -280,7 +304,7 @@ $env:BEND_TWIN_CORE="probe"; .venv\Scripts\python -m pytest 03_SW\tests\integrat
 **Vocabulary v2 in the twin (M1 subset complete):** all M1 actions are implemented — `estop` (bounce,
 `drv_power_follows`, `k1_delay_ms`: the driver power also returns `k1_delay_ms` after the E-stop closes), `drv_power`,
 `button` (pause), `limit` (forced / position), `alm`, `pend`, `specimen` (none / spring / bilinear / break;
-relaxation not yet: M3), `load_offset`, `afe` (all arguments), `inject` (`tx_congestion`, `link_silence`,
+relaxation since v0.7.2), `load_offset`, `afe` (all arguments), `inject` (`tx_congestion`, `link_silence`,
 `rx_corrupt`, `hang` main/tick, `step_fault` = the next step ISR is skipped, per-command `drop_next` /
 `duplicate_next` / `delay_next` / `corrupt_next` on requests and responses), `rx_bytes` (`at_us` = start of the
 first byte, world µs), `on_frame` (after the last byte of the nth matching request), `on_event` (after the last
@@ -293,7 +317,7 @@ are world µs since the twin start (float, ns resolution); `wire_log` `first_us`
 
 **Coordinate and limit-switch convention (normative for the twin and the SW simulator; OI-B-M2-04, ICD v0.7).**
 World x [µm] (`query world` `x_um_true`) is integrated per **completed** pulse (the end of the PUL pulse = the
-timer update) from the DIR **pin**: +1 step (1000 / `motion.steps_per_mm` µm) while DIR is high, unless the DIR
+timer update) from the DIR **pin**: +1 step (1000 / steps_per_mm **of the world** µm — the mechanics: scenario `params.motion.steps_per_mm`, default 800; v0.7.2 clarification, SWC-M3-03: a later SET_PARAM of the board's `motion.steps_per_mm` changes the µm per commanded step, never the carriage travel per pulse) while DIR is high, unless the DIR
 wiring is inverted (`driver dir_wiring_inverted`); it is independent of the FW counter and persists across MCU
 resets. START is active iff x ≤ `start_switch_um`, END iff x ≥ `end_switch_um` (`limit position_um`), evaluated
 after every completed step. The HAL fixed reaction stops the timer CLEAN at that step, so the **last executed step
@@ -302,6 +326,18 @@ is therefore the first grid step at or beyond the edge. Homing: the slow approac
 machine 0 lies `home.offset_um` beyond it, i.e. machine x = x_world − x_edge − `home.offset_um`
 (`test_home_at_start_edge`). A simulator that integrates continuously must quantise the same way (stop at the first
 step ≥ the edge in the moving direction).
+
+**SIM-vs-twin comparison rule (MC2-6, ICD v0.7.2; `03_SW/tests/integration/test_sim_vs_twin_motion.py`).** Both
+boards run the same script at the same virtual instants. Compared **exactly**: responses (status, detail), EVENT
+sequences (code, arg and the position / reason values), STATUS latches (flags, status, faults, motion state, home
+phase) and `pos_um` / `pos_steps` at world- or plan-determined end points (move target, JOG bound, homing at the
+START edge, limit-switch stop at the first active step, MOVE_UNTIL_LOAD bound). For stops triggered **at a time**
+(a command or an input edge while moving) the end position may differ by the simulator's 1 ms step grid, which
+delays both the start of the move and the reaction by up to 1 ms each: |Δ| ≤ ceil(v·2 ms) + 1 steps; a FW load-limit or MOVE_UNTIL_LOAD threshold stop depends on the HX711
+conversion phase: |Δ| ≤ ceil(v·12.5 ms) + 1 steps and the raw value of the trip sample is not compared; the rest
+of those transcripts stays exact. Boot-time EVENT order (BOOT / PARAMS_DEFAULTED, not specified in ICD §11.3) and
+all times are not compared. POS_UNCERTAIN after an E-stop edge while moving = the step output was running
+(ICD v0.7.2 §6.2).
 
 **E-stop wiring in the world (CR-03 / D-41, ICD v0.7).** Release 1 has no power-removal contactor: the driver's
 48 V stays present when the E-stop opens. The world default `estop drv_power_follows: true` (vocabulary FROZEN)
@@ -319,6 +355,22 @@ last heartbeat / hang start, w8 boot counter — at each MCU reset of a valid bl
 w8 + 1, w1 restarts at 0 (this boot's rings start empty), w3 is kept; a power cycle invalidates the block; sel 1
 clears all words. `build.py --build-dir` may lie outside the repo (absolute paths in its messages).
 The engine no longer calls `step_isr()` after a fixed-reaction halt at a counted step (OI-FW-35).
+
+**DIAG_MEAS model fidelity (v0.7.3, Validator E's HIL dry run, `00_System/tools/hil/`).**
+- OBS-E-HG-01 (fixed): the RX probe source triggers at the falling edge of the **start bit** of a received byte
+  (byte end − 10 851 ns at 921 600 Bd), as on the board; earlier models triggered at the end of the stop bit.
+- OBS-E-HG-02 (fixed): STIM_RUN: each pulse = random delay (0…1 step period) + `hold`; the next delay starts at the
+  end of the hold (board `meas_f4.c`); earlier models added another `hold` of idle time per pulse.
+- OBS-E-HG-03 (partly fixed, rest documented): the twin has **no ISR latency** — an input's HAL fixed reaction (E-stop
+  → ENA disabled, PUL stopped) and its core callback run at the virtual instant of the input change. A probe capture
+  (CCR2/3/4) of an edge caused at the trigger instant therefore reports **1 tick** (board: CCRx = 0 means "no
+  capture"). Latency budgets (≤ 100 µs / ≤ 1 ms) are only verified on the target (HG items); the twin checks the
+  order of events and the reaction itself, not its latency.
+- OBS-E-HG-05 / DEF-HG-01 (fixed): PWM-input mode as A's target after DEF-HG-01: a capture at each rising edge gives
+  the period since the previous rise and the high time of the previous pulse; the first capture after arming is
+  discarded, so min / max / count start with the second rising edge (min period no longer stuck at 0).
+- Not modelled (unchanged): DWT statistics (op 9 w0 = 0), stamp rings surviving a reset, DMA latency (stamps exact
+  to the virtual µs).
 
 ## Shared simulator / twin world-control vocabulary v2 (F-B-06, DEF-P1-03) — names FROZEN (ICD v0.4; v0.5: STOP-button names retired)
 
@@ -343,9 +395,10 @@ T = twin, S = simulator, both = both (differential tests use only "both" actions
 | `chatter` | `input: <as wire>`, `period_ms: float`, `duration_ms: int` | periodic toggling (e.g. ALM 1 kHz chatter) |  | T |
 | `alm` / `pend` | `active: bool` | driver outputs | ✓ | both |
 | `driver` | `dir_wiring_inverted?: bool`, `pend_auto?: bool`, `pend_lag_ms?: float` (default 5) | DIR wiring / driver SW5 inverted in the world (x follows the DIR pin); automatic PEND (REQ-C-M2-06/07, v0.6) |  | T (S: PEND model optional) |
-| `specimen` | `kind: "none"\|"spring"\|"bilinear"`, `k_n_per_mm`, `x_contact_um`, `k2_n_per_mm?`, `f_yield_n?`, `f_break_n?`, `relax_pct?`, `relax_tau_s?` | load model | ✓ | both |
+| `specimen` | `kind: "none"\|"spring"\|"bilinear"`, `k_n_per_mm`, `x_contact_um`, `k2_n_per_mm?`, `f_yield_n?`, `f_break_n?`, `relax_pct?`, `relax_tau_s?` | load model (relaxation modelled in the twin since v0.7.2) | ✓ | both |
+| `weight` | `kg?: float`, `n?: float` (instead of kg), `g_mps2?: float` (default 9.80665) | v0.7.2 (M3 load calibration): known masses hung on the cell, force = kg·g (+ = tension, the sign of a pushed spring), adds to the specimen; 0 = removed |  | T (S: finding SWC-M3-02) |
 | `load_offset` | `counts: int` | cell zero offset (default scenario 50 000 counts ≤ 1 % FS, SWD-P1-15) | ✓ | both |
-| `afe` | `rate_error?: float`, `noise_counts?: float`, `stall?: bool`, `saturate?: "pos"\|"neg"\|null`, `drop_every?: int`, `miss_next?: int` (single missed DOUT edges), `sck_overrun?: bool` (power-down symptom on the next read), `raw_script?: [int]` (next samples verbatim) | HX711 model | stall / rate / rails ✓ | both (`sck_overrun`: T) |
+| `afe` | `rate_error?: float`, `noise_counts?: float`, `stall?: bool`, `saturate?: "pos"\|"neg"\|null`, `drop_every?: int`, `miss_next?: int` (single missed DOUT edges), `sck_overrun?: bool` (power-down symptom on the next read), `raw_script?: [int]` (next samples verbatim); v0.7.2: `drift_counts_per_s?`, `creep_pct?`, `creep_tau_s?`, `nonlin_pct_fs?`, `fs_n?` (cell model, see the AFE model above) | HX711 model | stall / rate / rails ✓ | both (`sck_overrun`, v0.7.2 cell terms: T) |
 | `world_shift` | `um: int` | lost steps: shift `x_um_true` against the step counter (open-loop model; HOME_DRIFT tests) |  | both |
 | `inject` | `fault: "step_fault"\|"tx_congestion"\|"rx_corrupt"\|"link_silence"\|"hang"\|"isr_storm"\|"loop_load"\|"drop_next"\|"duplicate_next"\|"delay_next"\|"corrupt_next"`, `duration_ms?`, `where?: "main"\|"tick"\|"isr1"` (hang / storm), `cmd?: <CMD name>`, `what?: "request"\|"response"`, `n?: int`, `ms?: int` | fault injection (per-command link faults = B's LinkModel hooks) | step_fault, tx_congestion, link_silence, hang ✓ | both (`isr_storm`, `where`: T) |
 | `rx_bytes` | `hex: str`, `at_us?: int` | inject raw bytes into the FW RX at a virtual time (lock-step: exact) | ✓ | both |
@@ -355,7 +408,7 @@ T = twin, S = simulator, both = both (differential tests use only "both" actions
 | `clk` | `hse_fail: bool` | `hal_clk_fallback()` at the next boot |  | T |
 | `clock` | `advance_ms?: int`, `advance_us?: int` | advance virtual time (lock-step only) | ✓ | both |
 | `reset` | `cause: "pin"\|"power"\|"iwdg"\|"software"\|"hardfault"`, `pc?: int`, `cfsr?: int` | board reset, flash kept; `hardfault` = HardFault record (seam v1.2) + reset cause SOFTWARE (M2) | ✓ (hardfault: M2) | both (hardfault: T) |
-| `query` | `what: "world"\|"pulses"\|"outputs"\|"edges"\|"seam_log"\|"wire_log"\|"sent"\|"flash"` , `since_us?: int`, `clear?: bool` (v0.6: drain after reading) | `world`: `x_um_true`, inputs, load; `pulses`: PUL count; `outputs`: ENA, RATE, LED, trip relay; `edges`: `[{t_us, pin: "PUL"\|"DIR"\|"ENA", level}]`; `seam_log`: `[{t_us, call, args}]`; `wire_log`: `[{dir, type, seq, first_us, last_us, hex}]`; `sent`: frames produced incl. dropped DATA; `flash`: write counter, records | world/pulses/outputs/edges/wire_log/sent ✓ | both (`edges`, `seam_log`: T; S returns its model equivalent where defined) |
+| `query` | `what: "world"\|"pulses"\|"outputs"\|"edges"\|"seam_log"\|"wire_log"\|"sent"\|"flash"` , `since_us?: int`, `clear?: bool` (v0.6: drain after reading) | `world`: `x_um_true`, inputs, load (v0.7.2 twin: `specimen_n`, `weight_n`, `relax_n`, `creep_counts`, `drift_counts`, `raw_ideal` = raw without noise); `pulses`: PUL count; `outputs`: ENA, RATE, LED, trip relay; `edges`: `[{t_us, pin: "PUL"\|"DIR"\|"ENA", level}]`; `seam_log`: `[{t_us, call, args}]`; `wire_log`: `[{dir, type, seq, first_us, last_us, hex}]`; `sent`: frames produced incl. dropped DATA; `flash`: write counter, records | world/pulses/outputs/edges/wire_log/sent ✓ | both (`edges`, `seam_log`: T; S returns its model equivalent where defined) |
 
 Scenario file (`bird.bend.simscenario` v1, JSON, shared by simulator and twin):
 
@@ -372,6 +425,9 @@ Scenario file (`bird.bend.simscenario` v1, JSON, shared by simulator and twin):
                {"t_ms": 5100, "action": "button", "name": "pause", "pressed": false}]
 }
 ```
+v0.7.2 scenario keys of the cell model (twin): `world.afe.drift_counts_per_s` (alias `drift_counts_per_min`, the
+simulator's name), `world.afe.creep_pct` + `creep_tau_s` (default 600 s), `world.afe.nonlin_pct_fs`, `world.weight_kg`,
+`world.specimen.relax_pct` + `relax_tau_s`.
 `params` = parameter overrides applied before the test (via SET_PARAM by the harness, not by the model).
 `schedule` entries are vocabulary actions with `t_ms`. **Default load offset 50 000 counts** (≤ 1 % FS =
 64 425 counts, the zero-balance allowance behind the FW threshold range, SRS A-02), so a default session does

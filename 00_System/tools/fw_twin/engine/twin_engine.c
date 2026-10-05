@@ -32,6 +32,7 @@ void app_loop(void);
 void twin_step_event(void);
 void twin_input_edge(uint8_t id, uint8_t level);
 void twin_deliver_deferred(void);
+static void load_update(void);
 
 /* ------------------------------------------------------------------ output */
 void tw_out(const char *fmt, ...)
@@ -58,6 +59,9 @@ void tw_flash_save(void)
 void tw_reset(const char *cause)
 {
     tw_meas_noinit_out();                     /* .noinit survives the reset (DIAG_MEAS model) */
+    load_update();                            /* world load states survive an MCU reset (replayed by twin.py) */
+    tw_out("V %.9g %.9g %.9g %llu", T.creep_counts, T.relax_n, T.drift_acc + T.drift_cps * (double)(T.now - T.drift_t) / 1e9,
+           (unsigned long long)T.now);
     tw_out("Z %s %llu %.6f", cause, (unsigned long long)T.now, tw_x_um());   /* world x persists */
     fflush(stdout);
     tw_flash_save();
@@ -112,12 +116,49 @@ static double specimen_force_n(void)
     return f;
 }
 
+/* M3 load model (ICD v0.7.2): force on the cell = specimen (elastic - relaxation) + hung weights; the cell adds
+ * creep (first order toward creep_frac x the load counts, tau creep_tau_s), non-linearity (nonlin_frac x FS x
+ * 4u(1-u), u = |F| / FS, odd in F) and a linear zero drift (counts/s). States advance with virtual time at every
+ * conversion and query; all terms are 0 by default (M1/M2 results unchanged). */
+static void load_update(void)
+{
+    if (T.now <= T.load_t) return;
+    double dt = (double)(T.now - T.load_t) / 1e9;
+    T.load_t = T.now;
+    if (T.relax_frac > 0.0 && T.relax_tau_s > 0.0) {
+        double fe = specimen_force_n();
+        T.relax_n += (T.relax_frac * fe - T.relax_n) * (1.0 - exp(-dt / T.relax_tau_s));
+    } else T.relax_n = 0.0;
+    if (T.creep_frac > 0.0 && T.creep_tau_s > 0.0) {
+        double fs = specimen_force_n();
+        double fc = T.afe_cpn * ((fs > 0.0 ? fs - T.relax_n : 0.0) + T.weight_n);
+        T.creep_counts += (T.creep_frac * fc - T.creep_counts) * (1.0 - exp(-dt / T.creep_tau_s));
+    } else T.creep_counts = 0.0;
+}
+
+static double world_force_n(void)
+{
+    double fs = specimen_force_n();
+    if (fs > 0.0) fs -= T.relax_n;
+    return fs + T.weight_n;
+}
+
+static double drift_counts(void) { return T.drift_acc + T.drift_cps * (double)(T.now - T.drift_t) / 1e9; }
+
 static int32_t afe_raw(void)
 {
     if (T.afe_script_i < T.afe_script_n) return T.afe_script[T.afe_script_i++];
     if (T.afe_saturate > 0) return 8388607;
     if (T.afe_saturate < 0) return -8388608;
-    double v = T.afe_offset + T.afe_cpn * specimen_force_n() + (T.afe_noise > 0.0 ? T.afe_noise * rnd_n() : 0.0);
+    load_update();
+    double f = world_force_n();
+    double load_c = T.afe_cpn * f;
+    if (T.nonlin_frac != 0.0 && T.fs_n > 0.0) {
+        double u = fabs(f) / T.fs_n;
+        load_c += (f < 0.0 ? -1.0 : 1.0) * T.nonlin_frac * T.afe_cpn * T.fs_n * 4.0 * u * (1.0 - u);
+    }
+    double v = T.afe_offset + load_c + T.creep_counts + drift_counts()
+               + (T.afe_noise > 0.0 ? T.afe_noise * rnd_n() : 0.0);
     double r = v >= 0.0 ? floor(v + 0.5) : -floor(-v + 0.5);       /* round half away from zero */
     if (r > 8388607.0) r = 8388607.0;
     if (r < -8388608.0) r = -8388608.0;
@@ -321,6 +362,22 @@ static void cmd_world(char *args)
         else if (!strcmp(k2, "cpn")) T.afe_cpn = v;
         else if (!strcmp(k2, "sck_overrun")) T.afe_sck_overrun = v != 0;
         else if (!strcmp(k2, "seed")) T.rng = (uint64_t)v | 1u;
+        else if (!strcmp(k2, "drift")) {                 /* "W afe drift <counts/s> [<acc> <t_ns>]" (replay) */
+            double acc; unsigned long long t0;
+            if (sscanf(a, "%*s %*f %lf %llu", &acc, &t0) == 2) { T.drift_acc = acc; T.drift_t = (vt_t)t0; }
+            else { T.drift_acc = drift_counts(); T.drift_t = T.now; }
+            T.drift_cps = v;
+        }
+        else if (!strcmp(k2, "creep")) { load_update(); double tau; if (sscanf(a, "%*s %*f %lf", &tau) == 1) T.creep_tau_s = tau; T.creep_frac = v; if (v <= 0.0) T.creep_counts = 0.0; }
+        else if (!strcmp(k2, "creep_state")) T.creep_counts = v;
+        else if (!strcmp(k2, "nonlin")) { double fs; if (sscanf(a, "%*s %*f %lf", &fs) == 1) T.fs_n = fs; T.nonlin_frac = v; }
+    }
+    else if (!strcmp(key, "weight")) { double v; if (sscanf(a, "%lf", &v) == 1) { load_update(); T.weight_n = v; } }
+    else if (!strcmp(key, "relax")) {                    /* "W relax <frac> <tau_s> [<state_n>]" */
+        double fr, tau, st;
+        int n = sscanf(a, "%lf %lf %lf", &fr, &tau, &st);
+        if (n >= 2) { load_update(); T.relax_frac = fr; T.relax_tau_s = tau; if (fr <= 0.0) T.relax_n = 0.0; }
+        if (n == 3) T.relax_n = st;
     }
     else if (!strcmp(key, "afescript")) {
         char *p = a; long v; int n;
@@ -329,7 +386,9 @@ static void cmd_world(char *args)
     }
     else if (!strcmp(key, "spec")) {
         T.spec_kind = 0; T.spec_k = T.spec_xc = T.spec_k2 = T.spec_fy = T.spec_fb = 0; T.spec_broken = false;
+        load_update();
         sscanf(a, "%d %lf %lf %lf %lf %lf", &T.spec_kind, &T.spec_k, &T.spec_xc, &T.spec_k2, &T.spec_fy, &T.spec_fb);
+        T.relax_n = 0.0;
     }
     else if (!strcmp(key, "cong")) { unsigned long long u; if (sscanf(a, "%llu", &u) == 1) T.congestion_until = u; }
     else if (!strcmp(key, "hang")) {
@@ -395,7 +454,14 @@ static void cmd_query(void)
     tw_out("Y afe_gain_pulses %u", T.afe_gain_pulses);
     tw_out("Y afe_conversions %llu", (unsigned long long)T.afe_conv_n);
     tw_out("Y afe_hold %d", T.afe_hold);
-    tw_out("Y load_n %.6f", specimen_force_n());
+    load_update();
+    tw_out("Y load_n %.6f", world_force_n());
+    tw_out("Y spec_n %.6f", specimen_force_n());
+    tw_out("Y weight_n %.6f", T.weight_n);
+    tw_out("Y relax_n %.6f", T.relax_n);
+    tw_out("Y creep_counts %.6f", T.creep_counts);
+    tw_out("Y drift_counts %.6f", drift_counts());
+    tw_out("Y load_raw_ideal %.3f", T.afe_offset + T.afe_cpn * world_force_n() + T.creep_counts + drift_counts());
     tw_out("Y rx_overruns %lu", (unsigned long)T.rx_overruns);
     tw_out("Y rx_pending %u", T.rx_wr - T.rx_rd);
     tw_out("Y flash_writes %lu", (unsigned long)T.flash_writes);
@@ -416,6 +482,7 @@ static void init_defaults(void)
     T.spm_world = 800.0;
     T.afe_on = true; T.afe_rate_sps = 80;                    /* RATE external pull-up: 80 SPS from reset */
     T.afe_cpn = 3285.0; T.afe_offset = 50000.0; T.afe_noise = 0.0;
+    T.fs_n = 1961.33;                                        /* 200 kg cell (R2 §3) */
     T.next_sample = VT_NEVER;
     T.rng = 0x9E3779B97F4A7C15ull;
     T.break_type = -1;
@@ -463,6 +530,7 @@ int main(int argc, char **argv)
     FILE *f = fopen(T.flash_path, "rb");
     if (f) { size_t n = fread(T.flash, 1, FLASH_SIZE, f); (void)n; fclose(f); }
     T.now = T.boot_ns;
+    T.load_t = T.boot_ns;
     T.next_tick = T.boot_ns + 1000000ull;
     T.hang_main_until = 0; T.hang_tick_until = 0;
 

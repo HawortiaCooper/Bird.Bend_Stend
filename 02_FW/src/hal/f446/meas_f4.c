@@ -48,6 +48,7 @@
 #include "le.h"
 #include "meas_dwt.h"
 #include "proto_gen.h"
+#include "stampring.h"
 
 #define PRIO_MEAS 15u                         /* below the link (5): never delays the FW */
 #define RING      2048u                       /* stamps per channel (INFO w4) */
@@ -73,6 +74,7 @@ static DMA_Stream_TypeDef *const s_dma[4] = {DMA2_Stream2, DMA2_Stream3, DMA2_St
 static volatile uint32_t s_laps[4];
 static volatile uint32_t s_cnt_hi;
 static volatile bool     s_armed, s_pwm;
+static volatile bool     s_pwm_first;            /* DEF-HG-01: next PWM-input capture is the first after arming */
 static volatile uint32_t s_pwm_min_p, s_pwm_max_p, s_pwm_min_h, s_pwm_max_h, s_pwm_n;
 static uint32_t s_pul_at_arm;
 static volatile uint32_t s_stim_left, s_stim_seed, s_stim_hold, s_stim_pol;
@@ -110,18 +112,6 @@ static uint32_t stamps_total(uint8_t ch)
     return laps * RING + idx;
 }
 
-/* newest stamp of a ring written from index 0 by one boot only: the entry before the single descent
- * (wrap-safe signed difference); no descent -> the last entry (0 when the ring is empty) */
-static uint32_t ring_newest(const uint32_t *r)
-{
-    uint32_t i;
-    for (i = 0u; i + 1u < RING; i++) {
-        if ((int32_t)(r[i + 1u] - r[i]) < 0) {
-            return r[i];
-        }
-    }
-    return r[RING - 1u];
-}
 
 #if defined(HW_MEAS_DWT) && HW_MEAS_DWT
 /* ---------------- DWT section statistics (OI-FW-37) ---------------- */
@@ -222,6 +212,7 @@ static void probe_arm(uint8_t mode, bool falling, uint16_t psc)
     TIM8->CNT = 0u;
     s_pwm = mode == (uint8_t)MEAS_MODE_PWM_INPUT;
     s_pwm_min_p = s_pwm_max_p = s_pwm_min_h = s_pwm_max_h = s_pwm_n = 0u;
+    s_pwm_first = true;
     if (s_pwm) {
         TIM8->CCMR1 = TIM_CCMR1_CC1S_1 | TIM_CCMR1_CC2S_0;              /* IC1 <- TI2 (fall), IC2 <- TI2 */
         TIM8->CCMR2 = 0u;
@@ -261,6 +252,12 @@ void TIM8_CC_IRQHandler(void)                 /* PWM-input statistics (lowest pr
     }
     p = TIM8->CCR2;                           /* period (clears CC2IF) */
     h = TIM8->CCR1;                           /* high width of the previous pulse */
+    if (s_pwm_first) {
+        /* DEF-HG-01: the first rising edge after arming measures the time since arming (CCR2) and a
+         * stale CCR1 - not a PUL period / width; it only starts the measurement (not counted) */
+        s_pwm_first = false;
+        return;
+    }
     if (s_pwm_n == 0u || p < s_pwm_min_p) {
         s_pwm_min_p = p;
     }
@@ -287,7 +284,7 @@ void meas_start(void)                         /* strong definition of board_init
         s_ni.magic = PROTO_MEAS_MAGIC;
     } else {                                  /* DEF-M2-02: keep the previous boot's record */
         s_ni.prev_valid = 1u;
-        s_ni.prev_pul_t_us = ring_newest(s_ni.ring[MEAS_CHAN_PUL]);
+        s_ni.prev_pul_t_us = stampring_newest(s_ni.ring[MEAS_CHAN_PUL], RING);   /* OBS-M2-08: pure */
         s_ni.prev_heartbeat_t_us = s_ni.heartbeat_t_us;
         s_ni.prev_hang_t_us = s_ni.hang_t_us;
         s_ni.boots++;

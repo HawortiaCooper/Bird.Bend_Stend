@@ -42,10 +42,14 @@ static void test_h2_load_limits(void)
 
 static void test_h3_step_timing_u64(void)
 {
-    params_set_defaults(&P);                                             /* 50 kHz, 10 us + 10 us */
-    TEST_ASSERT_EQUAL_UINT16(0u, set(PID_MOTION_MAX_STEP_RATE_HZ, 50000u));      /* = 1e9 exactly */
+    params_set_defaults(&P);                     /* dict 6 (D-45 e): 40 kHz, 12.5 us + 12.5 us */
+    TEST_ASSERT_EQUAL_UINT16(0u, set(PID_MOTION_MAX_STEP_RATE_HZ, 40000u));      /* = 1e9 exactly */
+    TEST_ASSERT_EQUAL_UINT16(PID_MOTION_PULSE_HIGH_NS, set(PID_MOTION_MAX_STEP_RATE_HZ, 40001u));
+    TEST_ASSERT_EQUAL_UINT16(PID_MOTION_MAX_STEP_RATE_HZ, set(PID_MOTION_PULSE_HIGH_NS, 12501u));
+    P.motion.pulse_high_ns = 10000u;                                     /* the v0.7.1 defaults */
+    P.motion.pulse_low_min_ns = 10000u;
+    TEST_ASSERT_EQUAL_UINT16(0u, set(PID_MOTION_MAX_STEP_RATE_HZ, 50000u));
     TEST_ASSERT_EQUAL_UINT16(PID_MOTION_PULSE_HIGH_NS, set(PID_MOTION_MAX_STEP_RATE_HZ, 50001u));
-    TEST_ASSERT_EQUAL_UINT16(PID_MOTION_MAX_STEP_RATE_HZ, set(PID_MOTION_PULSE_HIGH_NS, 10001u));
     TEST_ASSERT_EQUAL_UINT16(PID_MOTION_MAX_STEP_RATE_HZ, set(PID_MOTION_PULSE_LOW_MIN_NS, 100000u));
     P.motion.max_step_rate_hz = 100u;                                    /* 100 * 200000 = 2e7 */
     TEST_ASSERT_EQUAL_UINT16(0u, set(PID_MOTION_PULSE_HIGH_NS, 100000u));

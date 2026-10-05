@@ -179,7 +179,8 @@ def test_stop_pause_resume_clear_on_simulator(sim_window, sim_backend, qtbot) ->
     Resume clears it; app-shortcut HALT (global hotkey unavailable in M1) → HALT banner; Clear stop clears it."""
     win = sim_window
     qtbot.mousePress(win.stop_button, Qt.MouseButton.LeftButton)
-    assert "STOP sent (toolbar" in win.stop_banner.top_text()
+    # M3: the first-use row (no calibration / tare, SAF-SW-001) outranks the "sent" row (§2.3 severity order)
+    assert any("STOP sent (toolbar" in r.text for r in win.stop_banner.rows)
     qtbot.waitUntil(lambda: win.pause_button.isEnabled(), timeout=3000)
     qtbot.mousePress(win.pause_button, Qt.MouseButton.LeftButton)
     qtbot.mouseRelease(win.pause_button, Qt.MouseButton.LeftButton)

@@ -2,7 +2,8 @@
 ``00_System/tools/README.md`` (same action names, arguments and reply shape as the FW twin's control port):
 ``act(action, **args) -> {"ok": True, ...} | {"ok": False, "error": ...}``. Twin-only actions answer
 ``{"ok": False, "error": "twin only"}``. Test-only extras (never used by behavioural-equality tests):
-``override_status``, ``emit_event``, ``inject_nack``, ``inject_store_mismatch`` (SW_design §12.4).
+``override_status``, ``emit_event``, ``inject_nack``, ``inject_store_mismatch`` (SW_design §12.4) and the M3 load
+model ``set_cell_load`` / ``set_afe_drift`` (§15.5e B5-17).
 
 Also the scenario file ``bird.bend.simscenario`` v1 (world, params, schedule).
 
@@ -29,10 +30,11 @@ VOCABULARY: Mapping[str, str] = {
     "world_shift": "both", "inject": "both", "rx_bytes": "both", "on_frame": "both", "on_event": "both",
     "flash": "T", "iwdg": "T", "clk": "T", "clock": "both", "reset": "both", "query": "both",
     "driver": "T",                       # v0.6: S variant (DIR wiring inversion, automatic PEND)
+    "weight": "T",                       # v0.7.2: known masses on the cell (S: implemented, finding SWC-M3-02)
 }
 TWIN_ONLY_INJECT = {"isr_storm"}
 #: twin actions the simulator answers in its own variant (README: ``flash`` "T (S: record-level cut)")
-SIM_VARIANTS = frozenset({"flash", "driver"})
+SIM_VARIANTS = frozenset({"flash", "driver", "weight"})
 RESET_CAUSES = {"pin": pg.ResetCause.PIN, "power": pg.ResetCause.POWER_ON, "iwdg": pg.ResetCause.IWDG,
                 "software": pg.ResetCause.SOFTWARE}
 
@@ -144,12 +146,32 @@ class SimControl:
     def _a_load_offset(self, counts: int) -> None:
         self.board.afe.offset_counts = int(counts)
 
+    def _a_weight(self, kg: float | None = None, n: float | None = None, g_mps2: float = 9.80665) -> dict[str, Any]:
+        """v0.7.2: known masses hung on the cell (+ = tension), adds to the specimen force; 0 = removed."""
+        f = float(n) if n is not None else float(kg or 0.0) * float(g_mps2)
+        b = self.board
+        w = b.world
+        w.cell_load_n, w.swing_n = f, 0.0
+        return {"weight_n": f}
+
     def _a_afe(self, rate_error: float | None = None, noise_counts: float | None = None, stall: bool | None = None,
                saturate: str | None = "unset", drop_every: int | None = None, miss_next: int | None = None,
-               sck_overrun: bool | None = None, raw_script: list[int] | None = None) -> None:
+               sck_overrun: bool | None = None, raw_script: list[int] | None = None,
+               drift_counts_per_s: float | None = None, creep_pct: float | None = None,
+               creep_tau_s: float | None = None, nonlin_pct_fs: float | None = None, fs_n: float | None = None) -> None:
         a = self.board.afe
         if sck_overrun is not None:
             raise ValueError("sck_overrun: twin only")
+        if drift_counts_per_s is not None:                      # v0.7.2 cell terms (side T, simulator optional)
+            a.set_drift(60.0 * float(drift_counts_per_s), self.board.now_us())
+        if creep_pct is not None:
+            a.creep_pct = float(creep_pct)
+        if creep_tau_s is not None:
+            a.creep_tau_s = float(creep_tau_s)
+        if nonlin_pct_fs is not None:
+            a.nonlin_pct_fs = float(nonlin_pct_fs)
+        if fs_n is not None:
+            a.fs_n = float(fs_n)
         if rate_error is not None:
             a.rate_error = float(rate_error)
         if noise_counts is not None:
@@ -258,7 +280,10 @@ class SimControl:
                         "drv_power": w.power_present(), "limit_start": w.limit_start(xt),
                         "limit_end": w.limit_end(xt), "pause": w.pause_btn,
                         "alm": w.alm, "pend": w.pend, "load_n": b._force_n(),  # noqa: SLF001
-                        "raw_last": b.last_raw, "steps": b.steps}
+                        "raw_last": b.last_raw, "steps": b.steps,
+                        "specimen_n": w.specimen.force_n(xt), "weight_n": w.cell_load_n,
+                        "creep_counts": b.afe.creep_counts, "drift_counts": b.afe.offset_at(b.now_us())
+                        - b.afe.offset_counts}
             if what == "pulses":
                 return {"pul_count": b.pulses, "pos_steps": b.pos_steps}
             if what == "outputs":
@@ -293,6 +318,26 @@ class SimControl:
         if key not in pgen.BY_KEY:
             raise KeyError(key)
         self.board.store_mismatch[key] = stored_value
+
+    def set_cell_load(self, force_n: float | None = None, *, mass_kg: float | None = None, swing_n: float = 0.0,
+                      swing_tau_s: float = 1.0, swing_hz: float = 1.5, g: float = 9.80665) -> dict[str, Any]:
+        """M3 calibration load model (test-only, outside vocabulary v2): weights hanging on the cell (+ = tension),
+        ``mass_kg`` → ``m·g``; ``swing_n`` = amplitude of a decaying swing starting now (R4 §6.1 pre-settle)."""
+        f = float(mass_kg) * float(g) if mass_kg is not None else float(force_n or 0.0)
+        b = self.board
+        with b._lock:  # noqa: SLF001
+            w = b.world
+            w.cell_load_n, w.swing_n, w.swing_tau_s, w.swing_hz = f, float(swing_n), float(swing_tau_s), float(swing_hz)
+            w.swing_t0_us = b.now_us()
+        self.log.append({"action": "set_cell_load", "force_n": f, "swing_n": swing_n})
+        return {"ok": True, "force_n": f}
+
+    def set_afe_drift(self, counts_per_min: float) -> dict[str, Any]:
+        """Offset drift of the simulated cell (counts/min, R4 §11), test-only."""
+        b = self.board
+        with b._lock:  # noqa: SLF001
+            b.afe.set_drift(float(counts_per_min), b.now_us())
+        return {"ok": True}
 
     # ---------------------------------------------------------------------------------------- typed wrappers
     def set_estop(self, open: bool, **kw: Any) -> dict[str, Any]:  # noqa: A002
@@ -363,6 +408,19 @@ class SimScenario:
             board.afe.noise_counts = float(afe["noise_counts"])
         if "rate_sps" in afe:
             board.afe.rate_sps = float(afe["rate_sps"])
+        if "drift_counts_per_min" in afe:
+            board.afe.set_drift(float(afe["drift_counts_per_min"]), board.now_us())
+        if "cell_load_n" in w:
+            board.world.cell_load_n = float(w["cell_load_n"])
+        for k in ("creep_pct", "creep_tau_s", "nonlin_pct_fs", "fs_n"):
+            if k in afe:
+                setattr(board.afe, k, float(afe[k]))
+        if "drift_counts_per_s" in afe:
+            board.afe.set_drift(60.0 * float(afe["drift_counts_per_s"]), board.now_us())
+        if "motion.steps_per_mm" in self.params:              # the mechanics follow the scenario (SWC-M3-03)
+            bw.steps_per_mm = float(self.params["motion.steps_per_mm"])
+        if "steps_per_mm" in w:
+            bw.steps_per_mm = float(w["steps_per_mm"])
         drv = w.get("driver", {})
         if "drv_power" in drv:
             bw.drv_power = bool(drv["drv_power"])

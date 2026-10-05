@@ -2,10 +2,10 @@
 
 | Doc | SW_design_GUI |
 |---|---|
-| Version | **0.4.1 — M1 as built (§15.1) + D-38 plot panes (SW-RT-006, §4.7) + M2 backend alignment (§11.1d, D-41)** |
-| Date | 2026-10-04 |
+| Version | **0.5 — M3 (SW application) GUI as built (§15.2, §15.3): Manual, Safety limits, Test marks, Calibration & Tare tabs, travel / load wizards, TARE popup, Pause/Break key test, units N / kgf, K1 chip (M2 gate condition); M3 backend alignment (§11.1e, B5-01…17)** · 0.4.1 — M1 as built (§15.1) + D-38 plot panes (SW-RT-006, §4.7) + M2 backend alignment (§11.1d, D-41) |
+| Date | 2026-10-05 |
 | Owner | Implementer D — GUI (`03_SW/src/bend_stand/gui/**` incl. `gui/__init__.py`, `gui/app.py`; `03_SW/tests/gui/**`; this document) |
-| Binding inputs | `00_System/specs/SRS.md` **v0.4** (SW-*, SAF-SW-*, NFR-*; same IDs as v0.3, D-30…D-33 wording incl. SW-STOP-004 RESUME and the SW-SEQ-005 refusal list), `DECISIONS.md` D-01…D-33 (esp. D-11, D-14, D-23, D-26, D-28, D-29 a/h/i/n, **D-30, D-31, D-32, D-33**; **D-27 closed** per Orchestrator 2026-10-03: driver 4000 p/rev closed loop → nominal 800 steps/mm), `ICD_protocol.md` **v0.4** (RESUME 0x3C, D-31) and the generated name tables `03_SW/src/bend_stand/core/protocol_gen.py` (ICD v0.4, PROTO 1.0, PAYLOAD 1), `params.yaml` (`motion.steps_per_mm` default 800, D-27 closed), R3 §6 (Thrust_Stand GUI solutions, perf defect SWD-PM3-05), R1 §7 (Stefan `stepper_gui` patterns), R4 §5–§8, §10 |
+| Binding inputs | **M3: SRS v0.6.1, ICD v0.7.1 (dict 5), DECISIONS D-01…D-44, `SW_design.md` v0.5 §15.5e (B5-01…17).** Earlier rounds: `00_System/specs/SRS.md` **v0.4** (SW-*, SAF-SW-*, NFR-*; same IDs as v0.3, D-30…D-33 wording incl. SW-STOP-004 RESUME and the SW-SEQ-005 refusal list), `DECISIONS.md` D-01…D-33 (esp. D-11, D-14, D-23, D-26, D-28, D-29 a/h/i/n, **D-30, D-31, D-32, D-33**; **D-27 closed** per Orchestrator 2026-10-03: driver 4000 p/rev closed loop → nominal 800 steps/mm), `ICD_protocol.md` **v0.4** (RESUME 0x3C, D-31) and the generated name tables `03_SW/src/bend_stand/core/protocol_gen.py` (ICD v0.4, PROTO 1.0, PAYLOAD 1), `params.yaml` (`motion.steps_per_mm` default 800, D-27 closed), R3 §6 (Thrust_Stand GUI solutions, perf defect SWD-PM3-05), R1 §7 (Stefan `stepper_gui` patterns), R4 §5–§8, §10 |
 | Backend contract | **`03_SW/docs/SW_design.md` v0.3 §15** (Implementer B): facade `core.backend.Backend` (§15.1), `BackendStatus` (§15.2), topics (§15.3), GUI rules (§15.4), **API delta A-01…A-25 (§15.5) and B3-01…B3-21 (§15.5a)**, result types (§15.6), answers to GRQ-B-01…18 (§15.7) and GF-11…17 (B3-16…B3-21); plus B §5.4–§5.6, §5.5.1, §6.5, §6.7, §9.1, §9.3.1, §10. Where the two documents differ, B §15 wins and this file is updated. |
 | Generated names | Every bit, fault, flag, source, event, stop-cause and phase name shown or iterated by the GUI comes from `core.protocol_gen` (`DATA_FLAGS_BITS`, `DATA_STATUS_BITS`, `FAULTS_BITS`, `SYS_FLAGS_BITS`, `BLOCK_BITS`, `SOURCE_NAMES`, `EVENT_NAMES`, `STOP_CAUSE_NAMES`, `MOVE_DONE_REASON_NAMES`, `HOME_PHASE_NAMES`, `MOTION_STATE_NAMES`, `DRIVER_DISABLED_CAUSE_NAMES` and their `*_DESC`); nothing is hand-listed (P8, GF-08). |
 | Reference code (read-only, D-02) | `Thrust_Stand_HAW/03_SW/src/thrust_stand/gui/**` and `io/win_hotkey.py`, cited as `TS:path:line` at **9473c68**; copies are taken from the TS HEAD current at copy time and the copied hash is written into the origin note (D-29 m, SYS-010). `Stefan/SW/stepper_gui/gui.py` (cited via R1 §7) |
@@ -170,7 +170,7 @@ All clear texts are the backend's `clear_hint` (B §6.5), so the GUI holds no st
 | LOAD | LOAD_LIMIT; sw `sw_trip`, `safety.warnings` | UNKNOWN / no valid load input | ok | ≥ warning level (90 %) | FW LOAD_LIMIT or SW trip | `clear_hint`, last value | SAF-SW-005, SW-LIM-002 |
 | FAULT | FAULT + every name of `FAULTS_BITS` not shown elsewhere (STEP_FAULT, HOME_NOT_FOUND, HOME_WIRING, **HOME_DRIFT**, AFE_FAULT, LOAD_LIMIT, LIMIT_WIRING) | UNKNOWN | none | – | ON, text = latched names, e.g. "FAULT HOME_DRIFT 350 µm" | per fault `FAULTS_DESC` + `clear_hint` | SAF-SW-005, FW-HOM-004 |
 | DRV | DRV_PWR | UNKNOWN | ON (power present) | – | OFF "driver unpowered – position lost" | `clear_hint` | SAF-SW-005, FW-SW-005 |
-| K1 | K1_WELDED | UNKNOWN | OFF | – | ON "K1 WELDED" | `clear_hint` | SAF-SW-005, SAF-FW-025 |
+| K1 | K1_WELDED | UNKNOWN | OFF | – | ON "K1 WELDED" | `clear_hint`; **hidden while the board reports `drv.k1_check_enable` = false** (CR-03 / D-41 / D-43 e: no contactor, the check never runs; M2 gate condition) — an active K1_WELDED is never hidden; without board values the chip shows the indicator state (UNKNOWN grey) | SAF-SW-005, SAF-FW-025 |
 | AFE | AFE_STALE, AFE_SATURATED, AFE_SETTLING, AFE_RATE_MISMATCH (+ measured rate), NO_AFE_DATA; sw `afe_synthetic` | UNKNOWN | ok + rate | settling, rate mismatch, synthetic (M1 FW) | stale, saturated, no AFE data | `clear_hint` | SAF-SW-005, FW-AFE-004 |
 | WDG | LINK_WDG | UNKNOWN | OFF | – | ON | clears at the next valid frame | SAF-SW-005 |
 | NOSPEC | sw `no_specimen_mode` | – | – (hidden when OFF) | ON "NO-SPECIMEN" | – | §2.8 | SW-LIM-004, SAF-SW-005 |
@@ -1048,6 +1048,7 @@ HotkeyTestDialog
   indicator_map.py       pure display table keyed by protocol_gen names -> chip, polarity, level (unit-tested, G-39)
   refresh.py             RefreshScheduler: the single 33 ms PreciseTimer, gui_beat(), stage timing, perf_stats()
   format.py              display formatting only (decimals per unit, thousands separators, n/a)
+  units_state.py         process-wide display unit of force N / kgf (View > Units, SYS-003; display only)
   main_window.py         QMainWindow: toolbar, banner stack, tabs, docks, indicator bar, menus, close rules
   widgets/
     stop_button.py       StopButton (large/compact)                                (copy TS widgets/estop_button.py)
@@ -1063,9 +1064,8 @@ HotkeyTestDialog
     param_form.py        ParamForm (dictionary-generated editors, locked session rows, R flag)  (adapt TS widgets/param_form.py)
     endpoint_selector.py EndpointSelector (backend.endpoints())                     (adapt TS widgets/port_selector.py)
     target_slider.py     TargetSlider (handle-drag only, move_to on release, live marker)
-    hold_button.py       HoldButton (press -> jog_start; release/focus loss -> jog_stop)
-    step_buttons.py      StepButtons (-10 ... +10 mm -> move_by)
-    unit_spin.py         QDoubleSpinBox with unit; motion.check colouring
+    hold_button.py       HoldButton (press -> jog_start; release/focus loss/hide/disable/forced -> jog_stop once)
+                         (as built M3: step buttons and the checked spin boxes live in tabs/manual_tab.py)
     event_log.py         EventLogDock (EVENT_NAMES / *_DESC decoding)
   dialogs/
     safe_dialog.py       SafeDialog (top bar: hint, NO-SPECIMEN tag, STOP), SafeMessageBox, SafeFileDialog (copy TS dialogs/safe_dialog.py)
@@ -1073,15 +1073,16 @@ HotkeyTestDialog
     clear_stop_dialog.py ClearStopDialog (clear_stop / estop_clear / fault_clear rows; sequence-PAUSED alternative)
     status_help.py       StatusHelpDialog (indicator meanings from *_DESC + clear_hint)
     link_stats.py        LinkStatsDialog                                            (adapt TS dialogs/link_stats.py)
-    hotkey_test.py       HotkeyTestDialog (A-04; KL-01 text)
+    hotkey_test.py       HotkeyTestDialog (A-04; KL-01 text; result from topic hotkey.test)
     file_report.py       report dialog for BoardConfigFile / FileFormatError
     tare_popup.py        TarePopup (incl. Undo tare)
     about.py
   wizards/
-    safe_wizard.py       SafeWizard frame (PHASES step strip, EngineState rendering, button policy)
-    phase_views.py       phase -> view widget table (completeness-tested against engine PHASES)
-    travel_cal.py        phase views CHECK ... RESULT, RESTORING
-    load_cal.py          phase views CONFIG ... DONE (capture + point result shared; finish early, re-take)
+    safe_wizard.py       SafeWizard frame (start page, PHASES step strip, generic EngineState page, button policy,
+                         C-05/C-06/C-08/C-12)
+    phase_views.py       phase -> view kind table (completeness-tested against engine PHASES), generic result display
+    travel_cal.py        TravelCalWizard (start page text; pages rendered from the engine)
+    load_cal.py          LoadCalWizard (n_points / pre-settle / capture; finish early, re-take)
     schema_form.py       form builder from GeneratorSchema / FieldSpec (A-20)
     generator.py         pages G1 ... G3
   tabs/
@@ -1339,6 +1340,29 @@ Not automatable or only partly automatable: perceived smoothness and readability
 | B4-08 | `ChannelSpec.dimension` | used first for the pane quantity groups (§4.7); GRQ-B-21 closed |
 | B4-09…11 | NVM quiesce, manual speed / accel session defaults, `test_hooks.hotkey_press` | no GUI change in this round |
 
+### 11.1e Adoption of the API delta v0.4.1 → v0.5 (B §15.5e, M3 backend)
+
+No Protocol signature change; the fake conformance test stays green. The GUI was written against the Protocols +
+fakes first and then aligned to B's M3 working tree of 2026-10-05 (engines, session, limits, tare already wired).
+
+| B5 | Change | GUI adoption | Section |
+|---|---|---|---|
+| B5-01 | `limits.set` validates the whole `LimitConfig`, stores it in the session, rewrites the FW thresholds on a level change | Safety-limits tab: [Apply] → issues per field (`Issue.key` = the `LimitConfig` field name; other keys in a general line); [Revert] re-reads `limits.get()` | §3.2, §15.2 |
+| B5-02 | `set_no_specimen_mode` real; CONFIRM `NO_SPECIMEN_CONFIRM`; topic `safety.no_specimen` payload **bool** | C-10 always before `set_no_specimen_mode(True, confirmed=True)` (gate CONFIRM text shown, live threshold state); toasts on the bool payload | §2.8, §3.2 |
+| B5-03 | motion gates: `PC_LOAD_LIMITS_OFF` gone; REFUSE `LOAD_INPUT_INVALID`, `THRESHOLDS_UNVERIFIED`, `OWNER_CONFLICT`, `SW_TRIP`; WARN `NO_SPECIMEN_MODE`, `SAF_SW_006_MARGIN`, `TRAVEL_CAL_DIFFERS` | verbatim: Manual-tab gate line / tooltips / parameter messages; limits-tab motion-disabled notice; first-use stop-banner row with [Enter no-specimen mode…]; wizard start page with [Enter no-specimen mode…] | §2.3, §3.2, §3.4, §6.1 |
+| B5-04/05/06 | `SafetyStatus.sw_trip` / `trip: SwTrip`; `safety.trip` / `safety.warning` payloads | stop-banner SW-trip row uses `trip.text` + the clear procedure; `safety.trip` toast | §2.3 |
+| B5-07 | tare engine real (phases, `TareResult`, refusals in `errors`, "large offset" warning) | TARE popup: refusal verbatim, progress + stats, [Repeat], DONE result line, [Keep] / [Undo tare], auto-close | §6.4 |
+| B5-08 | `load_cal.start(*, n_points=3, presettle_s, capture_s, g)`; masses per point (`InputSpec mass_kg`); `LoadCalResult` (K, B, residuals, r2, NL, status, low_span; no point table) | start page: points / pre-settle / capture (session defaults), LOW_SPAN info box; FIT page: summary + **residual plot** (GRQ-B-25 for the point table); re-take menu from `step_count` | §6.3 |
+| B5-09 | `travel_cal.start(*, v_mm_s=None)`; inputs `d1_mm` / `dtot_mm`; confirmation codes `SPM_CHANGE_20/5`, `SPM_EXPECTED`; `TravelCalResult` | generic page rendering: generated inputs, C-05 with the engine text, result summary from the dataclass, RESTORING page | §6.2 |
+| B5-10 | calibration store real; `CalibrationStatus.load_invalid_reason / f_cal_max_n / load_file`; `TravelDiffState.source / ignored` | Calibration tab: active record verbatim, history list (SafeMessageBox), travel-difference buttons from `actions` | §3.5 |
+| B5-11 | session real (`*.bbsession.json`); new `SessionSettings` fields (`cal_*`, `bend3p`, `compliance_mm_per_n`, `tare_window_s` 10 s) | File ▸ Open session… / Save session as… (SafeFileDialog, STOP inside); load-wizard defaults from `cal_presettle_s` / `cal_capture_s`; Manual speed / accel and the display unit stored in the session; 3-point-bend group on the Test-marks tab writes `bend3p` (enabled once `core.api` exports `Bend3pGeometry`, GRQ-B-24) | §2.5, §3.3, §3.4 |
+| B5-12 | `marks.set` raises `ValueError` for empty / duplicate custom keys; presets in `<data>/presets` | the tab marks such rows red and does not send them; a `ValueError` is shown verbatim | §3.3 |
+| B5-13 | `take_sample` real, `sample.taken` → `SampleRow` | toast "F̄ = … N, σ …, N …; x̄ …; raw … → file" | §2.2 |
+| B5-14 | recording complete | no GUI change (REC chip / failure banner from M1) | – |
+| B5-15 | force and derived channels with availability; EXTRAPOLATED `vstate` | readouts swap `F_N` / `F_kgf` with View ▸ Units; the X-Y pane switches y to force once available (unless the operator picked y) | §4.3, §4.7 |
+| B5-16 | test zero resets work / peak | none | – |
+| B5-17 | `sim.set_cell_load`, `set_afe_drift` (test only) | GUI simulator tests of the load wizard + tare (`test_sim_calibration.py`) | §10 |
+
 ### 11.2 Contract used (summary by GUI element)
 | GUI element | Backend API used | B § |
 |---|---|---|
@@ -1371,7 +1395,19 @@ Not automatable or only partly automatable: perceived smoothness and readability
 
 **Clarifications (v0.2; GF-11, GF-12, GF-14, GF-17) — all answered by B3-01/03/16/17, B3-18, B3-20, B3-21:** `Backend.resume()` sends RESUME 0x3C (D-31) and the `resume` gate REFUSEs also for ESTOP / FAULT latched, with `GateItem.code` = generated `BLOCK_BITS` name; `Indicators` item names = lower-case generated names (`stop_btn`, `pause_btn`); `main()` constructs but does not start the Backend and exposes the endpoint for `run()`; engine `start(..., confirmed=True)` is the kwarg for start-gate CONFIRM items.
 
-**Remaining API gaps: none.**
+**M3 requests (2026-10-05) — to Implementer B:**
+
+| ID | Request | Why (GUI element) | MS | Status |
+|---|---|---|---|---|
+| GRQ-B-23 | **Engine `start()` must honour `confirmed`** (B §15.4 rule 6, B3-20): when the start gate has CONFIRM items and `confirmed` is not True, `travel_cal.start` / `load_cal.start` should return the items **without starting**. Today they start at once and ignore `confirmed=True` (`**_kw`), so a repeated `start(confirmed=True)` hits "already running". The GUI is defensive meanwhile: C-12 is shown, declining it cancels the already started engine, confirming does not call `start` again | C-12 (wizard start; "no specimen mounted" when the load is unknown) | M3 | open |
+| GRQ-B-24 | **Export the new M3 types from `core.api`** (`Bend3pGeometry`, `SampleRow`, `SwTrip`, `SafetyWarning`, `TareResult`, `TravelCalResult`, `LoadCalResult`); the GUI imports only `core.api` (G-01). The 3-point-bend group stays disabled until `Bend3pGeometry` is exported | Test marks 3-point bend; toasts | M3 | open |
+| GRQ-B-25 | `LoadCalResult` (or the FIT `EngineState.stats`) to carry the **per-point table** (mass, F_ref, raw mean, residual) so the FIT page can show the points and the fitted line (§6.3); today only `residuals` exist → residual plot | load wizard FIT page | M3 | open (non-blocking) |
+| GRQ-B-26 | `LimitsAPI` Protocol in `core.api`: add `check(cfg)`, `set_manual_thresholds_async(raw_min, raw_max, zero_raw=0)` and `set_default_thresholds_async()` (B4-04: implemented on the backend, not in the Protocol; the GUI uses them via `getattr`) | Safety-limits tab | M3 | open (non-blocking) |
+| GRQ-B-27 | `MarksAPI.delete_preset(path)` (§3.3 [Delete]); the GUI offers no Delete until it exists | Test-marks presets | M4 | open (optional) |
+| OBS-D-M3-01 | (info, to B and F) A real `Backend` started by the GUI tests once read a session from the **default data directory** (travel limits 1…5 mm enabled, written by another test run). Every suite that builds a real `Backend` should set `data_dir` / `BEND_STAND_DATA_DIR` to a temporary directory; the GUI suite now does (conftest) | test isolation | M3 | info |
+
+**Remaining API gaps (M1–M2): none.**
+
 
 ---
 
@@ -1459,7 +1495,7 @@ Legend for "Share": **G** = GUI-owned; **S** = shared (the GUI triggers and disp
 | NFR-003 | Hotkey thread (backend), independent of the GUI; test mode | §5.3 | – (backend), hotkey_test | B | P-03, G-42 |
 | NFR-004 | GUI memory/GC behaviour over 1 h; deadlock stress | §9.4 | gc_policy | S | P-05, G-35 |
 
-**Coverage:** all **61** SW-* requirements of SRS v0.5.1 (incl. SW-LIM-004 and SW-RT-006, D-38), all 6 SAF-SW requirements, NFR-001…004 and the GUI-facing SYS-003, SYS-008, SYS-010, IF-008 and IF-011 (= 75 IDs) have a GUI design element and at least one GUI test, demonstration or inspection. NFR-005…008 are FW-only.
+**Coverage (M3 as-built map: §12.3):** all **61** SW-* requirements of SRS v0.5.1 (incl. SW-LIM-004 and SW-RT-006, D-38), all 6 SAF-SW requirements, NFR-001…004 and the GUI-facing SYS-003, SYS-008, SYS-010, IF-008 and IF-011 (= 75 IDs) have a GUI design element and at least one GUI test, demonstration or inspection. NFR-005…008 are FW-only.
 
 ### 12.2 FW / IF features surfaced in the GUI (display only)
 | Req | GUI element |
@@ -1479,6 +1515,45 @@ Legend for "Share": **G** = GUI-owned; **S** = shared (the GUI triggers and disp
 | FW-STR-005 | NO_AFE_DATA bit channel; NO_DATA gaps in plots |
 | FW-HOM-002 | homing fault banners and `clear_hint`; HOME_FAILED reason names |
 | SAF-FW-021 | C-01 sends the operator-confirmed flag (`load_confirmed=True`) |
+
+### 12.3 M3 verification map (as built, 2026-10-05)
+
+Tests are in `03_SW/tests/gui/`; `fake` = FakeBackend, `sim` = B's real Backend + in-process simulator (lock-step).
+
+| Req | Tests (file :: test) |
+|---|---|
+| SW-MAN-001 | test_manual_tab :: test_slider_drag_sends_nothing_release_sends_one_move, test_slider_mouse_handle_drag_and_groove_click, test_slider_disabled_by_move_gate · test_sim_manual :: test_manual_slider_jog_test_zero |
+| SW-MAN-002 | test_manual_tab :: test_goto_and_step_buttons, test_ticket_outcomes_shown · test_sim_manual :: test_manual_enable_home_steps_goto |
+| SW-MAN-003 | test_manual_tab :: test_goto_and_step_buttons · test_sim_manual :: test_manual_enable_home_steps_goto |
+| SW-MAN-004 | test_manual_tab :: test_hold_to_jog_press_release, test_jog_stops_once_on_focus_loss[5 cases], test_gui_beat_every_tick · test_sim_manual :: test_manual_slider_jog_test_zero |
+| SW-MAN-005 | test_manual_tab :: test_speed_accel_caps_and_margin_warning, test_jog_speed_above_unhomed_cap_refused, test_stop_on_manual_tab |
+| SW-MAN-006 | test_manual_tab :: test_enable_checkbox_follows_fw, test_disable_needs_c02, test_home_confirm_c01, test_test_zero_and_valid, test_position_force_readouts · test_sim_manual (enable, HOME, test zero) |
+| SW-LIM-001 | test_limits_marks_tabs :: test_limits_apply_sends_config, test_limits_issues_shown_per_field · test_sim_manual :: test_limits_tab_applies_travel_limits |
+| SW-LIM-002 | test_limits_marks_tabs :: test_limits_apply_sends_config, test_limits_issues_shown_per_field, test_limits_in_kgf |
+| SW-LIM-003 | test_m3_main_window :: test_session_open_save · test_limits_marks_tabs :: test_marks_snapshot_and_recording_footer |
+| SW-LIM-004 | test_limits_marks_tabs :: test_no_specimen_mode_c10, test_no_specimen_refused_and_first_use_banner · test_calibration_tare :: test_start_page_checklist_and_refusals · test_sim_manual (C-10 on the real backend) · test_m3_main_window :: test_event_toasts_sample_mode_trip |
+| SW-META-001 | test_limits_marks_tabs :: test_marks_fields_and_custom, test_marks_debounced_apply |
+| SW-META-002 | test_limits_marks_tabs :: test_marks_presets_round_trip, test_marks_snapshot_and_recording_footer |
+| SW-REP-004 (entry) | test_m3_main_window :: test_bend3p_geometry_to_session |
+| SW-ACQ-003 | test_main_window :: test_record_tare_sample_on_every_tab · test_m3_main_window :: test_event_toasts_sample_mode_trip |
+| SW-CAL-001 | test_calibration_tare :: test_every_engine_phase_has_a_view, test_start_page_checklist_and_refusals, test_start_confirm_c12, test_travel_wizard_phases, test_wizard_abort_page_and_stop, test_close_is_cancel_with_c08_past_first_phase, test_close_in_first_phase_cancels, test_c12_declined_cancels_an_engine_that_already_started, test_calibration_panels_and_travel_actions · test_sim_calibration :: test_travel_wizard_on_simulator |
+| SW-CAL-002…004 | test_calibration_tare :: test_travel_wizard_phases · test_sim_calibration :: test_travel_wizard_on_simulator |
+| SW-CAL-005…007 | test_calibration_tare :: test_load_wizard_start_config, test_load_wizard_capture_evaluate_fit, test_load_fit_residual_view, test_result_parts_generic · test_sim_calibration :: test_load_wizard_tare_force_on_simulator |
+| SW-CAL-008 | test_calibration_tare :: test_load_wizard_start_config, test_calibration_panels_and_travel_actions · test_manual_tab :: test_position_force_readouts · test_m3_main_window :: test_units_menu_switches_readouts |
+| SW-CAL-009 | test_calibration_tare :: test_calibration_panels_and_travel_actions · test_sim_calibration (active calibration after accept) |
+| SW-TARE-001…003 | test_calibration_tare :: test_tare_popup_refusal_verbatim_every_tab, test_tare_popup_progress_done_undo, test_calibration_tab_tare_and_undo · test_sim_manual :: test_m3_actions_follow_the_real_backend · test_sim_calibration :: test_load_wizard_tare_force_on_simulator |
+| SW-RT-003 | test_m3_main_window :: test_xy_pane_uses_force_when_calibrated · test_sim_calibration |
+| SW-RT-005 | test_m3_main_window :: test_units_menu_switches_readouts · test_sim_calibration |
+| SW-STOP-001 | test_m3_main_window :: test_stop_in_every_m3_window, test_wizards_non_modal_toolbar_usable · test_calibration_tare :: test_wizard_abort_page_and_stop, test_tare_popup_refusal_verbatim_every_tab · test_manual_tab :: test_stop_on_manual_tab · test_sim_manual :: test_m3_actions_follow_the_real_backend |
+| SW-STOP-002, NFR-003 | test_m3_main_window :: test_hotkey_test_dialog |
+| SW-STOP-004 | test_manual_tab :: test_paused_line_resume_without_motion, test_ticket_outcomes_shown |
+| SAF-SW-001 | test_limits_marks_tabs :: test_thresholds_display_resend_manual_default, test_no_specimen_refused_and_first_use_banner · test_m3_main_window :: test_event_toasts_sample_mode_trip |
+| SAF-SW-002 | test_limits_marks_tabs :: test_thresholds_display_resend_manual_default |
+| SAF-SW-004 | test_confirm_dialog :: test_keyboard_never_confirms[C-01…C-13] · test_manual_tab :: test_disable_needs_c02, test_home_confirm_c01 · test_limits_marks_tabs :: test_no_specimen_mode_c10 · test_calibration_tare :: test_start_confirm_c12, test_travel_wizard_phases (C-05), test_load_wizard_capture_evaluate_fit (C-06) |
+| SAF-SW-005 | test_m3_main_window :: test_k1_chip_hidden_while_check_disabled |
+| SAF-SW-006 | test_manual_tab :: test_speed_accel_caps_and_margin_warning |
+| SYS-003 | test_m3_main_window :: test_units_menu_switches_readouts, test_xy_pane_uses_force_when_calibrated · test_limits_marks_tabs :: test_limits_in_kgf |
+| SW-RT-001 (prefs) | test_m3_main_window :: test_last_tab_and_unit_restored |
 
 ---
 
@@ -1575,6 +1650,46 @@ Related PO answers used elsewhere (D-32): Q28 — the Pause/Break limitation for
 
 GUI imports (G-01): `core.api`, `core.protocol_gen`, `calc.units` and — deviation — the package root `bend_stand` (``__version__`` in About).
 
+### 15.2 M3 work breakdown — GUI (SW application, D-44)
+
+**M3 GUI scope:** Manual tab on the real `MotionController`; Safety limits tab (SW travel / load limits, warning
+level, FW level ≤ 110 % FS, FW thresholds incl. manual / default bring-up paths, no-specimen mode with C-10); Test
+marks tab (marks, custom fields, presets, 3-point-bend geometry, snapshot view); Calibration & Tare tab; travel and
+load calibration wizards on the backend engines; TARE popup (toolbar, every tab); Record / Take sample wired with
+the M3 payloads; readouts with force N / kgf and EXTRAPOLATED; X-Y pane with force when calibrated; Pause/Break key
+test dialog; session open / save; K1 chip hidden while `drv.k1_check_enable` is false (M2 gate condition).
+
+**M3 SRS IDs (GUI part):** SW-MAN-001…006, SW-LIM-001…004, SW-META-001/002, SW-ACQ-002/003 (toolbar part),
+SW-CAL-001…009 (wizard frame and display), SW-TARE-001…003, SW-RT-003/005 (force, X-Y), SW-STOP-001 (every new
+window), SW-STOP-002 (test dialog), SAF-SW-001/002/004/005/006 (display + confirmations), SYS-003, NFR-001…003
+(smoke; binding runs on the reference PC by Validator F).
+
+| WP | Content (modules) | Tests | Req |
+|---|---|---|---|
+| WP-D9 manual | `tabs/manual_tab.py`, `widgets/target_slider.py`, `widgets/hold_button.py`, C-01 / C-02 texts | `test_manual_tab.py` (G-05, G-12…G-16), `test_sim_manual.py` | SW-MAN-001…006, SAF-SW-004/006 |
+| WP-D10 limits + marks | `tabs/limits_tab.py`, `tabs/marks_tab.py`, C-10 | `test_limits_marks_tabs.py` (G-19, G-20, G-37), `test_sim_manual.py::test_limits_tab_applies_travel_limits` | SW-LIM-001…004, SW-META-001/002, SAF-SW-001/002 |
+| WP-D11 wizards + tare | `wizards/safe_wizard.py`, `phase_views.py`, `travel_cal.py`, `load_cal.py`, `dialogs/tare_popup.py`, `tabs/calibration_tab.py`, C-05 / C-06 / C-08 / C-12 | `test_calibration_tare.py` (G-26…G-28, G-38 tab part), `test_sim_calibration.py` | SW-CAL-001…009, SW-TARE-001…003 |
+| WP-D12 main window | `main_window.py` (tabs, units menu, session menu, tare popup, wizard / dialog refresh, K1 params), `units_state.py`, `dialogs/hotkey_test.py`, `widgets/readout.py` (unit swap), `plots/plot_dock.py` / `plot_pane.py` (X-Y force preference), `indicator_map.py` (K1), `widgets/stop_banner.py` (first-use action, SW trip text) | `test_m3_main_window.py` (G-02 M3, G-24/G-25, G-42, K1, session, toasts) | SYS-003, SW-RT-003/005, SW-STOP-001/002, SAF-SW-005 |
+| WP-D13 close-out | fakes extended (motion, limits, marks presets, scriptable engines), conftest isolation (data dir, display unit), this document | GUI suite fixed + random order, sim smoke | – |
+
+### 15.3 As-built status (M3, WP-D9…WP-D13, 2026-10-05)
+
+| WP | State | Notes / deviations from §2–§9 |
+|---|---|---|
+| D9 | done | Manual tab as §3.4. **Deviations:** the slider and the absolute Go-to work in the **machine** coordinate (the API target unit; labelled "machine mm"), readouts show test and machine travel; accel field "FW default" = 0 → `None`; the field check calls `motion.check` (MOVE with speed / accel, JOG with the jog speed, MOVE with the absolute target) on every edit and every 3rd tick; Go / steps / slider are refused locally with a toast while a speed / accel field is red. Hold-to-jog stops exactly once on release, application inactive, window deactivate / hide, tab change, the button becoming disabled (gate), or when the backend ends the jog session (`motion.jogging` True → False while held, e.g. STOP / PAUSE). Enable checkbox = FW state only (P4). HOME: C-01 from the gate CONFIRM item or from a `ConfirmationRequired` ticket |
+| D10 | done | Safety limits as §3.2 (+ manual raw / default threshold buttons, B4-04, via `getattr`). Load fields follow View ▸ Units (unapplied edits re-expressed). Test marks as §3.3 with debounced apply (300 ms) — **no [Delete] preset** (GRQ-B-27); 3-point bend group enabled when `core.api.Bend3pGeometry` exists (GRQ-B-24) |
+| D11 | done | `SafeWizard` as §6.1: a start page (gate checklist, kind config, [Start], [Enter no-specimen mode…]) replaces a separate CHECK view; the page is rendered generically from `EngineState` with a phase → view-kind table (`phase_views.VIEWS`, completeness-tested against the fake and B's real `PHASES`); result display is generic (`result_parts`: dataclass / mapping summary + first list of mappings as table); fit mini plot = raw–F points when present, else residuals (B5-08, GRQ-B-25). A reopened wizard whose engine shows an earlier DONE / ABORTED starts on the start page. Close / Esc = Cancel, C-08 past the first phase. C-12 defensive handling (GRQ-B-23). Load wizard start = `n_points` / pre-settle / capture (B5-08; masses per point, not at start as §6.3 drafted). Tare popup as §6.4 (+ DONE result line) |
+| D12 | done | View ▸ Units N / kgf (QActionGroup; stored in `SessionSettings.display_unit` and `ui/units`); last tab restored (`ui/last_tab`); File ▸ Open session… / Save session as…; Tools ▸ Test Pause/Break key… = `HotkeyTestDialog`; the current tab is refreshed every tick (other tabs on activation), open wizards / popup / hotkey test every tick; closed windows are never reused (WA_DeleteOnClose). K1 chip hidden while `drv.k1_check_enable` = false (board values read every 10th tick); an active K1_WELDED is never hidden |
+| D13 | done | 258 GUI tests (70 new); conftest sets `BEND_STAND_DATA_DIR` per test (OBS-D-M3-01) and resets the display unit |
+
+**Evidence (2026-10-05, offscreen):** GUI suite `pytest tests/gui -p no:randomly` 258 passed; `-p randomly`
+(seed 1099176525) 258 passed; smoke `python -m bend_stand --sim` (offscreen, `BEND_STAND_GUI_QUIT_AFTER_MS=8000`,
+hotkey off, temp data dir) exit 0: link CONNECTED sim, 80.4 SPS, 0 lost / 0 CRC, 241 ticks p50 33.0 ms / p95 33.5 ms.
+Simulator-backed GUI tests (lock-step clock): enable → HOME (C-01) → +1 mm ×3 → absolute targets on the wire; slider
+release = exactly one MOVE_ABS; hold-to-jog = JOG + backend refreshes + JOG 0; no-specimen mode via C-10; travel
+wizard to DONE (800 steps/mm on the board) and a cancelled run restoring spm0; load wizard (zero + 1 kg + 10 kg) to
+DONE, tare DONE, F_N readout ≈ 98 N with 10 kg, X-Y pane on force.
+
 ---
 
 ## 16. Change history
@@ -1586,5 +1701,6 @@ GUI imports (G-01): `core.api`, `core.protocol_gen`, `calc.units` and — deviat
 | 0.3 | 2026-10-03 | Implementer D | Final P1 alignment to `SW_design.md` v0.3 §15.5a (B3-01…B3-21, new §11.1a), SRS v0.4 (same IDs) and ICD v0.4: Resume = RESUME + re-issue (manual RESUME only), `resume.ignored` toasts; Clear stop of a paused sequence = new C-13 (`clear_stop_async(confirmed=True)`, end reason CLEARED); `REFUSED_PAUSED` shown as info; sequence-start items DRV_PWR_OFF / ALM / PAUSED / POS_UNCERTAIN / AFE_RATE_MISMATCH; end reasons NOT_REACHED / DRIVER_ALARM / CLEARED, step error BOUND_NOT_AHEAD; travel-bound column removed, LOAD step time hidden; link counters `dup_frames` / `seq_anomalies`; indicator alias table removed (lower-case generated keys); TCAL actions via `resolve_travel_difference_async` (GRQ-B-19 closed); entry contract with `args.endpoint`; `sequencer.start(seq, confirmed=True)`; lockstep test hooks. GF-11…17 closed (GF-15 by SRS v0.4, GF-16 by ICD v0.4). Remaining API gaps: none. |
 | 0.3.1 | 2026-10-03 | Implementer D | M1 implementation WP-D0…WP-D7: as-built table §15.1 (layout deviation banner/indicator toolbars, D-36 texts, B31-01 adopted, `NONE` source display rule, smoke seam, package-root import). |
 | 0.4.1 | 2026-10-04 | Implementer D | **M2 backend alignment (B §15.5d, B4-01…11, new §11.1d) and D-41** (E-stop = MCU / FW stop, no K1 contactor): E-STOP banner, C-03, STOP tooltip and §1.3 / GQ-18 wording; PC_LOAD_LIMITS_OFF notice; MOV homing / jogging; feature-bit UNKNOWN; real `StopConfirmation`; `dimension` for pane grouping (GRQ-B-21 closed); real hotkey status. |
+| 0.5 | 2026-10-05 | Implementer D | **M3 (SW application) GUI as built (§15.2 work breakdown WP-D9…D13, §15.3 as-built + evidence):** Manual tab on the real MotionController (slider one move on release, go-to absolute / distance, ±0.1/1/10 mm latest-wins, hold-to-jog with exactly-once JOG 0 on release / focus loss / hide / gate close / backend end, speed / accel / jog fields checked by `motion.check`, enable bound to the FW state, DISABLE C-02, HOME C-01, test zero, VALID, PAUSED line + Resume, STOP); Safety limits tab (travel / load limits, warning level, FW level, thresholds incl. clamped, re-send, manual / default thresholds, motion-disabled notice, no-specimen mode C-10); Test marks tab (marks, custom fields, presets, 3-point bend, snapshot, recording footer); Calibration & Tare tab; `SafeWizard` + travel / load wizards over B's engines (start page, generic page, C-05 / C-06 / C-08 / C-12, finish early, re-take, abort / restoring pages, phase-view completeness); TARE popup; Pause/Break key test dialog; View ▸ Units N / kgf (readouts, X-Y force, limits fields); File ▸ Open / Save session; first-use banner [Enter no-specimen mode…]; SW-trip banner text from `SwTrip`; K1 chip hidden while `drv.k1_check_enable` false (M2 gate condition). §11.1e adopts B §15.5e B5-01…17; new requests GRQ-B-23…27, OBS-D-M3-01 (§11.3); §12.3 M3 verification map; K1 row of §2.4; §8 module list. Tests: 258 GUI tests (70 new) fixed + random order; sim smoke. |
 | 0.4 | 2026-10-04 | Implementer D | **D-38 / SW-RT-006 (M1 add-on):** new §4.7 plot panes (grid 1–4 columns, + Pane, + X-Y pane, plot in / move to pane, drag reorder, move to window, rename / close, D-63 placement rules, X link, persistence, one snapshot per time window, Thrust_Stand rendering fix); §8 module list (plot_pane, pane_grid, quantity; lanes / single time view removed); tests G-45…G-52; traceability SW-RT-006; GRQ-B-21 (`ChannelSpec.dimension`). §4.1 inner layout and §4.5 JSON superseded by §4.7. |
 | 0.3.2 | 2026-10-03 | Implementer D | M1 gate items: SWD-M1-06 (confirmation banner names STOP / HALT / PAUSE from a str or `.cmd` payload), SWD-M1-07 (`Implements:` tags in every GUI module), SWD-M1-10 ("LINK LOST – STOP sent" only after a sent STOP within 5 s, else "LINK LOST – reconnecting…"); D-36 wording test for GUI-owned texts; GF-19 (backend HALT clear hint) stays with B. |

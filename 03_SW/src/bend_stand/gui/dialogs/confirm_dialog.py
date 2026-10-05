@@ -15,7 +15,9 @@ Keyboard rules (SAF-SW-004):
 The dialog never decides anything: the caller repeats the backend call with ``confirmed=True`` from the
 ``confirmed`` signal (B §15.4 rule 6). It is shown with :meth:`open` (non-blocking, application-modal).
 
-Implements: SAF-SW-004 (Enter/Space never confirm, STOP reachable), SW-CFG-004 (C-04), SW-CFG-003 (C-11)
+Implements: SAF-SW-004 (Enter/Space never confirm, STOP reachable; C-01 HOME under load, C-02 DISABLE, C-03 E-stop
+clear, C-10 no-specimen mode), SW-CFG-004 (C-04), SW-CFG-003 (C-11), SW-CAL-003 (C-05), SW-CAL-007 (C-06),
+SW-CAL-001 (C-08, C-12), SW-STOP-003 (C-13)
 """
 from __future__ import annotations
 
@@ -45,18 +47,36 @@ OUTCOMES = ("pending", "confirmed", "cancelled", "not_needed", "refused", "stopp
 #: GUI-side confirmation texts (C-04, C-09, C-11 are GUI cautions; the others show the backend's CONFIRM text and
 #: use these only as fallback titles). (title, text, confirm label, assertion or None)
 TEXTS: dict[str, tuple[str, str, str, str | None]] = {
-    "C-03": ("Clear E-STOP",
+    "C-01": ("Home under load",
+             "Load on the specimen is ≥ 5 % FS or unknown. Homing moves the axis to the START switch while loaded.",
+             "Home", "I accept homing under load"),
+    "C-02": ("Disable the driver",
+             "Specimen unloaded? Disabling removes the holding torque; the specimen may spring back; the axis will "
+             "be NOT homed.", "Disable", "Specimen is unloaded"),
+    "C-03":("Clear E-STOP",
              "Clear E-STOP: red E-stop button released (input closed ≥ 100 ms) and the area safe? After "
              "clearing, the driver stays disabled: ENABLE and HOME are required. No motion restarts.",
              "Clear E-STOP", "E-stop button released, area safe"),
     "C-04": ("Restore defaults",
              "Restore all parameters to defaults (RAM; NVM unchanged until Save to NVM). Session load thresholds "
              "are re-sent by the PC.", "Restore defaults", None),
+    "C-05": ("Steps/mm change", "The measured steps/mm value needs a confirmation.", "Apply value",
+             "Measured value checked"),
+    "C-06": ("Accept WARN linearity", "The fit is WARN (non-linearity between 0.1 % and 0.5 % of the span).",
+             "Accept", "I accept the WARN linearity"),
+    "C-08": ("Cancel calibration", "Cancel the running calibration? The active calibration stays unchanged.",
+             "Cancel calibration", None),
     "C-09": ("Close the application",
              "Closing sends STOP, ends the recording and leaves the driver enabled (holding).", "Close", None),
+    "C-10": ("Switch to no-specimen mode",
+             "No specimen is mounted. The PC load limits are switched OFF for this session. The board load limit "
+             "stays active (calibrated thresholds, or the nominal default ±7 022 271 counts ≈ ±109 % FS). Travel "
+             "limits stay active. Mount no specimen until a load calibration and a tare exist.",
+             "Switch PC load limits off", "No specimen is mounted"),
     "C-11": ("Save & reboot",
              "Save all parameters to NVM and reboot the board? The stream restarts, the axis is NOT homed "
              "afterwards, the driver keeps holding (D-13).", "Save & reboot", None),
+    "C-12": ("Start calibration", "The calibration start needs a confirmation.", "Start", None),
     "C-13": ("Clear stop ends the paused sequence",
              "Clear stop ends the paused sequence (STOPPED, reason CLEARED) and clears HALT and PAUSE. No motion "
              "restarts. To continue the sequence use Resume instead.", "Clear stop", None),
@@ -66,8 +86,9 @@ TEXTS: dict[str, tuple[str, str, str, str | None]] = {
 def make_confirm(parent: QWidget | None, cid: str, *, text: str | None = None, **kwargs: Any) -> "ConfirmDialog":
     """Build the ConfirmDialog of ``cid`` from :data:`TEXTS` (``text`` overrides with the backend's text)."""
     title, default_text, label, assertion = TEXTS[cid]
-    return ConfirmDialog(parent, cid=cid, title=title, text=text or default_text, confirm_label=label,
-                         assertion=assertion, **kwargs)
+    kwargs.setdefault("confirm_label", label)
+    kwargs.setdefault("assertion", assertion)
+    return ConfirmDialog(parent, cid=cid, title=title, text=text or default_text, **kwargs)
 
 
 class _KeyGuard(QObject):

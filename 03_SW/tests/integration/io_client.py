@@ -117,3 +117,72 @@ class IoClient:
 
         pid = pgen.BY_KEY[key_or_id].id if isinstance(key_or_id, str) else key_or_id
         return self.cmd("GET_PARAM", id=pid)
+
+
+# ------------------------------------------------------------------------------------------------ lock-step
+class _BoardTransport:
+    """B's Transport interface subset used by IoClient (read / write / open / close) over a lock-step board
+    (``lockstep_boards.TwinBoard`` / ``SimBoardSide``): no socket, no wall clock."""
+
+    def __init__(self, board) -> None:  # noqa: ANN001
+        self.b = board
+
+    def open(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def read(self, max_bytes: int, timeout_s: float) -> bytes:
+        return self.b.read()
+
+    def write(self, data: bytes) -> None:
+        self.b.write(bytes(data))
+
+
+class LockstepIoClient(IoClient):
+    """IoClient whose waits advance the board's **virtual** time (OBS-M2-09: host load cannot change a result).
+    Frames are still built and decoded only by B's production framing / protocol code."""
+
+    def __init__(self, board, timeout_s: float = 0.5) -> None:  # noqa: ANN001
+        self.board = board
+        super().__init__(endpoint="lockstep", timeout_s=timeout_s)
+
+    def __post_init__(self) -> None:
+        self.tr = _BoardTransport(self.board)
+        self.dec = FrameDecoder()
+        self.data, self.events, self.responses, self.unmatched = [], [], [], []
+
+    def _now_ns(self) -> int:
+        return int(self.board.now_ms * 1_000_000)
+
+    def _pump(self, timeout_s: float) -> None:
+        self.board.advance_ms(max(timeout_s, 0.001) * 1000)
+        d = self.tr.read(4096, 0.0)
+        now = self._now_ns()
+        frames = self.dec.feed(d, now) if d else self.dec.poll(now)
+        for f in frames:
+            if f.type == pg.AsyncType.DATA:
+                self.data.append(proto.decode_data(f.payload))
+            elif f.type == pg.AsyncType.EVENT:
+                self.events.append(proto.decode_event(f.payload))
+            elif 0x81 <= f.type <= 0xBF:
+                self.responses.append(proto.split_response(f.type, f.seq, f.payload))
+            else:
+                self.unmatched.append(f)
+
+    def pump(self, seconds: float) -> None:
+        end = self.board.now_ms + seconds * 1000
+        while self.board.now_ms < end - 1e-9:
+            self._pump(min(0.005, (end - self.board.now_ms) / 1000))
+
+    def request(self, cmd: pg.Cmd, payload: bytes = b"", timeout_s: float | None = None) -> proto.Response:
+        s = self.send(cmd, payload)
+        end = self.board.now_ms + (timeout_s or self.timeout_s) * 1000
+        while self.board.now_ms < end:
+            self._pump(0.001)
+            for r in self.responses:
+                if r.seq == s and r.cmd == int(cmd):
+                    self.responses.remove(r)
+                    return r
+        raise TimeoutError(f"{pg.Cmd(cmd).name}: no response (virtual time)")

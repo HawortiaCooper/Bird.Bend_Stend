@@ -1,7 +1,8 @@
 /* Stop sniffer + sniffed-stop hold: STOP/HALT/PAUSE hits (vectors' own frames), split across ticks
  * at every position, bad CRC, STOP mode 2 ignored, sync pattern inside another payload, a frame
- * reported exactly once, RESUME and the clears never sniffed, hold resolution / timeout.
- * Verifies: SAF-FW-002, SAF-FW-003, FW-MOT-007, D-31 (RESUME not sniffed), DEF-P1-04 (hold)
+ * reported exactly once, RESUME and the clears never sniffed, hold resolution / timeout, a stop
+ * frame dispatched before it was sniffed (DEF-M3-01).
+ * Verifies: SAF-FW-002, SAF-FW-003, FW-MOT-007, D-31 (RESUME not sniffed), DEF-P1-04 (hold), DEF-M3-01
  */
 #include <string.h>
 #include <unity.h>
@@ -156,6 +157,51 @@ static void test_hold_latest_and_timeout(void)
     TEST_ASSERT_FALSE(hold_blocks_start(&hd));
 }
 
+/* DEF-M3-01: the dispatcher reached the stop frame before the sniffer scanned it -> the later hit is
+ * recognised as already dispatched (no hold); FIFO order, lost entries, expiry */
+static void test_dispatched_before_sniffed(void)
+{
+    sniff_hold_t hd;
+    sniff_hit_t a, b, c;
+    hold_init(&hd);
+    a.type = CMD_HALT; a.seq = 1u; a.mode = 0u; a.pos = 0u;
+    b.type = CMD_STOP; b.seq = 2u; b.mode = 0u; b.pos = 8u;
+    c.type = CMD_PAUSE; c.seq = 3u; c.mode = 0u; c.pos = 17u;
+    TEST_ASSERT_FALSE(hold_on_dispatch_at(&hd, CMD_HALT, 1u, 100u));   /* dispatched first */
+    TEST_ASSERT_FALSE(hold_blocks_start(&hd));
+    TEST_ASSERT_TRUE(hold_already_dispatched(&hd, &a));                 /* the late hit: ignored */
+    TEST_ASSERT_FALSE(hold_already_dispatched(&hd, &a));                /* consumed once */
+    TEST_ASSERT_FALSE(hold_blocks_start(&hd));
+    /* a new frame the sniffer sees first still holds until it is dispatched */
+    TEST_ASSERT_FALSE(hold_already_dispatched(&hd, &b));
+    hold_set(&hd, &b, 101u);
+    TEST_ASSERT_TRUE(hold_blocks_start(&hd));
+    TEST_ASSERT_TRUE(hold_on_dispatch_at(&hd, CMD_STOP, 2u, 101u));
+    TEST_ASSERT_FALSE(hold_blocks_start(&hd));
+    /* mixed tick: A dispatched, then the sniffer reports A and C together: A ignored, C holds */
+    TEST_ASSERT_FALSE(hold_on_dispatch_at(&hd, CMD_HALT, 1u, 102u));
+    TEST_ASSERT_TRUE(hold_already_dispatched(&hd, &a));
+    TEST_ASSERT_FALSE(hold_already_dispatched(&hd, &c));
+    hold_set(&hd, &c, 102u);
+    TEST_ASSERT_TRUE(hold_blocks_start(&hd));
+    TEST_ASSERT_TRUE(hold_on_dispatch_at(&hd, CMD_PAUSE, 3u, 103u));
+    /* a frame the sniffer lost: the next match further down the FIFO drops it */
+    TEST_ASSERT_FALSE(hold_on_dispatch_at(&hd, CMD_HALT, 1u, 104u));
+    TEST_ASSERT_FALSE(hold_on_dispatch_at(&hd, CMD_STOP, 2u, 104u));
+    TEST_ASSERT_TRUE(hold_already_dispatched(&hd, &b));
+    TEST_ASSERT_FALSE(hold_already_dispatched(&hd, &a));                /* dropped (lost) */
+    /* expiry: a dispatched entry never sniffed is forgotten after max_ms */
+    TEST_ASSERT_FALSE(hold_on_dispatch_at(&hd, CMD_HALT, 1u, 200u));
+    TEST_ASSERT_FALSE(hold_timeout(&hd, 219u, 20u));
+    TEST_ASSERT_EQUAL_UINT8(1u, hd.dn);
+    TEST_ASSERT_FALSE(hold_timeout(&hd, 220u, 20u));                    /* no hold was pending */
+    TEST_ASSERT_EQUAL_UINT8(0u, hd.dn);
+    TEST_ASSERT_FALSE(hold_already_dispatched(&hd, &a));
+    /* non-sniffed types are never remembered */
+    TEST_ASSERT_FALSE(hold_on_dispatch_at(&hd, CMD_MOVE_ABS, 9u, 300u));
+    TEST_ASSERT_EQUAL_UINT8(0u, hd.dn);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -166,5 +212,6 @@ int main(void)
     RUN_TEST(test_two_frames_one_tick_and_cause);
     RUN_TEST(test_hold_blocks_until_dispatched);
     RUN_TEST(test_hold_latest_and_timeout);
+    RUN_TEST(test_dispatched_before_sniffed);
     return UNITY_END();
 }

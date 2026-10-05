@@ -48,9 +48,11 @@ def twin_unavailable() -> str | None:
         reason = "Implementer A's 02_FW/src/core/*.c absent (M1-WP5 not delivered): FW twin cannot be built"
     if reason is None:
         try:
-            _BUILD["exe"] = twin_build.ensure_built(CORE)
+            # OBS-M2-09: one private binary per test run (build.private_build_dir(), $BEND_TWIN_BUILD_DIR to
+            # choose it), pinned for the whole session: concurrent roles cannot rebuild or lock it mid-run
+            _BUILD["exe"] = twin_build.ensure_built_private(CORE)
         except SystemExit as e:
-            log = TOOLS / "fw_twin" / "build" / f"build_{CORE}.log"
+            log = twin_build.private_build_dir() / f"build_{CORE}.log"
             tail = log.read_text(encoding="utf-8", errors="replace")[-1500:] if log.exists() else ""
             reason = f"FW twin build failed ({e}); log tail:\n{tail}"
     _BUILD["reason"] = reason
@@ -90,7 +92,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_report_header(config: pytest.Config) -> str:
-    return f"fw_twin core: {CORE} ({'A firmware' if CORE == 'fw' else 'HARNESS PROBE - not M1 evidence'})"
+    return (f"fw_twin core: {CORE} ({'A firmware' if CORE == 'fw' else 'HARNESS PROBE - not M1 evidence'}); "
+            f"private build dir: {os.environ.get('BEND_TWIN_BUILD_DIR', '<per-run temp dir>')}")
 
 
 @pytest.fixture(scope="session")

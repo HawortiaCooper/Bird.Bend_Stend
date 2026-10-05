@@ -1,7 +1,7 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/params.yaml (dict_version 5, schema 1)
+ * Source : 00_System/specs/params.yaml (dict_version 6, schema 1)
  * Tool   : 00_System/tools/gen_params.py
- * Hash   : PARAM_DICT_HASH = 0xB7B0263F
+ * Hash   : PARAM_DICT_HASH = 0xF8BCDCB8
  * Implements: FW-CFG-001, IF-010
  */
 #include "params_gen.h"
@@ -38,12 +38,12 @@ const param_meta_t PARAM_TABLE[PARAM_COUNT] = {
     PM(PID_MOTION_DIR_INVERT, PARAM_T_BOOL, PARAM_F_NVM, motion.dir_invert, 1, 0x00000000u, 0x00000001u, 0x00000000u, "motion.dir_invert"),
     /* motion.ena_invert: min false, max true, default false  */
     PM(PID_MOTION_ENA_INVERT, PARAM_T_BOOL, PARAM_F_NVM|PARAM_F_REBOOT, motion.ena_invert, 1, 0x00000000u, 0x00000001u, 0x00000000u, "motion.ena_invert"),
-    /* motion.pulse_high_ns: min 2500, max 100000, default 10000 ns */
-    PM(PID_MOTION_PULSE_HIGH_NS, PARAM_T_U32, PARAM_F_NVM, motion.pulse_high_ns, 4, 0x000009C4u, 0x000186A0u, 0x00002710u, "motion.pulse_high_ns"),
-    /* motion.pulse_low_min_ns: min 2500, max 100000, default 10000 ns */
-    PM(PID_MOTION_PULSE_LOW_MIN_NS, PARAM_T_U32, PARAM_F_NVM, motion.pulse_low_min_ns, 4, 0x000009C4u, 0x000186A0u, 0x00002710u, "motion.pulse_low_min_ns"),
-    /* motion.max_step_rate_hz: min 100, max 100000, default 50000 Hz */
-    PM(PID_MOTION_MAX_STEP_RATE_HZ, PARAM_T_U32, PARAM_F_NVM, motion.max_step_rate_hz, 4, 0x00000064u, 0x000186A0u, 0x0000C350u, "motion.max_step_rate_hz"),
+    /* motion.pulse_high_ns: min 2500, max 100000, default 12500 ns */
+    PM(PID_MOTION_PULSE_HIGH_NS, PARAM_T_U32, PARAM_F_NVM, motion.pulse_high_ns, 4, 0x000009C4u, 0x000186A0u, 0x000030D4u, "motion.pulse_high_ns"),
+    /* motion.pulse_low_min_ns: min 2500, max 100000, default 12500 ns */
+    PM(PID_MOTION_PULSE_LOW_MIN_NS, PARAM_T_U32, PARAM_F_NVM, motion.pulse_low_min_ns, 4, 0x000009C4u, 0x000186A0u, 0x000030D4u, "motion.pulse_low_min_ns"),
+    /* motion.max_step_rate_hz: min 100, max 100000, default 40000 Hz */
+    PM(PID_MOTION_MAX_STEP_RATE_HZ, PARAM_T_U32, PARAM_F_NVM, motion.max_step_rate_hz, 4, 0x00000064u, 0x000186A0u, 0x00009C40u, "motion.max_step_rate_hz"),
     /* motion.dir_setup_us: min 5, max 1000, default 20 us */
     PM(PID_MOTION_DIR_SETUP_US, PARAM_T_U16, PARAM_F_NVM, motion.dir_setup_us, 2, 0x00000005u, 0x000003E8u, 0x00000014u, "motion.dir_setup_us"),
     /* motion.ena_settle_ms: min 0, max 2000, default 500 ms */

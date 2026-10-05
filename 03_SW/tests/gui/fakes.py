@@ -26,11 +26,12 @@ import numpy as np
 from bend_stand.core import params_gen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.api import (
-    GATE_OK, BackendStatus, BoardConfigFile, ChannelSpec, ClearResult, Compat, DeviceInfo, EndpointInfo,
-    EngineState, EventRecord, FileFormatError, GateId, GateItem, GateResult, HotkeyStatus, Indicator, Issue,
-    IssueSeverity, LatestSample, LimitConfig, LinkState, LinkStats, LinkStatus, MotionKind, MotionLimits,
-    MoveOutcome, PlotSnapshot, SeqStatus, SeriesMinMax, SessionSettings, Severity, StopResult, StreamStatus,
-    TestMarks, ThresholdState, TravelDiffState, VerifyReport, WriteItem, WriteStatus, XYSnapshot,
+    GATE_OK, BackendStatus, BoardConfigFile, ChannelSpec, ClearResult, Compat, ConfirmationRequired, DeviceInfo,
+    EndpointInfo, EngineState, EventRecord, FileFormatError, GateId, GateItem, GateRefused, GateResult, HotkeyStatus,
+    Indicator, Issue, IssueSeverity, LatestSample, LimitConfig, LinkState, LinkStats, LinkStatus, MotionKind,
+    MotionLimits, MotionStatus, MoveDone, MoveOutcome, PlotSnapshot, SeqStatus, SeriesMinMax, SessionSettings,
+    Severity, StopResult, StreamStatus, TestMarks, ThresholdState, TravelDiffState, VerifyReport, WriteItem,
+    WriteStatus, XYSnapshot,
 )
 
 NOT_IMPL = GateResult((GateItem("NOT_IMPLEMENTED", Severity.REFUSE, "not implemented in M1"),))
@@ -234,6 +235,9 @@ def default_channels() -> list[ChannelSpec]:
         if n:
             specs.append(ChannelSpec(f"bit.{n.lower()}", n, "", "Status bits", dimension="bits"))
     specs.append(ChannelSpec("F_N", "force", "N", "Force", False, "needs load calibration + tare", dimension="force"))
+    specs.append(ChannelSpec("F_kgf", "force", "kgf", "Force", False, "needs load calibration + tare",
+                             dimension="force"))
+    specs.append(ChannelSpec("x_mm", "travel (machine)", "mm", "Travel", dimension="length"))
     return specs
 
 
@@ -293,21 +297,46 @@ class FakeChannels:
         return next(s for s in self.specs if s.key == key)
 
 
-# --------------------------------------------------------------------------------------------- M2–M4 stubs
+# --------------------------------------------------------------------------------------------- M2–M3 fakes
+
+def default_limits() -> MotionLimits:
+    return MotionLimits(30.0, 20.0, 62.5, 2.0, 100.0, False, 30.0, 30.0, 0.5, 290.0)
+
 
 class FakeMotion:
+    """Records every call; ``check`` mimics the caps / range of ``status().motion.limits`` (B §5.4) so the GUI
+    field colouring can be tested; ``results`` scripts GateResults, ``tickets`` scripts MoveTicket futures."""
+
     def __init__(self, owner: "FakeBackend") -> None:
         self._o = owner
+        self.results: dict[str, Any] = {}           # name -> GateResult (enable / disable / set_valid)
+        self.tickets: dict[str, Future] = {}         # name -> Future to return once (move_to / move_by / home)
+        self.check_calls: list[tuple] = []
+        self.x_zero = 0.0
+
+    def _ticket(self, name: str, target: float | None) -> Future:
+        f = self.tickets.pop(name, None)
+        if f is not None:
+            return f
+        if name == "home":
+            gate = self._o.status().gates.get(GateId.HOME)
+            if gate is not None and gate.refused:
+                return failed(GateRefused(gate))
+        else:
+            gate = self._o.status().gates.get(GateId.MOVE)
+            if gate is not None and gate.refused:
+                return failed(GateRefused(gate))
+        return done(MoveOutcome("DONE", MoveDone("TARGET", target or 0.0, 0, 1_000_000)))
 
     def move_to(self, target_mm: float, *, speed_mm_s: float | None = None,
                 accel_mm_s2: float | None = None) -> Future:
-        self._o._rec("motion.move_to", target_mm)
-        return done(MoveOutcome("REFUSED", None, "not implemented"))
+        self._o._rec("motion.move_to", target_mm, speed_mm_s=speed_mm_s, accel_mm_s2=accel_mm_s2)
+        return self._ticket("move_to", target_mm)
 
     def move_by(self, delta_mm: float, *, speed_mm_s: float | None = None,
                 accel_mm_s2: float | None = None) -> Future:
-        self._o._rec("motion.move_by", delta_mm)
-        return done(MoveOutcome("REFUSED", None, "not implemented"))
+        self._o._rec("motion.move_by", delta_mm, speed_mm_s=speed_mm_s, accel_mm_s2=accel_mm_s2)
+        return self._ticket("move_by", delta_mm)
 
     def jog_start(self, direction: int, speed_mm_s: float) -> None:
         self._o._rec("motion.jog_start", direction, speed_mm_s)
@@ -320,77 +349,142 @@ class FakeMotion:
 
     def enable(self) -> GateResult:
         self._o._rec("motion.enable")
-        return NOT_IMPL
+        return self.results.get("enable", GATE_OK)
 
     def disable(self, *, confirmed: bool = False) -> GateResult:
         self._o._rec("motion.disable", confirmed=confirmed)
-        return NOT_IMPL
+        if "disable" in self.results:
+            return self.results["disable"]
+        gate = self._o.status().gates.get(GateId.DISABLE, GATE_OK)
+        if gate.confirm_items and not confirmed:
+            return GateResult(gate.items + (GateItem("CONFIRMATION_REQUIRED", Severity.REFUSE,
+                                                     "confirm: " + gate.confirm_items[0].text),))
+        return gate
 
     def home(self, *, load_confirmed: bool = False) -> Future:
         self._o._rec("motion.home", load_confirmed=load_confirmed)
-        return done(MoveOutcome("REFUSED", None, "not implemented"))
+        gate = self._o.status().gates.get(GateId.HOME, GATE_OK)
+        if gate.ok and gate.confirm_items and not load_confirmed and "home" not in self.tickets:
+            return failed(ConfirmationRequired(gate))
+        return self._ticket("home", 0.0)
 
     def set_test_zero(self) -> float:
         self._o._rec("motion.set_test_zero")
-        return 0.0
+        gate = self._o.status().gates.get(GateId.TEST_ZERO, GATE_OK)
+        if gate.refused:
+            raise GateRefused(gate)
+        self.x_zero = self._o.status().motion.position_mm or 0.0
+        return self.x_zero
 
     def reset_test_zero(self) -> None:
         self._o._rec("motion.reset_test_zero")
+        self.x_zero = 0.0
 
     def set_valid(self, flag: bool) -> GateResult:
         self._o._rec("motion.set_valid", flag)
-        return NOT_IMPL
+        return self.results.get("set_valid", GATE_OK)
 
     def limits(self) -> MotionLimits | None:
-        return None
+        return self._o.status().motion.limits
 
     def check(self, kind: MotionKind, *, speed_mm_s: float | None = None, accel_mm_s2: float | None = None,
               target_mm: float | None = None) -> GateResult:
-        return NOT_IMPL
+        self.check_calls.append((kind, speed_mm_s, accel_mm_s2, target_mm))
+        gate = self._o.status().gates.get(GateId.JOG if kind == MotionKind.JOG else GateId.MOVE, GATE_OK)
+        items = list(gate.items)
+        lim = self.limits()
+        if lim is not None:
+            cap = min(lim.v_cap_mm_s, lim.v_unhomed_mm_s) if kind == MotionKind.JOG and \
+                self._o.status().indicators.homed.state != "ON" else lim.v_cap_mm_s
+            if speed_mm_s is not None and speed_mm_s > cap + 1e-9:
+                items.append(GateItem("SPEED_CAP", Severity.REFUSE, f"speed {speed_mm_s:g} mm/s above the cap "
+                                      f"{cap:g} mm/s"))
+            if accel_mm_s2 is not None and accel_mm_s2 > lim.a_max_mm_s2 + 1e-9:
+                items.append(GateItem("ACCEL_CAP", Severity.REFUSE, f"acceleration {accel_mm_s2:g} mm/s² above "
+                                      f"{lim.a_max_mm_s2:g}"))
+            if target_mm is not None and lim.travel_min_mm is not None and lim.travel_max_mm is not None and \
+                    not lim.travel_min_mm <= target_mm <= lim.travel_max_mm:
+                items.append(GateItem("TARGET_OUT_OF_RANGE", Severity.REFUSE, f"target {target_mm:g} mm outside "
+                                      f"the travel range"))
+        for extra in self.results.get("check_extra", ()):
+            items.append(extra)
+        return GateResult(tuple(items))
 
 
 class FakeLimits:
     def __init__(self, owner: "FakeBackend") -> None:
         self._o = owner
+        self.cfg = LimitConfig()
+        self.next_issues: list[Issue] | None = None
+        self.no_specimen_result: GateResult = GATE_OK
 
     def get(self) -> LimitConfig:
-        return LimitConfig()
+        return self.cfg
 
     def set(self, cfg: LimitConfig) -> list[Issue]:
         self._o._rec("limits.set", cfg)
-        return []
+        issues, self.next_issues = (self.next_issues or []), None
+        if not [i for i in issues if i.severity == IssueSeverity.ERROR]:
+            self.cfg = cfg
+        return issues
 
     def thresholds(self) -> ThresholdState:
-        return ThresholdState()
+        return self._o.status().safety.thresholds
 
     def recheck_async(self) -> Future:
-        return done(ThresholdState())
+        self._o._rec("limits.recheck_async")
+        return done(self.thresholds())
+
+    # B4-04 extras (not in the Protocol; the GUI uses them when present)
+    def set_manual_thresholds_async(self, raw_min: int, raw_max: int, zero_raw: int = 0) -> Future:
+        self._o._rec("limits.set_manual_thresholds_async", raw_min, raw_max, zero_raw)
+        st = ThresholdState("VERIFIED", "manual-raw", None, None, raw_min, raw_max, zero_raw)
+        self._o.set_status(safety=dataclasses.replace(self._o.status().safety, thresholds=st))
+        return done(st)
+
+    def set_default_thresholds_async(self) -> Future:
+        self._o._rec("limits.set_default_thresholds_async")
+        st = ThresholdState("DEFAULT_ONLY", None, None, None, -7_022_271, 7_022_271, 0)
+        self._o.set_status(safety=dataclasses.replace(self._o.status().safety, thresholds=st))
+        return done(st)
 
     def set_no_specimen_mode(self, on: bool, *, confirmed: bool = False) -> GateResult:
         self._o._rec("limits.set_no_specimen_mode", on, confirmed=confirmed)
+        if not self.no_specimen_result.ok:
+            return self.no_specimen_result
         st = self._o.status()
         self._o.set_status(safety=dataclasses.replace(st.safety, no_specimen_mode=bool(on)))
         return GATE_OK
 
 
 class FakeMarks:
-    def __init__(self) -> None:
+    def __init__(self, owner: "FakeBackend | None" = None) -> None:
+        self._o = owner
         self._m = TestMarks()
+        self.presets: dict[str, TestMarks] = {}
 
     def get(self) -> TestMarks:
         return self._m
 
     def set(self, marks: TestMarks) -> None:
+        if self._o is not None:
+            self._o._rec("marks.set", marks)
         self._m = marks
 
     def list_presets(self) -> list[str]:
-        return []
+        return sorted(self.presets)
 
     def save_preset(self, path: str) -> None:
-        pass
+        if self._o is not None:
+            self._o._rec("marks.save_preset", path)
+        self.presets[path] = self._m
 
     def load_preset(self, path: str) -> TestMarks:
-        return self._m
+        if self._o is not None:
+            self._o._rec("marks.load_preset", path)
+        if path not in self.presets:
+            raise FileFormatError(f"no preset {path}")
+        return self.presets[path]
 
 
 class FakeSession:
@@ -411,56 +505,95 @@ class FakeSession:
         pass
 
 
+ENGINE_PHASES = {
+    "travel_cal": ("CHECK", "BACKLASH", "REFERENCE", "MOVE1", "ENTER_D1", "MOVE2", "ENTER_DTOT", "RESULT", "ACCEPT",
+                   "DONE"),
+    "load_cal": ("CONFIG", "AWAIT_OPERATOR", "PRESETTLE", "CAPTURE", "EVALUATE", "FIT", "ACCEPT", "DONE"),
+    "tare": ("CHECK", "CAPTURE", "EVALUATE", "DONE"),
+}
+ENGINE_TOPIC = {"travel_cal": "cal.travel.state", "load_cal": "cal.load.state", "tare": "tare.state"}
+
+
 class FakeEngine:
+    """Scriptable engine (B §9.1): ``set_state(**fields)`` replaces the ``EngineState`` and publishes the engine
+    topic; every method call is recorded as ``<kind>.<method>``; ``start_result`` scripts the start gate."""
+
     PHASES: tuple[str, ...] = ("IDLE",)
 
-    def __init__(self, kind: str) -> None:
+    def __init__(self, kind: str, owner: "FakeBackend | None" = None) -> None:
         self._kind = kind
+        self._o = owner
+        self.PHASES = ENGINE_PHASES.get(kind, ("IDLE",))
+        self._state = EngineState(kind, "IDLE")
+        self.start_result: GateResult | None = None
+        self._subs: list[Callable[[EngineState], None]] = []
+
+    def _rec(self, name: str, *args: Any, **kwargs: Any) -> None:
+        if self._o is not None:
+            self._o._rec(f"{self._kind}.{name}", *args, **kwargs)
+
+    def set_state(self, **fields: Any) -> EngineState:
+        self._state = dataclasses.replace(self._state, **fields)
+        for cb in list(self._subs):
+            cb(self._state)
+        if self._o is not None:
+            self._o.events.emit(ENGINE_TOPIC.get(self._kind, f"{self._kind}.state"), self._state)
+        return self._state
 
     def state(self) -> EngineState:
-        return EngineState(self._kind, "IDLE")
+        return self._state
 
     def subscribe(self, cb: Callable[[EngineState], None]) -> int:
-        return 0
+        self._subs.append(cb)
+        return len(self._subs)
 
     def start(self, **config: Any) -> GateResult:
+        self._rec("start", **config)
+        if self.start_result is not None:
+            g = self.start_result
+            if g.ok and (not g.confirm_items or config.get("confirmed")):
+                self.set_state(phase=self.PHASES[0], abort_reason=None)
+            return g
         return NOT_IMPL
 
     def continue_(self, inputs: Mapping[str, float] | None = None, *, confirmed: bool = False) -> None:
-        pass
+        self._rec("continue_", dict(inputs) if inputs else None, confirmed=confirmed)
 
     def repeat(self) -> None:
-        pass
+        self._rec("repeat")
 
     def cancel(self) -> None:
-        pass
+        self._rec("cancel")
 
 
 class FakeTareEngine(FakeEngine):
     def undo(self) -> GateResult:
-        return NOT_IMPL
+        self._rec("undo")
+        return self._o.results.get("tare_undo", GATE_OK) if self._o is not None else GATE_OK
 
 
 class FakeLoadCal(FakeEngine):
     def finish_early(self) -> None:
-        pass
+        self._rec("finish_early")
 
     def retake(self, i: int) -> None:
-        pass
+        self._rec("retake", i)
 
 
 class FakeCalStore:
     def __init__(self, owner: "FakeBackend") -> None:
         self._o = owner
+        self.load_record: Mapping[str, Any] | None = None
+        self.files: dict[str, list[str]] = {"load": [], "travel": []}
 
     def active_load(self) -> Mapping[str, Any] | None:
-        return None
+        return self.load_record
 
     def active_travel(self) -> Mapping[str, Any] | None:
         return None
 
     def history(self, kind: Literal["load", "travel"]) -> list[str]:
-        return []
+        return list(self.files.get(kind, []))
 
     def restore_travel_async(self) -> Future:
         return done(TravelDiffState())
@@ -540,11 +673,11 @@ class FakeBackend:
         self.limits = FakeLimits(self)
         self.data = FakeData(self)
         self.channels = FakeChannels()
-        self.marks = FakeMarks()
+        self.marks = FakeMarks(self)
         self.session = FakeSession()
-        self.tare_engine = FakeTareEngine("tare")
-        self.travel_cal = FakeEngine("travel_cal")
-        self.load_cal = FakeLoadCal("load_cal")
+        self.tare_engine = FakeTareEngine("tare", self)
+        self.travel_cal = FakeEngine("travel_cal", self)
+        self.load_cal = FakeLoadCal("load_cal", self)
         self.calibrations = FakeCalStore(self)
         self.sequencer = FakeSequencer()
         self.reports = FakeReports()
@@ -574,6 +707,9 @@ class FakeBackend:
 
     def set_indicators(self, **items: Indicator) -> None:
         self.set_status(indicators=self._status.indicators.replace(**items))
+
+    def set_motion(self, **fields: Any) -> None:
+        self.set_status(motion=dataclasses.replace(self._status.motion, **fields))
 
     def set_all_indicators(self, state: str) -> None:
         from bend_stand.core.api import INDICATOR_KEYS  # noqa: PLC0415
@@ -618,7 +754,9 @@ class FakeBackend:
         self.set_status(link=LinkStatus(LinkState.CONNECTED, "", endpoint, self.compat, self.info,
                                         LinkStats(frames_ok=10, data_frames=8)),
                         cfg_dirty=False, reboot_pending=False, nvm_defaulted=False,
-                        config_read_only=self.compat.config_read_only)
+                        config_read_only=self.compat.config_read_only,
+                        motion=MotionStatus(position_mm=100.0, test_position_mm=100.0, commanded_target_mm=100.0,
+                                            limits=default_limits()))
         self.events.emit("link.state", None)
         return done(self.info)
 
@@ -665,7 +803,7 @@ class FakeBackend:
 
     def hotkey_test_start(self, timeout_s: float = 10.0) -> GateResult:
         self._rec("hotkey_test_start", timeout_s)
-        return NOT_IMPL
+        return self.results.get("hotkey_test_start", GATE_OK)
 
     def clear_stop_async(self, *, confirmed: bool = False) -> Future:
         self._rec("clear_stop_async", confirmed=confirmed)

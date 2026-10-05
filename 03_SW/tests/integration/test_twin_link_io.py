@@ -1,4 +1,8 @@
-"""SW io layer (Implementer B: TcpTransport, FrameDecoder, protocol) <-> FW host twin over tcp:// (real time).
+"""SW io layer (Implementer B: FrameDecoder, protocol) <-> FW host twin in lock-step virtual time.
+
+OBS-M2-09 (M3): the client waits in the twin's virtual time (``io_client.LockstepIoClient``), so host load can
+no longer turn a wall-clock wait into a failure; B's TcpTransport keeps its realtime smoke in
+test_backend_twin.py (``test_backend_connect_sequence_tcp_realtime``).
 
 Connect sequence at the wire level (ICD §9.5), GET_INFO version/hash check, GET_ALL_PARAMS paging, SET_PARAM
 write-verify, NVM save / reboot / restore, stream start/stop and CRC-error handling — all bytes built and
@@ -17,17 +21,26 @@ from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.io import protocol as proto
 
-from io_client import IoClient
+from io_client import LockstepIoClient
+from lockstep_boards import TwinBoard
 
-pytestmark = [pytest.mark.twin, pytest.mark.rt]
+pytestmark = [pytest.mark.twin]
 
 # non-session, non-reboot parameters that are safe to change in M1 (no motion, no AFE rate change)
 EDITS = {"stream.fallback_hz": 20, "io.release_ms": 77, "safety.link_timeout_ms": 1500, "afe.rate_tol_pct": 25}
 
 
 @pytest.fixture
-def cli(twin_rt):
-    c = IoClient(twin_rt.endpoint).open()
+def twin_rt(twin):
+    """Name kept from the realtime version: the lock-step twin (same act / logs API)."""
+    return twin
+
+
+@pytest.fixture
+def cli(twin):
+    twin.advance_ms(5)
+    twin.read_client()                              # the power-on BOOT went out before the port was opened (VCP)
+    c = LockstepIoClient(TwinBoard(tw=twin)).open()
     c.pump(0.05)                                    # pending bytes at open (BOOT etc.) go to the decoder
     yield c
     c.close()

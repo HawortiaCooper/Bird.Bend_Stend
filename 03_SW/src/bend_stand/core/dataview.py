@@ -6,7 +6,7 @@ column) and a worst-of ``vstate`` per column, built from the coarsest adequate p
 (render cost bounded by the width, 5–600 s windows). ``xy`` → stride-decimated pairs with per-stride extrema;
 ``latest(key)`` → value + state (n/a / STALE / SATURATED / INVALID / OK).
 
-Implements: SW-RT-003, SW-RT-005, NFR-001 (backend part)
+Implements: SW-RT-003, SW-RT-005, NFR-001 (backend part), SW-CAL-008 / SW-CAL-009 (force states)
 """
 from __future__ import annotations
 
@@ -17,6 +17,13 @@ import numpy as np
 
 from bend_stand.core.model import LatestSample, PlotSnapshot, SeriesMinMax, XYSnapshot
 from bend_stand.core.pipeline import RAW_STATE_NO_DATA, RAW_STATE_SATURATED, RAW_STATE_SETTLING, Pipeline
+from bend_stand.core.scaling import (
+    AFE_MISMATCH, EXTRAPOLATED, NO_CAL, NO_DATA, NO_TARE, SATURATED, SETTLING, SYNTHETIC,
+)
+
+#: channels computed from the force (their state follows the scale reasons, SW-RT-005 / SW-CAL-008 / SW-CAL-009)
+FORCE_KEYS = frozenset({"F_N", "F_kgf", "force_rate_n_s", "k_tan_n_mm", "k_sec_n_mm", "work_nmm", "peak_n",
+                        "sigma_mpa", "eps"})
 
 STALE_NS = 500_000_000
 
@@ -119,6 +126,16 @@ class DataView:
                 return LatestSample(key, v, "SATURATED", lt.t_dev_s)
             if lt.raw_state == RAW_STATE_SETTLING:
                 return LatestSample(key, v, "INVALID", lt.t_dev_s)
+        if key in FORCE_KEYS:                       # M3: state of the force-derived channels from the scale reasons
+            r = lt.calc_reason
+            if r & SATURATED:
+                return LatestSample(key, v, "SATURATED", lt.t_dev_s)
+            if r & (NO_CAL | NO_TARE | NO_DATA | SYNTHETIC) or np.isnan(v):
+                return LatestSample(key, v, "n/a", lt.t_dev_s)
+            if r & (AFE_MISMATCH | SETTLING):
+                return LatestSample(key, v, "INVALID", lt.t_dev_s)
+            if r & EXTRAPOLATED:
+                return LatestSample(key, v, "EXTRAPOLATED", lt.t_dev_s)
         if np.isnan(v):
             return LatestSample(key, v, "n/a", lt.t_dev_s)
         return LatestSample(key, v, "OK", lt.t_dev_s)

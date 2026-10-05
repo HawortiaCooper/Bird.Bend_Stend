@@ -191,7 +191,8 @@ def test_clear_and_resume_gates_need_confirmation() -> None:
             h.result(be.estop_clear_async(confirmed=False))
         g = be.status().gates[GateId.CLEAR_STOP]
         assert not g.ok and g.refused[0].code == GateCode.NOTHING_TO_CLEAR
-        assert not be.resume().ok and not be.tare().ok and not be.take_sample().ok
+        assert not be.resume().ok
+        assert be.tare().ok and be.take_sample().ok                  # M3: real (were NOT_IMPLEMENTED in M2)
         assert not be.hotkey_test_start().ok
         assert not be.motion.disable().ok and be.motion.limits() is not None    # M2: driver not enabled yet
         assert not be.motion.check(api.MotionKind.MOVE).ok

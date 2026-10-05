@@ -30,8 +30,10 @@ def test_get_info_fields(v: V, tw):
     # dict_version 5 (ICD v0.7: v0.5 retired io.stop_active_level, v0.7 added drv.k1_check_enable) -> 48 parameters
     assert i["param_count"] == int(gen_define("PARAM_COUNT").rstrip("u")) == 48
     assert i["uid"].upper() == tw.uid.upper()                      # hal_uid seam
-    if "MOTION" in i["features"]:                                  # M2 build (plan v0.3 §5.2): MOVE_UNTIL_LOAD is M4
-        assert set(i["features"]) == {"AFE", "MOTION", "HOMING", "NVM", "TWIN", "BUTTONS", "DRV_SIGNALS"}
+    if "MOTION" in i["features"]:
+        # M2 build (plan v0.3 §5.2); FEAT_MOVE_UNTIL_LOAD (bit 4) present once A's FW-MOT-006 landed (D-44, OI-FW-44)
+        m2 = {"AFE", "MOTION", "HOMING", "NVM", "TWIN", "BUTTONS", "DRV_SIGNALS"}
+        assert set(i["features"]) in (m2, m2 | {"MOVE_UNTIL_LOAD"}), i["features"]
     else:
         assert set(i["features"]) == {"AFE_SYNTHETIC", "NVM", "TWIN"}  # M1 build + FEAT_TWIN
     assert i["build"]                                             # build id string present

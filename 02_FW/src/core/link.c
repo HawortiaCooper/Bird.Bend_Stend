@@ -3,7 +3,8 @@
  * (DEF-P1-07: a command is taken only when class R can hold the largest response), stop sniffer in
  * the 1 kHz tick with the sniffed-stop hold, link counters.
  * Implements: IF-003, IF-005, FW-CMD-001, NFR-008, SAF-FW-002/003 (receive-side stop path),
- *             SAF-FW-015 (last valid command frame time), FW-CMD-004 (counters)
+ *             SAF-FW-015 (last valid command frame time), FW-CMD-004 (counters), DEF-M3-01 (no stale
+ *             hold for a stop frame dispatched before the sniffer scanned it)
  */
 #include "fw.h"
 
@@ -68,9 +69,13 @@ static void dispatch(const fp_frame_t *f)
     }
     g_fw.last_cmd_rx_ms = hal_time_ms();             /* NACKed frames included (ICD §3.1) */
     g_fw.cmd_rx_count++;                             /* LINK_RESTORED (SAF-FW-015) */
-    if (CMD_IS_SNIFFED(f->type)) {
+    /* frames the sniffer reports (sniffed TYPE, its LEN, STOP mode <= 1): resolve the hold, or -
+     * dispatched before the sniffer scanned it - remember it so that the later hit is ignored
+     * (DEF-M3-01: no stale hold, no second motion part) */
+    if (CMD_IS_SNIFFED(f->type) && f->len == (uint16_t)proto_req_len(f->type) &&
+        !(f->type == (uint8_t)CMD_STOP && f->payload[0] > (uint8_t)STOPMODE_CONTROLLED)) {
         CRIT_BEGIN(HAL_CRIT_TICK);
-        (void)hold_on_dispatch(&s_hold, f->type, f->seq);
+        (void)hold_on_dispatch_at(&s_hold, f->type, f->seq, hal_time_ms());
         CRIT_END();
     }
     cmd_execute(f->type, f->seq, f->payload, f->len);
@@ -137,6 +142,9 @@ void link_tick(uint32_t now_ms)
             uint8_t cause = sniff_cause(&hits[k]);
             bool ctl = (hits[k].type == (uint8_t)CMD_PAUSE) ||
                        (hits[k].type == (uint8_t)CMD_STOP && hits[k].mode == (uint8_t)STOPMODE_CONTROLLED);
+            if (hold_already_dispatched(&s_hold, &hits[k])) {
+                continue;                            /* DEF-M3-01: already executed in order */
+            }
             g_fw.last_cmd_rx_ms = now_ms;
             g_fw.cmd_rx_count++;
             hold_set(&s_hold, &hits[k], now_ms);

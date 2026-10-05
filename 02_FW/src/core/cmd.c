@@ -1,11 +1,11 @@
 /* Command handlers (FW_design §5.10, ICD §5): full pure check first (cmd_check, ICD §4.4) on a
  * context filled from the live state, a NACK has no effect; accepted commands are executed here.
  * M2: ENABLE / DISABLE / HOME / MOVE_ABS / JOG and the motion part of STOP / HALT / PAUSE run the
- * motion executor (under CRIT_TICK: serialised with the control tick). MOVE_UNTIL_LOAD is M4:
- * accepted commands answer E_INTERNAL NOT_IN_BUILD with no side effect (FEAT_MOVE_UNTIL_LOAD = 0).
+ * motion executor (under CRIT_TICK: serialised with the control tick); so does MOVE_UNTIL_LOAD
+ * (FW-MOT-006, D-44: M4 scope pulled forward, FEAT_MOVE_UNTIL_LOAD = 1).
  * EVENT order of a stop (FW_design §5.3): latch EVENT -> STOPPED -> VALID_CLEARED -> MOVE_DONE.
  * Implements: FW-CMD-001, FW-CMD-002, FW-CMD-003, FW-CMD-004, FW-CFG-002, FW-CFG-003, FW-CFG-004,
- *             FW-NVM-001, FW-STR-001, FW-MOT-004, FW-MOT-005, FW-MOT-007, FW-MOT-008, FW-HOM-001,
+ *             FW-NVM-001, FW-STR-001, FW-MOT-004, FW-MOT-005, FW-MOT-006, FW-MOT-007, FW-MOT-008, FW-HOM-001,
  *             SAF-FW-001 (VALID clear), SAF-FW-006, SAF-FW-011 (regrow reference), SAF-FW-020,
  *             SAF-FW-021, SAF-FW-023, IF-005, IF-008, D-30, D-31
  */
@@ -252,8 +252,12 @@ void cmd_execute(uint8_t type, uint8_t seq, const uint8_t *payload, uint16_t len
         CRIT_END();
         ok_empty(type, seq);
         break;
-    case CMD_MOVE_UNTIL_LOAD:
-        link_nack(type, seq, ST_E_INTERNAL, INTERNAL_NOT_IN_BUILD);   /* M4 (FW_design §5.10) */
+    case CMD_MOVE_UNTIL_LOAD:                        /* FW-MOT-006 (D-44: M4 scope pulled forward) */
+        CRIT_BEGIN(HAL_CRIT_TICK);
+        motion_move_until_load(r.u.mul.bound_um, r.u.mul.v_um_s, r.u.mul.a_um_s2, r.u.mul.raw_stop,
+                               r.u.mul.cmp);
+        CRIT_END();
+        ok_empty(type, seq);
         break;
     case CMD_DIAG_MEAS:                              /* measurement images only (D-40 c, App. C) */
         if (hal_meas_cmd(payload, len, body, PROTO_MEAS_BODY_LEN) == PROTO_MEAS_BODY_LEN) {

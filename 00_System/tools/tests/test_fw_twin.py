@@ -13,6 +13,7 @@ Run:  .venv\\Scripts\\python -m pytest 00_System/tools/tests/test_fw_twin.py -q
 from __future__ import annotations
 
 import json
+import math
 import socket
 import sys
 import time
@@ -39,7 +40,7 @@ from twin import BYTE_NS, Twin, TwinLink, byte_end  # noqa: E402
 
 @pytest.fixture(scope="module")
 def probe_exe():
-    return twin_build.ensure_built("probe")
+    return twin_build.ensure_built_private("probe")          # private per-run binary (OBS-M2-09)
 
 
 @pytest.fixture
@@ -495,3 +496,66 @@ def test_diag_meas_noinit_and_info_match_target_v07(probe_exe, tmp_path):
         t.advance_ms(5)
         w5 = TwinLink(t).cmd("DIAG_MEAS", {"op": 5, "sel": 0, "a": 0, "b": 0})["w"]
         assert w5[0] == 0x4D454153 and w5[4] == 0 and w5[8] == 0           # power cycle: fresh block
+
+
+# ---------------------------------------------------------------------------------------------- M3 load model
+def _raws(t, ms):
+    t0 = t.now_us
+    t.advance_ms(ms)
+    return [c["raw"] for c in t.act("query", what="conversions", since_us=t0 + 1)["conversions"]]
+
+
+def test_load_model_weight_drift_creep_nonlin(tw):
+    """ICD v0.7.2: weight kg·g·cpn exact (noise 0); linear zero drift; creep first order; non-linearity odd,
+    maximal at half scale; every term 0 by default."""
+    tw.advance_ms(100)
+    r0 = _raws(tw, 200)
+    assert set(r0) == {50000}
+    assert tw.act("weight", kg=10.0)["force_n"] == pytest.approx(98.0665)
+    assert set(_raws(tw, 200)) == {round(50000 + 3285.0 * 98.0665)}
+    tw.act("weight", kg=0)
+    tw.act("afe", drift_counts_per_s=100.0)
+    r = _raws(tw, 1000)
+    assert r[-1] - r[0] == pytest.approx(100.0 * (len(r) - 1) / 80, abs=2)
+    tw.act("afe", drift_counts_per_s=0.0)
+    base = tw.act("query", what="world")["raw_ideal"]
+    tw.act("afe", creep_pct=1.0, creep_tau_s=1.0)
+    tw.act("weight", n=1000.0)
+    tw.advance_ms(1000)
+    w = tw.act("query", what="world")
+    assert w["creep_counts"] == pytest.approx(0.01 * 3285.0 * 1000.0 * (1 - math.exp(-1.0)), rel=1e-3)
+    tw.act("afe", creep_pct=0.0)
+    tw.act("weight", n=1961.33 / 2)
+    tw.act("afe", nonlin_pct_fs=0.03)
+    w = tw.act("query", what="world")
+    assert w["raw_ideal"] - base == pytest.approx(3285.0 * 1961.33 / 2, abs=1)   # raw_ideal excludes nonlin
+    r = _raws(tw, 100)
+    assert r[-1] - base - 3285.0 * 1961.33 / 2 == pytest.approx(0.0003 * 3285.0 * 1961.33, abs=1)
+
+
+def test_load_model_relaxation_and_reset_carry_over(tw):
+    """Specimen relaxation (first order toward relax_pct·F at constant position) and the load states survive an
+    MCU reset (world, not MCU)."""
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=-4000.0, relax_pct=10.0, relax_tau_s=2.0)
+    tw.act("afe", drift_counts_per_s=5.0)
+    tw.advance_ms(2000)
+    w = tw.act("query", what="world")
+    assert w["specimen_n"] == pytest.approx(200.0)
+    assert w["relax_n"] == pytest.approx(20.0 * (1 - math.exp(-1.0)), rel=1e-3)
+    assert w["load_n"] == pytest.approx(200.0 - w["relax_n"])
+    tw.act("reset", cause="pin")
+    tw.advance_ms(5)
+    w2 = tw.act("query", what="world")
+    assert w2["relax_n"] >= w["relax_n"] and w2["drift_counts"] >= w["drift_counts"]
+    assert w2["drift_counts"] == pytest.approx(5.0 * tw.now_us / 1e6, abs=0.5)
+
+
+def test_load_model_scenario_keys(probe_exe, tmp_path):
+    """v0.7.2 scenario keys incl. the simulator's drift_counts_per_min alias (SWC-M3-02)."""
+    scn = {"schema": "bird.bend.simscenario", "version": 1,
+           "world": {"afe": {"drift_counts_per_min": 600.0}, "weight_kg": 1.0}}
+    with Twin("lockstep", exe=probe_exe, run_dir=tmp_path, scenario=scn) as t:
+        t.advance_ms(2000)
+        w = t.act("query", what="world")
+        assert w["weight_n"] == pytest.approx(9.80665)
+        assert w["drift_counts"] == pytest.approx(10.0 * 2.0, abs=0.1)

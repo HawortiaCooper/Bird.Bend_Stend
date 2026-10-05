@@ -48,7 +48,7 @@ static struct {
     vt_t t_evt;
     uint32_t ccr2, ccr3, ccr4, pul_at_arm;
     vt_t last_rise, last_fall; bool have_rise;
-    uint32_t pwm_min_p, pwm_max_p, pwm_min_h, pwm_max_h, pwm_n;
+    uint32_t pwm_min_p, pwm_max_p, pwm_min_h, pwm_max_h, pwm_n, pend_h; bool have_h;   /* DEF-HG-01 model */
     /* noinit */
     uint32_t ni_magic, ni_last_pul, ni_hang;
     uint32_t ni_prev_valid, ni_prev_pul, ni_prev_hb, ni_prev_hang, ni_boots;
@@ -110,14 +110,21 @@ static uint32_t probe_ticks(vt_t t)
     return (uint32_t)ticks;
 }
 
-static void event(void)
+/* a capture (CCR2/3/4) of an edge caused at the trigger instant: the twin reacts with zero latency, but on the
+ * board CCRx = 0 means "no capture" and a real ISR needs >= 1 probe tick -> report at least 1 tick
+ * (v0.7.3, OBS-E-HG-03; the zero-latency reaction itself is documented in tools/README) */
+static uint32_t cap_ticks(vt_t t) { uint32_t c = probe_ticks(t); return (c == 0u && !M.ovf) ? 1u : c; }
+
+static void event_at(vt_t t)
 {
-    push(0, tw_fw_us(T.now));
+    push(0, tw_fw_us(t));
     if (!M.armed || M.mode == 2u) return;
     if (M.mode == 0u && M.triggered) return;          /* TRIGGER: single shot */
-    M.triggered = true; M.t_evt = T.now; M.ovf = false;
+    M.triggered = true; M.t_evt = t; M.ovf = false;
     M.ccr2 = M.ccr3 = M.ccr4 = 0;
 }
+
+static void event(void) { event_at(T.now); }
 
 /* hooks from the engine */
 void tw_meas_edge(const char *pin, int level)
@@ -128,30 +135,36 @@ void tw_meas_edge(const char *pin, int level)
         if (level) {
             M.pul_count++; push(1, t); M.ni_last_pul = t;
             if (M.armed && M.mode == 2u) {
-                if (M.have_rise) {
+                /* PWM input as on the target after DEF-HG-01 (v0.7.3, OBS-E-HG-05): the capture at a rising edge
+                 * gives the period since the previous rise and the high time of that previous pulse; the first
+                 * capture after arming (no previous rise) is discarded, min / max / count start with the second */
+                if (M.have_rise && M.have_h) {
                     uint32_t p = (uint32_t)((double)(T.now - M.last_rise) * 1e-9 * PROBE_HZ / (double)(M.psc + 1u));
+                    uint32_t h = M.pend_h;
                     if (!M.pwm_n || p < M.pwm_min_p) M.pwm_min_p = p;
                     if (p > M.pwm_max_p) M.pwm_max_p = p;
+                    if (!M.pwm_n || h < M.pwm_min_h) M.pwm_min_h = h;
+                    if (h > M.pwm_max_h) M.pwm_max_h = h;
+                    M.pwm_n++;
                 }
+                M.have_h = false;
                 M.last_rise = T.now; M.have_rise = true;
             } else if (M.armed && M.triggered) {
-                uint32_t c = probe_ticks(T.now);
+                uint32_t c = cap_ticks(T.now);
                 if (!M.ovf) M.ccr2 = c;
             } else if (M.armed && !M.triggered) {
                 M.before = true;
             }
         } else if (M.armed && M.mode == 2u && M.have_rise) {
-            uint32_t h = (uint32_t)((double)(T.now - M.last_rise) * 1e-9 * PROBE_HZ / (double)(M.psc + 1u));
-            if (!M.pwm_n || h < M.pwm_min_h) M.pwm_min_h = h;
-            if (h > M.pwm_max_h) M.pwm_max_h = h;
-            M.pwm_n++;
+            M.pend_h = (uint32_t)((double)(T.now - M.last_rise) * 1e-9 * PROBE_HZ / (double)(M.psc + 1u));
+            M.have_h = true;                              /* reported with the next rising-edge capture */
         }
     } else if (!strcmp(pin, "DIR")) {
         push(2, t);
-        if (M.armed && M.triggered && M.mode != 2u) { uint32_t c = probe_ticks(T.now); if (!M.ovf) M.ccr4 = c; }
+        if (M.armed && M.triggered && M.mode != 2u) { uint32_t c = cap_ticks(T.now); if (!M.ovf) M.ccr4 = c; }
         if (M.armed && M.src == 7u && (level ? !M.falling : M.falling)) event();
     } else if (!strcmp(pin, "ENA")) {
-        if (M.armed && M.triggered && M.mode != 2u) { uint32_t c = probe_ticks(T.now); if (!M.ovf) M.ccr3 = c; }
+        if (M.armed && M.triggered && M.mode != 2u) { uint32_t c = cap_ticks(T.now); if (!M.ovf) M.ccr3 = c; }
     }
 }
 
@@ -163,7 +176,9 @@ void tw_meas_input(uint8_t id, uint8_t level)    /* electrical input change */
 }
 
 void tw_meas_dout(void) { if (M.on && M.armed && M.src == 4u) event(); }          /* DOUT ready */
-void tw_meas_rx(void) { if (M.on && M.armed && M.src == 6u) event(); }            /* RX byte */
+/* RX byte, called at the end of its stop bit: the board's probe triggers on the falling edge of the START bit,
+ * one character time (10 bits at 921 600 Bd = 10 851 ns, twin.py BYTE_NS) earlier (v0.7.3, OBS-E-HG-01) */
+void tw_meas_rx(void) { if (M.on && M.armed && M.src == 6u) event_at(T.now - 10851u); }
 void tw_meas_stim_edge(uint8_t level) { if (M.on && M.armed && M.src == 8u && (level ? !M.falling : M.falling)) event(); }
 
 void tw_meas_release_static(void)
@@ -194,7 +209,7 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
     case 1:                                                      /* PROBE_ARM */
         M.armed = true; M.triggered = false; M.ovf = false; M.before = false; M.have_rise = false;
         M.src = sel; M.mode = (uint8_t)(a & 3u); M.falling = (a & 0x100u) != 0u; M.psc = b;
-        M.ccr2 = M.ccr3 = M.ccr4 = 0; M.pul_at_arm = M.ch[1].n; M.pwm_n = 0;
+        M.ccr2 = M.ccr3 = M.ccr4 = 0; M.pul_at_arm = M.ch[1].n; M.pwm_n = 0; M.have_h = false;
         M.pwm_min_p = M.pwm_max_p = M.pwm_min_h = M.pwm_max_h = 0;
         break;
     case 2: {                                                    /* PROBE_READ */

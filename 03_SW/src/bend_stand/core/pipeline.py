@@ -11,10 +11,15 @@ Rules (SWD-P1-12 b): ``d = (seq − prev) & 0xFFFF``; ``d = 0`` duplicate → dr
 starts a new time epoch (display time stays continuous). Missed conversion: Δt > 1.5 × median period without
 a seq gap. EVENT header SEQ gap → ``events_lost`` + immediate GET_STATUS.
 
+M3: stage 5-6 scaling + derived channels (``core.scaling``: F, kgf, test travel, speed, force rate, stiffness,
+work, peak, noise, 3-point bend) and stage 9 **safety** - the ``safety`` hook (``core.safety.SafetySupervisor``)
+runs for every DATA sample **before** the ring buffer and the sinks (act first, publish after, KD-05).
+
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/core/pipeline.py @37c87471 (stage structure, bounded queue,
 liveness beat; rewritten for the 18-byte DATA payload and the bend-stand rules).
 
-Implements: IF-006, IF-007, SW-ACQ-004 (loss counting), NFR-001/004 (backend part), SW-RT-005 (latest)
+Implements: IF-006, IF-007, SW-ACQ-004 (loss counting), NFR-001/004 (backend part), SW-RT-005 (latest),
+SW-RT-004 (derived stage), SAF-SW-001 (per-frame safety hook)
 """
 from __future__ import annotations
 
@@ -30,6 +35,7 @@ import numpy as np
 from bend_stand.calc.timebase import frame_gap, unwrap_step
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.channels import BIT_CHANNELS, RING_KEYS
+from bend_stand.core.scaling import DERIVED_KEYS, DerivedStream, ScaleConfig
 from bend_stand.core.clock import Clock
 from bend_stand.core.events import EventBus
 from bend_stand.core.liveness import LivenessMonitor
@@ -40,6 +46,7 @@ from bend_stand.io.framing import Frame
 
 log = logging.getLogger("bend_stand.core.pipeline")
 QUEUE_LEN = 4096
+_DERIVED_COL = RING_KEYS.index(DERIVED_KEYS[0])
 RING_CAPACITY = 86_400                 # 900 s × 96 SPS (§7.5)
 RAW_STATE_OK, RAW_STATE_SATURATED, RAW_STATE_NO_DATA, RAW_STATE_SETTLING = 0, 1, 2, 3
 VSTATE_OK, VSTATE_EXTRAPOLATED, VSTATE_INVALID, VSTATE_NO_DATA = 0, 1, 2, 3
@@ -81,6 +88,16 @@ class DataRow:
     setpoint_um: int
     vstate: int
     epoch: int
+    derived: tuple[float, ...] = ()       # DERIVED_KEYS order (M3)
+    calc_reason: int = 0                  # core.scaling reason bits
+
+    @property
+    def f_n(self) -> float:
+        return self.derived[0] if self.derived else float("nan")
+
+    @property
+    def x_mm(self) -> float:
+        return self.setpoint_um / 1000.0
 
 
 @dataclass
@@ -94,6 +111,7 @@ class Latest:
     flags: int = 0
     status: int = 0
     values: dict[str, float] = field(default_factory=dict)
+    calc_reason: int = 0
 
 
 class Pipeline:
@@ -114,6 +132,9 @@ class Pipeline:
         self.event_sinks: list[Callable[[FwEvent], None]] = []
         self.counters = PipelineCounters()
         self.latest = Latest()
+        self.scale = ScaleConfig()                      # swapped atomically by the backend (M3)
+        self.derived = DerivedStream()
+        self.safety: Callable[[DataRow], None] | None = None   # per-sample safety (Pipeline thread, KD-05)
         self._lock = threading.Lock()
         self.reset_link()
 
@@ -282,6 +303,7 @@ class Pipeline:
         else:
             raw_state, vstate = RAW_STATE_OK, VSTATE_OK
         # sample rate / missed conversions (fallback frames excluded)
+        missed0 = self.counters.afe_missed
         if not no_data:
             if self.prev_sample_t_u is not None and g.kind in ("next", "lost"):
                 dt = u.t_u - self.prev_sample_t_u
@@ -292,6 +314,18 @@ class Pipeline:
             self.prev_sample_t_u = u.t_u
         rate = 1e6 / float(np.median(self.periods)) if len(self.periods) >= 4 else None
         self.counters.data_frames += 1
+        # scale + derived (M3)
+        missed = self.counters.afe_missed != missed0
+        vals, reason, vstate = self.derived.process(self.scale, u.t_u, float(s.afe_raw), raw_state,
+                                                    s.setpoint_um / 1000.0, lost > 0 or missed)
+        dr = DataRow(fr.t_ns, s.t_us, u.t_u, t_dev, s.frame_seq, lost, s.flags, s.status,
+                     0 if no_data else s.afe_raw, raw_state, s.setpoint_um, vstate, self.epoch, vals, reason)
+        sf = self.safety
+        if sf is not None:                             # act first (may write STOP), publish after (KD-05)
+            try:
+                sf(dr)
+            except Exception:  # noqa: BLE001 - the pipeline must survive
+                log.exception("safety stage failed")
         # ring row
         row = np.full(len(RING_KEYS), np.nan, np.float32)
         row[0] = np.nan if no_data else s.afe_raw
@@ -302,6 +336,7 @@ class Pipeline:
         for j, (_k, _n, bit, grp) in enumerate(BIT_CHANNELS):
             v = s.flags if grp == "flags" else s.status
             row[5 + j] = (v >> bit) & 1
+        row[_DERIVED_COL:] = vals
         self.ring.write(np.array([t_dev]), row.reshape(1, -1))
         with self._lock:
             lt = self.latest
@@ -309,8 +344,9 @@ class Pipeline:
             lt.raw, lt.raw_state = (float("nan") if no_data else float(s.afe_raw)), raw_state
             lt.x_mm, lt.rate_sps, lt.flags, lt.status = s.setpoint_um / 1000.0, rate, s.flags, s.status
             lt.values = {k: float(row[i]) for i, k in enumerate(RING_KEYS)}
-        dr = DataRow(fr.t_ns, s.t_us, u.t_u, t_dev, s.frame_seq, lost, s.flags, s.status,
-                     0 if no_data else s.afe_raw, raw_state, s.setpoint_um, vstate, self.epoch)
+            for k, v in zip(DERIVED_KEYS, vals, strict=True):    # full precision for the readouts
+                lt.values[k] = float(v)
+            lt.calc_reason = reason
         for sink in self.sinks:
             try:
                 sink(dr)
@@ -321,7 +357,7 @@ class Pipeline:
         with self._lock:
             lt = self.latest
             return Latest(lt.t_dev_s, lt.t_host_ns, lt.raw, lt.raw_state, lt.x_mm, lt.rate_sps, lt.flags, lt.status,
-                          dict(lt.values))
+                          dict(lt.values), lt.calc_reason)
 
     def info(self) -> dict[str, Any]:
         return {"queued": self.queued(), "epoch": self.epoch}

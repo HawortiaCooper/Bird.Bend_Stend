@@ -1,6 +1,6 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.1, PROTO 1.0, PAYLOAD 1)
+Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.3, PROTO 1.0, PAYLOAD 1)
 Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
 
 Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes and
@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from enum import IntEnum, IntFlag
 from types import MappingProxyType
 
-ICD_VERSION = '0.7.1'
+ICD_VERSION = '0.7.3'
 PROTO_MAJOR = 1
 PROTO_MINOR = 0
 PAYLOAD_VERSION = 1

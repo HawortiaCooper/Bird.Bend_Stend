@@ -2,11 +2,11 @@
 
 | Doc | ICD_protocol |
 |---|---|
-| Version | **0.7.1 — M2 close-out, Appendix C (OI-FW-41)** (change history §15) |
+| Version | **0.7.3 — D-45 e pulse-timing defaults (dict_version 6); twin fidelity (HIL dry run)** (change history §15) |
 | Date | 2026-10-03 |
 | Owner | Implementer C — Integrator (changes only with a version bump + change-history entry, IF-001) |
 | Implements | SRS v0.6: IF-001…IF-012, FW-CFG-001…004, FW-NVM-001…003, FW-CMD-001…004, FW-STR-001…006, FW-TIM-001, FW-PAR-001…006 (Table 5.1), command semantics of SAF-FW-001…026 and SRS §3.2; decisions D-03, D-05, D-12…D-31, D-33, D-34, D-36, D-37, D-40…D-43; FW_test_plan v0.3 §6.4 / §8.4 (REQ-C-M2-01…11); SRS v0.3 cross-check (§14 OI-ICD-06); SRS deltas from R5 §8 / D-28 and SW_design F-B-01…06/15/19 (§14); findings GF-01, GF-08 (SW_design_GUI), OI-FW-06/07/11/17…23 (FW_design), F-B-25/28/30 (SW_design), DEF-P1-01…03, OBS-P1-15 (FW_test_plan), SWD-P1-02/15 (SW_test_plan) |
-| Protocol | **PROTO_VERSION 1.0**, **PAYLOAD_VERSION 1**, dictionary `params.yaml` dict_version 5 (hash in Appendix A) |
+| Protocol | **PROTO_VERSION 1.0**, **PAYLOAD_VERSION 1**, dictionary `params.yaml` dict_version 6 (hash in Appendix A) |
 | Machine-readable companions | `00_System/specs/protocol.yaml` (names and codes, §0.3, Appendix B), `00_System/specs/params.yaml` (parameters, Appendix A), `00_System/tools/ref_codec.py` (codec oracle), `ref_cmdcheck.py` (acceptance oracle), `vectors/protocol_vectors.json`, `vectors/check_vectors.json`, `vectors/units_vectors.json`, `vectors/motion_vectors.json`, `vectors/loadlim_vectors.json` (§12) |
 | Origin | framing, CRC, parser, PARAM_ENTRY, NVM and versioning rules follow Thrust_Stand_HAW `00_System/specs/ICD_protocol.md` @9473c68 (trimmed per R3 §1.6) |
 
@@ -439,7 +439,19 @@ already beyond → MOVE_DONE LOAD_THRESHOLD without motion (so a repeated comman
 During the move **every** HX711 sample is compared; the first sample beyond `raw_stop` causes an immediate
 stop with the load-path timing of SAF-FW-002 → MOVE_DONE LOAD_THRESHOLD. Reaching `bound_um` → planned stop
 exactly at the bound → MOVE_DONE BOUND. Fallback frames are not samples (AFE stale while moving =
-AFE_FAULT).
+AFE_FAULT). Equality counts as beyond (`cmp` 0: raw ≥ `raw_stop`, `cmp` 1: raw ≤ `raw_stop`); no sample yet =
+not beyond. **Execution rules (v0.7.2, OI-FW-43, A's FW_design v0.7 §5.4.4):**
+- (a) **Load limit first**: a sample that trips the FW load limit (§5.5) is the load limit's stop — FAULT_SET
+  LOAD_LIMIT, STOPPED (LOAD_LIMIT), MOVE_DONE STOPPED — never LOAD_THRESHOLD, even if it is also beyond `raw_stop`.
+- (b) **Controlled stop in progress** (PAUSE, STOP mode 1, link watchdog): the compare stays armed; a sample
+  beyond `raw_stop` cuts the deceleration short with a CLEAN halt; the MOVE_DONE reason stays STOPPED (the first
+  cause is kept, no second STOPPED). A sample after the step output has stopped decides nothing.
+- (c) **Bound within one step**: a `bound_um` ≠ the position that rounds to the current step completes at once
+  without a pulse: MOVE_DONE LOAD_THRESHOLD if the last sample is beyond `raw_stop`, else MOVE_DONE BOUND.
+- (d) **LOAD_THRESHOLD is not a stop source** (§6.2): no STOPPED, VALID unchanged, HOMED kept, POS_UNCERTAIN
+  not set (the halt is CLEAN).
+- (e) *Informative*: a MOVE_UNTIL_LOAD parked by the sniffed-stop hold (a STOP / HALT / PAUSE byte sequence seen
+  by the stop sniffer before the command was dispatched, §2.4) is discarded with STOPPED like a MOVE_ABS.
 
 **HOME** (`flags`) — bits 1–7 ≠ 0 → `E_RANGE` 0. Load pre-check (SAF-FW-021): `abs(raw − safety.zero_raw) >
 home.max_load_raw` and bit0 = 0 → `E_CONFIRM`. **Homing uses only the START switch** (release 1, D-29b,
@@ -597,6 +609,7 @@ NOT_ENABLED.
 | physical PAUSE button / PC PAUSE | controlled (if moving) | kept | PAUSED (`pause_src` BUTTON / PC): new motion refused (BLOCK PAUSED); cleared **only** by RESUME or HALT_CLEAR (D-30, D-31, §5.5); button press while PAUSED → RESUME_REQUEST only | kept | cleared | PAUSE_BUTTON (button only), PAUSED (arg = source), STOPPED (PAUSE_BUTTON / PC_PAUSE) |
 | limit switch while moving | immediate (≤ 200 µs) | kept | LIMIT_x → auto-clear when the input has been released continuously for `io.release_ms`; while latched only motion **away** from the switch is accepted (BLOCK LIMIT toward it) (D-33h) | kept | cleared | LIMIT_SET, STOPPED, LIMIT_CLEARED |
 | both limit inputs active | immediate | kept | fault LIMIT_WIRING → inputs no longer both active + FAULT_CLEAR; a still-active input then acts as a LIMIT latch (D-40a) | kept | cleared | FAULT_SET, STOPPED |
+| MOVE_UNTIL_LOAD threshold sample (v0.7.2, OI-FW-43; not a stop source) | immediate CLEAN (≤ 200 µs after DRDY); during a controlled stop it only cuts the ramp (reason stays STOPPED) | kept | none | kept | **kept** | MOVE_DONE LOAD_THRESHOLD only (no STOPPED) |
 | FW load limit / rail sample | immediate (≤ 200 µs after DRDY) | kept | fault LOAD_LIMIT → FAULT_CLEAR (always; regrow window until a sample is inside the thresholds or a re-trip, §5.5, D-40d) | kept | cleared | FAULT_SET, STOPPED |
 | AFE stale while moving | immediate | kept | fault AFE_FAULT → fresh samples + FAULT_CLEAR | kept | cleared | AFE_STALE, FAULT_SET, STOPPED |
 | link watchdog (moving) | controlled | kept | LINK_WDG status → next valid frame | kept | cleared | LINK_WDG, STOPPED, LINK_RESTORED |
@@ -612,7 +625,10 @@ NOT_ENABLED.
 | MCU reset / IWDG / power-up | PUL idle from reset | left at "no current" (driver enabled, holding; disabled if E-stop open) | boot: NOT_ENABLED | cleared | 0 | BOOT |
 
 Every immediate stop that may have truncated a pulse in flight sets `POS_UNCERTAIN` (±1 step, HOMED kept;
-cleared by the next HOME) (SAF-FW-004). A stopped move is never resumed by the FW.
+cleared by the next HOME) (SAF-FW-004). **v0.7.2 (MC2-6):** the E-stop stop (TRUNCATE) sets it whenever the step
+output was running at the E-stop edge — the core does not know the pulse phase at the edge, so "may have"
+means "was running" (A's FW; the SW simulator follows, SWC-M3-01); CLEAN stops (STOP 0, HALT, limit switch, load
+limit, MOVE_UNTIL_LOAD threshold) never set it. A stopped move is never resumed by the FW.
 
 **E-stop without contactor (CR-03, D-41, D-42)** — release 1 has no power-removal contactor: the red NC button
 goes to the MCU E-stop sense (PA10) only, and its additional NO contact drives the HBS86H ENA opto to *disabled*
@@ -1276,6 +1292,7 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 | OI-ICD-09 | **Closed (v0.6):** A aligned `ramp_stop()` / `ramp_set_speed()` (REQ-A-M2-06); Validator E dry run 9/9 + 28/28, Integrator differential re-run 2026-10-04. | — |
 | OI-ICD-10 | **Closed (v0.7):** A confirmed Appendix C (OI-FW-38); Appendix C updated with the FW facts (ring 2048, stimulus clock 10 MHz, PROBE_READ w1 = 0 / w5 = PUL stamps since arming / TRIGGERED = counter running, STIM delay span = running step period else 1 ms, STATIC_LEVEL only with the step timer stopped); DMA map ASSUMED until HG-29. | — |
 | OI-B-M2-03 | **Answered (v0.7):** only a FAULT_CLEAR that clears a latched LOAD_LIMIT takes a new load reference; other clears leave the load-limit state unchanged. A's FW (`cmd.c` FAULT_CLEAR → `afe_loadlim_cleared()` only when LOAD_LIMIT was cleared; reference 0 without a sample) matches; `ref_loadlim.py` and `loadlim_vectors.json` aligned (new cases `regrow_clear_without_latch_keeps_reference`, `regrow_new_reference_after_retrip`). | B: align the simulator |
+| OI-FW-43 | **Closed (v0.7.2 text, v0.7.3 closed):** MOVE_UNTIL_LOAD execution rules (a)–(e) in §5.4 and the threshold row in §6.2, as built by A (FW_design v0.7 §5.4.4); vectors `mul_*` check vectors, `immediate_stops`, `threshold_in_controlled_stop` replayed by A's native suite (176/176 per A) and the twin tests `test_twin_m3_mul.py` | B: simulator mirrors (a)–(d) (MC2-6 section `mul43`) |
 | OI-B-M2-04 | **Answered (v0.7, tools/README):** coordinate convention of the twin world and the simulator: x [µm] = world position integrated per completed pulse (pulse end) from the DIR pin; START active iff x ≤ `start_switch_um`, END active iff x ≥ `end_switch_um`, evaluated after every completed step; the HAL fixed reaction stops CLEAN at that step: the last executed step is the first one at which the switch is active (step-exact, no extra step). Machine x after HOME = x_world − x_edge − `home.offset_um`, x_edge = world x of that first active step on the slow approach. | B: same convention in the simulator |
 | OI-FW-35 | **Closed (v0.7):** the twin no longer calls `step_isr()` after a HAL fixed-reaction halt at a counted step (twin_seams.c). | — |
 | MC2-2 / OI-F-M2-03 | **Closed (v0.7):** §9.3 rationale reworded (Pause/Break-key HALT). | — |
@@ -1286,6 +1303,8 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 
 | ICD | Date | PROTO / PAYLOAD / dict | Change |
 |---|---|---|---|
+| 0.7.3 | 2026-10-05 | 1.0 / 1 / 6 | **D-45 e (OI-E-HG-05), dict_version 6, hash 0xF8BCDCB8, no wire change:** defaults `motion.pulse_high_ns` and `motion.pulse_low_min_ns` 10 000 → **12 500 ns**, `motion.max_step_rate_hz` 50 000 → **40 000 Hz** (margin over the HBS86H 10 µs minimum; H3: 1e9 / 40 000 = 25 000 ≥ 12 500 + 12 500; 30 mm/s at 800 steps/mm = 24 kHz stays reachable, STATUS `v_limit_um_s` at the defaults = 30 000, step-rate cap 50 mm/s). Vectors regenerated; H3 check vectors re-based on the new defaults (`rule_h3_rate` 40 001 Hz, new `rule_h3_width_edge` 12 501 ns, new `rule_h3_old_rate_ok` 50 kHz with 10 + 10 µs). Twin DIAG_MEAS model fidelity from Validator E's HIL dry run (tools/README, no FW change): OBS-E-HG-01 RX probe triggers at the start bit of the byte; OBS-E-HG-02 STIM_RUN without the extra idle gap (next delay starts at the end of the hold); OBS-E-HG-03 captures of zero-latency reactions report ≥ 1 tick (the zero-latency reaction itself documented); OBS-E-HG-05 / DEF-HG-01 PWM input as on the target: first capture after arming discarded, min / max / count from the second rising edge. OI-FW-43 closed (§14). |
+| 0.7.2 | 2026-10-05 | 1.0 / 1 / 5 | **M3 (D-44), no wire change.** §6.2: POS_UNCERTAIN at an E-stop edge = step output running at the edge (MC2-6 finding SWC-M3-01; A's FW unchanged, simulator to align). Vocabulary v2 additions for the M3 calibration flows (tools/README, side T, simulator optional): `weight` (`kg` \| `n`, `g_mps2`: known masses on the cell), `afe` `drift_counts_per_s` / `creep_pct` + `creep_tau_s` / `nonlin_pct_fs` + `fs_n` (R2 §3 cell figures), `specimen` `relax_pct` + `relax_tau_s` now modelled; `query world` adds `specimen_n`, `weight_n`, `relax_n`, `creep_counts`, `drift_counts`, `raw_ideal`. §5.4 MOVE_UNTIL_LOAD execution rules (a)–(e) and a §6.2 row for the threshold stop (OI-FW-43, A's FW_design v0.7 §5.4.4 / §9.10). Vectors: 21 MOVE_UNTIL_LOAD check vectors (incl. a bound within one step) (argument edges, every refusal reason, already-beyond) ; motion vectors: case `mul_to_bound_5mm` and the new list `immediate_stops` (3 MOVE_UNTIL_LOAD threshold stops = prefixes of a base case, no ramp-down) and `threshold_in_controlled_stop` (1 entry: a threshold sample cuts the controlled stop of the new case `mul_stop_in_cruise`, reason STOPPED, OI-FW-43 b); a separate list so the replays of `cases` are unaffected). tools/README coordinate convention clarified: world travel per pulse = 1000 / the world's steps_per_mm (mechanics), independent of the board parameter (SWC-M3-03). Twin / integration (OBS-M2-09): per-run private twin binary (`build.ensure_built_private`, `Twin(private=True)` copies a shared exe), atomic exe install; backend ⇄ twin and SIM ⇄ twin runs in one lock-step virtual time; SIM-vs-twin comparison rule (tools/README). |
 | 0.7.1 | 2026-10-04 | 1.0 / 1 / 5 | **Appendix C only (OI-FW-41, no wire change):** DIAG_MEAS NOINIT w4 prev_valid, w5 previous last PUL, w6 previous heartbeat, w7 previous hang start, w8 boot counter (sel 1 clears all); op 9 DWT = per-section statistics with table C.1 (23 sections 0…22; count / min / max / 64-bit sum / 10 log2 bins), INFO w0 = MEAS \| DWT and w6 = empty-pair overhead in DWT builds (the "main-loop section" wording withdrawn); twin DIAG_MEAS model mirrors w4…w8 (REQ-C-M2-12); `fw_twin/build.py` prints absolute paths for a build dir outside the repo. |
 | 0.7 | 2026-10-04 | 1.0 / 1 / 5 | **M2 close-out.** CR-03 / D-41 / D-42: `drv.pwr_sense_enable` default **0** (dict_version 5), new `drv.k1_check_enable` (0x0706, default 0, reboot; gates K1_WELDED, SRS OI-18), K1_WELDED / DRV_PWR / DRV_UNPOWERED texts "only with the optional power sense", E-stop = MCU / FW only + hardwired ENA cut, FW tolerates the externally forced ENA (§6.2); D-43 b un-homed travel window from a latched origin (§5.4, check vectors, state_schema 3: `unhomed_origin_um`); MC2-2 §9.3 rationale (no STOP-button HALT); OI-B-M2-03 load reference only at a LOAD_LIMIT clear (§5.5, `ref_loadlim.py`, vectors); OI-B-M2-04 coordinate convention (tools/README); Appendix C aligned to A's FW facts (OI-FW-38 / OI-ICD-10 closed); twin: DIAG_MEAS NOINIT magic at boot + 10 kHz heartbeat (REQ-C-M2-12), no `step_isr()` after a fixed-reaction halt (OI-FW-35), 4 stop-timing integration tests un-skipped. |
 | 0.6 | 2026-10-04 | 1.0 / 1 / 4 | **D-40 / Validator E M2 requests.** REQ-C-M2-01: command **DIAG_MEAS 0x3D** (LEN 8, 64-byte body, 10 ops, Appendix C), INFO feature bit 9 **FEAT_HW_MEAS**, BLOCK bit 11 **MEAS_STATE**, §4.4 step 2a NOT_IN_BUILD, §5.6, tables `meas_*` in `protocol.yaml`, seam v1.3 `hal_meas_cmd()` (+ SR-M2-01 `hal_step_set_dir` ±2 encoding, SR-M2-02 `hal_in_cfg_t` without `stop_active_level`). D-40a LIMIT_WIRING clear rule (§5.5, §6.2, vectors). D-40b sum tolerance ±ceil(N/1000) stated (§12). D-40d load-limit regrow window (§5.5) + `ref_loadlim.py` / `loadlim_vectors.json`. Twin: REQ-C-M2-02 `inject loop_load`, -05 conversions carry gain / rate, -06 world x from PUL + DIR pin (`driver dir_wiring_inverted`, x persists across resets), -07 automatic PEND, -08 DIAG_MEAS model (`--hw-meas`), -09 `stop=` removed, -10 `log_max` 1 000 000 + `query clear`. OI-ICD-09 closed; OI-ICD-10, SD-16 added. Dictionary unchanged. |
@@ -1302,7 +1321,7 @@ the FW runs on the safe defaults (±110 % FS − 1 % FS, zero 0).
 
 <!-- BEGIN GENERATED PARAM TABLE (gen_params.py) -->
 
-Generated from `params.yaml` dict_version 5 — **PARAM_DICT_HASH = 0xB7B0263F**, 48 parameters. Flags: **M** = moving_ok (settable while moving), **N** = nvm (persisted), **R** = reboot_required. Normative descriptions: `params.yaml`.
+Generated from `params.yaml` dict_version 6 — **PARAM_DICT_HASH = 0xF8BCDCB8**, 48 parameters. Flags: **M** = moving_ok (settable while moving), **N** = nvm (persisted), **R** = reboot_required. Normative descriptions: `params.yaml`.
 
 | ID | Key | Type | Unit | Min | Max | Default | Flags | Values / notes |
 |---|---|---|---|---|---|---|---|---|
@@ -1315,9 +1334,9 @@ Generated from `params.yaml` dict_version 5 — **PARAM_DICT_HASH = 0xB7B0263F**
 | 0x0202 | `motion.pul_invert` | bool |  |  |  | false | NR |  |
 | 0x0203 | `motion.dir_invert` | bool |  |  |  | false | N |  |
 | 0x0204 | `motion.ena_invert` | bool |  |  |  | false | NR |  |
-| 0x0205 | `motion.pulse_high_ns` | u32 | ns | 2500 | 100000 | 10000 | N |  |
-| 0x0206 | `motion.pulse_low_min_ns` | u32 | ns | 2500 | 100000 | 10000 | N |  |
-| 0x0207 | `motion.max_step_rate_hz` | u32 | Hz | 100 | 100000 | 50000 | N |  |
+| 0x0205 | `motion.pulse_high_ns` | u32 | ns | 2500 | 100000 | 12500 | N |  |
+| 0x0206 | `motion.pulse_low_min_ns` | u32 | ns | 2500 | 100000 | 12500 | N |  |
+| 0x0207 | `motion.max_step_rate_hz` | u32 | Hz | 100 | 100000 | 40000 | N |  |
 | 0x0208 | `motion.dir_setup_us` | u16 | us | 5 | 1000 | 20 | N |  |
 | 0x0209 | `motion.ena_settle_ms` | u16 | ms | 0 | 2000 | 500 | N |  |
 | 0x020A | `motion.v_max_travel_um_s` | u32 | um/s | 1 | 250000 | 30000 | N |  |

@@ -26,11 +26,17 @@ from zero, SYS-003). Absolute targets only on the wire (IF-009).
   ESTOP_SET / DRIVER_POWER 0 / BOOT end the jog session and drop the pending target **first**; the running ticket
   resolves with the MOVE_DONE that follows (or ``CANCELLED`` at BOOT / link loss).
 
+* **M3**: motion owner (``owner="TRAVEL_CAL"`` for the travel wizard; manual calls are refused with
+  ``OWNER_CONFLICT`` while a wizard owns motion), SW trip latch direction (REFUSE ``SW_TRIP`` for a target / jog that
+  would increase a latched SW-limit violation, SAF-SW-001 §6.1 rule 4), SAF-SW-006 speed-vs-margin WARN,
+  ``current_end_um()`` (end point of the running command for the safety supervisor), test-zero rows.
+
 Thread safety: decisions are taken under ``_lock``; no channel call is made while holding it (the channel resolves
 futures under its own lock).
 
 Implements: SW-MAN-001…006 (backend part), SW-LIM-001 (travel range, jog bound), SAF-SW-004 (HOME / DISABLE
-confirmations), SW-STOP-004 (jog / pending dropped on PAUSE), IF-005 (motion never auto-retried), IF-009
+confirmations), SW-STOP-004 (jog / pending dropped on PAUSE), IF-005 (motion never auto-retried), IF-009,
+SAF-SW-001 (direction-aware trip latch), SAF-SW-006 (margin warning)
 """
 from __future__ import annotations
 
@@ -40,8 +46,10 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from bend_stand.calc.limits import limit_margin_warning
 from bend_stand.calc.motion import rate_cap_um_s
 from bend_stand.calc.rounding import round_half_away
+from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.errors import CommandTimeout, ConfirmationRequired, GateRefused, NackError
 from bend_stand.core.gates import CLEAR_HINTS, g_disable, g_enable, g_motion, g_test_zero
@@ -159,8 +167,13 @@ class MotionController:
         return max(0, (self._enabling_until_ns - now) // MS)
 
     def _param(self, key: str, default: Any = None) -> Any:
+        """Board value as last read; before the first read the **dictionary default** (``params_gen``), never a
+        hand-written number (ICD v0.7.3 / dict 6: e.g. ``motion.max_step_rate_hz`` 40 000)."""
         v = self._dev.params.get(key)
-        return default if v is None else v
+        if v is None:
+            meta = pgen.BY_KEY.get(key)
+            return default if meta is None else meta.default
+        return v
 
     def _loaded(self) -> bool:
         """SW mirror of the FW 'loaded' predicate (abs(raw − zero_raw) ≥ release band, or AFE stale / unknown),
@@ -170,8 +183,8 @@ class MotionController:
         lt = self._be.pipeline.latest_copy()
         if not lt.t_host_ns or math.isnan(lt.raw):
             return True
-        band = float(self._param("safety.release_band_raw", 128_849))
-        return abs(lt.raw - float(self._param("safety.zero_raw", 0))) >= LOADED_MARGIN * band
+        band = float(self._param("safety.release_band_raw"))
+        return abs(lt.raw - float(self._param("safety.zero_raw"))) >= LOADED_MARGIN * band
 
     # ================================================================================ limits / check
     def travel_range_mm(self) -> tuple[float | None, float | None]:
@@ -191,16 +204,16 @@ class MotionController:
         d = self._dev
         if not d.params.values():
             return None
-        spm = float(self._param("motion.steps_per_mm", 800.0))
-        v_travel = self._param("motion.v_max_travel_um_s", 30_000) / 1000.0
-        v_load = self._param("motion.v_max_load_um_s", 20_000) / 1000.0
-        v_step = rate_cap_um_s(int(self._param("motion.max_step_rate_hz", 50_000)), spm) / 1000.0
+        spm = float(self._param("motion.steps_per_mm"))
+        v_travel = self._param("motion.v_max_travel_um_s") / 1000.0
+        v_load = self._param("motion.v_max_load_um_s") / 1000.0
+        v_step = rate_cap_um_s(int(self._param("motion.max_step_rate_hz")), spm) / 1000.0
         loaded = self._loaded()
         st = d.board
         fresh = st is not None and self._be.clock.monotonic_ns() - d.board_ns <= 1500 * MS
         lo, hi = self.travel_range_mm()
-        return MotionLimits(v_travel, v_load, v_step, self._param("motion.v_unhomed_um_s", 2000) / 1000.0,
-                            self._param("motion.a_max_um_s2", 100_000) / 1000.0, loaded,
+        return MotionLimits(v_travel, v_load, v_step, self._param("motion.v_unhomed_um_s") / 1000.0,
+                            self._param("motion.a_max_um_s2") / 1000.0, loaded,
                             min(v_load if loaded else v_travel, v_step),
                             st.v_limit_um_s / 1000.0 if fresh and st is not None else None, lo, hi)
 
@@ -212,14 +225,41 @@ class MotionController:
             cap = min(cap, lim.v_unhomed_mm_s)
         return cap
 
-    def _static_gate(self, kind: MotionKind) -> GateResult:
+    def _static_gate(self, kind: MotionKind, owner: str = "MANUAL") -> GateResult:
         snap = self._be._gate_snapshot()  # noqa: SLF001
-        return g_motion(snap, kind)
+        return g_motion(snap, kind, owner)
+
+    def _trip_items(self, direction: int) -> list[GateItem]:
+        """REFUSE ``SW_TRIP`` when motion in ``direction`` would increase a latched SW-limit violation (§6.1 rule 4)."""
+        sup = getattr(self._be, "safety", None)
+        if sup is None or direction == 0:
+            return []
+        t = sup.direction_refused(direction, self._be.session.get().pull_dir)
+        if t is None:
+            return []
+        return [GateItem(GateCode.SW_TRIP, R, f"SW limit {t.limit} tripped: this direction increases the violation",
+                         CLEAR_HINTS["SW_TRIP"])]
+
+    def _margin_items(self, speed_mm_s: float | None) -> list[GateItem]:
+        """SAF-SW-006: WARN when k_est·v·0.065 s > F_fw − F_pc (enabled load limits, outside the no-specimen mode)."""
+        be = self._be
+        s = be.session.get()
+        cfg = be.limits.get()
+        if s.k_est_n_mm is None or be.load_input.no_specimen:
+            return []
+        trips = [abs(t) for t, en in ((cfg.pull_trip_n, cfg.pull_enabled), (cfg.push_trip_n, cfg.push_enabled)) if en]
+        v = s.manual_speed_mm_s if speed_mm_s is None else speed_mm_s
+        if trips and v and limit_margin_warning(s.k_est_n_mm, v, cfg.fw_level_n, max(trips)):
+            return [GateItem(GateCode.SAF_SW_006_MARGIN, W, f"speed {v:g} mm/s too high for the limit margin "
+                             f"{cfg.fw_level_n - max(trips):.0f} N with k_est {s.k_est_n_mm:g} N/mm (overshoot "
+                             f"≈ {s.k_est_n_mm * v * 0.065:.0f} N)")]
+        return []
 
     def check(self, kind: MotionKind, *, speed_mm_s: float | None = None, accel_mm_s2: float | None = None,
-              target_mm: float | None = None) -> GateResult:
+              target_mm: float | None = None, owner: str = "MANUAL") -> GateResult:
         """Pure check for the GUI fields (GRQ-B-05, < 1 ms): the motion gate plus caps, range and direction."""
-        items = list(self._static_gate(kind).items)
+        items = list(self._static_gate(kind, owner).items)
+        items += self._margin_items(speed_mm_s)
         lim = self.limits()
         if lim is not None:
             cap = self._cap(kind, lim)
@@ -242,6 +282,8 @@ class MotionController:
             x = self.position_mm()
             if x is not None:
                 items += self._limit_toward(target_mm - x)
+                d = target_mm - x
+                items += self._trip_items(0 if abs(d) < 1e-9 else (1 if d > 0 else -1))
         return GateResult(tuple(items))
 
     def _limit_toward(self, delta: float) -> list[GateItem]:
@@ -268,9 +310,10 @@ class MotionController:
         return 0 if accel_mm_s2 is None else max(1, _um(accel_mm_s2))
 
     def move_to(self, target_mm: float, *, speed_mm_s: float | None = None,
-                accel_mm_s2: float | None = None) -> ReleasingFuture:
+                accel_mm_s2: float | None = None, owner: str = "MANUAL") -> ReleasingFuture:
         target_mm = float(target_mm)
-        g = self.check(MotionKind.MOVE, speed_mm_s=speed_mm_s, accel_mm_s2=accel_mm_s2, target_mm=target_mm)
+        g = self.check(MotionKind.MOVE, speed_mm_s=speed_mm_s, accel_mm_s2=accel_mm_s2, target_mm=target_mm,
+                       owner=owner)
         if not g.ok:
             return failed_future(GateRefused(g))
         v, a = self._speed_um(speed_mm_s, MotionKind.MOVE), self._accel_um(accel_mm_s2)
@@ -524,6 +567,9 @@ class MotionController:
         g = self._be._gates()[GateId.VALID_TOGGLE]  # noqa: SLF001
         if g.ok:
             self._be._job(self._dev.set_valid_job, bool(flag))  # noqa: SLF001
+            rec = getattr(self._be, "record_event", None)
+            if rec is not None:
+                rec("VALID_ON" if flag else "VALID_OFF", "manual")
         return g
 
     # ================================================================================ test zero
@@ -534,11 +580,29 @@ class MotionController:
         x = self.position_mm()
         self.x_zero_mm = 0.0 if x is None else x
         self._be.events.publish("log", {"text": f"X_ZERO {self.x_zero_mm:.4f} mm"})
+        self._zero_changed(f"{self.x_zero_mm:.4f} mm")
         return self.x_zero_mm
 
     def reset_test_zero(self) -> None:
         self.x_zero_mm = 0.0
         self._be.events.publish("log", {"text": "X_ZERO reset (machine coordinate)"})
+        self._zero_changed("0 (machine coordinate)")
+
+    def _zero_changed(self, text: str) -> None:
+        """Test travel zero changed: scale + derived accumulators (work, peak) restart, X_ZERO event row (B5-16)."""
+        cb = getattr(self._be, "on_test_zero", None)
+        if cb is not None:
+            cb(self.x_zero_mm, text)
+
+    def current_end_um(self) -> int | None:
+        """End point of the running motion command of this backend (MOVE_ABS target, JOG bound) for the safety
+        supervisor's travel rule (§6.1 rule 3); None when unknown or unbounded."""
+        act, jog = self._active, self._jog
+        if act is not None and act.kind == "MOVE":
+            return act.target_um
+        if jog is not None and jog.bound_um != int(pg.JOG_NO_BOUND):
+            return jog.bound_um
+        return None
 
     # ================================================================================ jog
     def _jog_bound_um(self, direction: int) -> int:
@@ -567,7 +631,7 @@ class MotionController:
             self.jog_update(speed_mm_s)
             return
         g = self._static_gate(MotionKind.JOG)
-        items = list(g.items) + self._limit_toward(d)
+        items = list(g.items) + self._limit_toward(d) + self._trip_items(d)
         bound = self._jog_bound_um(d)
         x = self.position_mm()
         if bound != int(pg.JOG_NO_BOUND) and x is not None and (bound - _um(x)) * d <= 0:

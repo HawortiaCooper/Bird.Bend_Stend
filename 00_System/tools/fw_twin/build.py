@@ -193,8 +193,12 @@ def build(core: str = "auto", build_dir: Path = HERE / "build", quiet: bool = Fa
     gcc = find_gcc()
     inc = [HERE / "engine", hal, FW / "include", FW / "src", FW / "src" / "pure", FW / "src" / "gen", FW / "src" / "core"]
     exe = exe_path(core, build_dir)
+    # OBS-M2-09: gcc writes a temporary file of this process that is then moved over the exe in one step
+    # (os.replace), so a reader (Twin's private copy, another role's ensure_built) never sees a half-written binary
+    tmp_exe = exe.with_name(f"{exe.stem}.{os.getpid()}.tmp{exe.suffix}")
     cmd = [gcc, "-std=c11", "-O2", "-g", "-Wall", "-Wextra", "-Wno-unused-parameter", *DEFINES,
-           *[f"-I{p}" for p in inc if p.exists()], *[str(s) for s in sources(core)], "-o", str(exe), "-lm", "-lws2_32"]
+           *[f"-I{p}" for p in inc if p.exists()], *[str(s) for s in sources(core)], "-o", str(tmp_exe), "-lm",
+           "-lws2_32"]
     env = dict(os.environ)
     env["PATH"] = str(Path(gcc).parent) + os.pathsep + env.get("PATH", "")
     fp = _fingerprint(core)                        # before compiling (see _fingerprint)
@@ -209,13 +213,65 @@ def build(core: str = "auto", build_dir: Path = HERE / "build", quiet: bool = Fa
         + "--- seam check (README seam v1 vs A's headers)\n" + "".join(f"  {d}\n" for d in seams or ["  identical"]),
         encoding="utf-8")
     if r.returncode != 0:
+        tmp_exe.unlink(missing_ok=True)
         sys.stderr.write(r.stderr)
         raise SystemExit(f"fw_twin build FAILED (core {core}), log: {log}")
+    _install(tmp_exe, exe)
     if not quiet:
         warn = r.stderr.count("warning:")
         print(f"fw_twin build OK: {_shown(exe)} (core {core}, seams from {hal_src}, {warn} warnings), log {_shown(log)}")
     _stamp(core, build_dir).write_text(fp, encoding="ascii")
     return exe
+
+
+def _install(tmp: Path, exe: Path, timeout_s: float = 10.0) -> None:
+    """Atomic replace of the exe; retried while Windows keeps the old file locked (a process still runs or copies
+    it — since OBS-M2-09 nobody runs the shared exe in place, so this normally succeeds at once)."""
+    import time  # noqa: PLC0415
+    end = time.monotonic() + timeout_s
+    while True:
+        try:
+            os.replace(tmp, exe)
+            return
+        except PermissionError:
+            if time.monotonic() > end:
+                tmp.unlink(missing_ok=True)
+                raise SystemExit(f"fw_twin build: {exe} stays locked by another process (still running it?)")
+            time.sleep(0.1)
+
+
+SHARED_BUILD = HERE / "build"
+_PRIVATE: dict[str, Path] = {}
+
+
+def private_build_dir() -> Path:
+    """This process's private build directory (OBS-M2-09): ``$BEND_TWIN_BUILD_DIR`` if set (kept, e.g. a role's
+    scratchpad), else a fresh temp directory removed at interpreter exit. Concurrent roles / pytest runs never
+    share it, so nobody can rebuild or lock the binary a run is using."""
+    if "dir" not in _PRIVATE:
+        env = os.environ.get("BEND_TWIN_BUILD_DIR")
+        if env:
+            d = Path(env)
+            d.mkdir(parents=True, exist_ok=True)
+        else:
+            import atexit  # noqa: PLC0415
+            import tempfile  # noqa: PLC0415
+            d = Path(tempfile.mkdtemp(prefix="fw_twin_build_"))
+            atexit.register(shutil.rmtree, d, True)
+        _PRIVATE["dir"] = d
+    return _PRIVATE["dir"]
+
+
+def ensure_built_private(core: str = "auto") -> Path:
+    """Twin binary of this process: built (or reused, when the stamp in ``$BEND_TWIN_BUILD_DIR`` is current) once
+    per process into ``private_build_dir()`` and then **pinned** for the rest of the run, even when a FW source
+    changes meanwhile — the per-run binary of the integration / tools suites (OBS-M2-09)."""
+    if core == "auto":
+        core = "fw" if fw_core_present() else "probe"
+    key = "exe_" + core
+    if key not in _PRIVATE:
+        _PRIVATE[key] = ensure_built(core, private_build_dir())
+    return _PRIVATE[key]
 
 
 def ensure_built(core: str = "auto", build_dir: Path = HERE / "build") -> Path:

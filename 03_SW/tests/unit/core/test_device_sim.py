@@ -24,7 +24,7 @@ Cmd = pg.Cmd
 
 @pytest.fixture
 def be():
-    b = lockstep_backend()
+    b = lockstep_backend(no_specimen=True)
     yield b
     b.shutdown()
 

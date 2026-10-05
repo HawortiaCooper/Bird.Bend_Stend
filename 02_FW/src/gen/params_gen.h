@@ -1,7 +1,7 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/params.yaml (dict_version 5, schema 1)
+ * Source : 00_System/specs/params.yaml (dict_version 6, schema 1)
  * Tool   : 00_System/tools/gen_params.py
- * Hash   : PARAM_DICT_HASH = 0xB7B0263F
+ * Hash   : PARAM_DICT_HASH = 0xF8BCDCB8
  * Implements: FW-CFG-001, IF-010
  */
 #ifndef PARAMS_GEN_H
@@ -19,8 +19,8 @@ extern "C" {
 #define PARAMS_GEN_WITH_KEYS 1
 #endif
 
-#define PARAM_DICT_HASH       0xB7B0263FUL
-#define PARAM_DICT_VERSION    5u
+#define PARAM_DICT_HASH       0xF8BCDCB8UL
+#define PARAM_DICT_VERSION    6u
 #define PARAM_SCHEMA_VERSION  1u
 #define PARAM_COUNT           48u
 

@@ -3,13 +3,14 @@
  * tick, measured rate in the main loop, reconfiguration hooks.
  * Sample callback order (FW_design §5.8): FW load limit on EVERY sample in every state (stream on or
  * off; CLEAN halt in this ISR, LOAD_LIMIT latched before the DATA frame of the deciding sample is
- * built) -> settle flag -> AFE ring -> DATA frame. The tick folds the trip record into the EVENTs
- * (FAULT_SET, STOPPED, VALID_CLEARED) and stops the motion state.
+ * built) -> MOVE_UNTIL_LOAD threshold (CLEAN halt in this ISR, FW-MOT-006) -> settle flag -> AFE
+ * ring -> DATA frame. The tick folds the trip record into the EVENTs (FAULT_SET, STOPPED,
+ * VALID_CLEARED) and stops the motion state.
  * Implements: SAF-FW-008, SAF-FW-009, SAF-FW-010 (next-sample effect), SAF-FW-011 (regrow),
  *             SAF-FW-012 (stale, AFE_FAULT while moving), FW-AFE-001...005 (core part: gain/rate
  *             apply, settle flagging, re-init, measured rate, data-ready timestamp + position from
  *             the HAL), FW-STR-002 (DATA built in the sample ISR), FW-STR-005, FW-NVM-003 (OVERRUN
- *             across the AFE hold), FW-TIM-001
+ *             across the AFE hold), FW-TIM-001, FW-MOT-006 (per-sample threshold, load-path timing)
  */
 #include "fw.h"
 
@@ -71,10 +72,11 @@ void afe_init(void)
 void on_afe_sample(const afe_sample_t *s)
 {
     afe_state_t *a = &g_fw.afe;
-    bool settling;
+    bool settling, trip = false;
     bool sat = hx711_raw_at_rail(s->raw);
     /* 1. FW load limit: every sample, every state, stream on or off (SAF-FW-008/009) */
     if (loadlim_check(&a->ll, s->raw, sat)) {
+        trip = true;
         (void)hal_step_stop_now();               /* CLEAN, <= 200 us after data-ready (SAF-FW-002) */
         if ((g_fw.lat.faults & FAULT_LOAD_LIMIT) == 0u) {
             g_fw.lat.faults = (uint16_t)(g_fw.lat.faults | FAULT_LOAD_LIMIT);   /* in this frame */
@@ -86,6 +88,9 @@ void on_afe_sample(const afe_sample_t *s)
             }
         }
     }
+    /* 1b. MOVE_UNTIL_LOAD: every sample while armed; the first one beyond raw_stop stops here
+     *     (FW-MOT-006, SAF-FW-002 load path); a load-limit trip sample is the load limit's stop */
+    motion_on_sample(s->raw, trip);
     /* 2. HAL status (seam v1.2 semantics, ICD Appendix B.17) */
     if ((s->status & AFES_SCK_OVERRUN) != 0u) {
         a->reinit_rec = true;                    /* power-down suspected: re-init in the tick */

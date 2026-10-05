@@ -4,8 +4,8 @@
  * M2 scope (FW_design §9.7): real HX711 samples (load limit, saturation, settle, re-init, missed
  * edges), step generation (motion.c: ENABLE/DISABLE, MOVE_ABS, JOG, HOME, STOP/HALT/PAUSE with real
  * motion), inputs and supervision (safety.c: E-stop sense, limits, PAUSE button, DRV_PWR / K1 / ALM /
- * PEND, link watchdog, jog dead-man, AFE stale, idle disable). MOVE_UNTIL_LOAD stays M4
- * (E_INTERNAL NOT_IN_BUILD, FEAT_MOVE_UNTIL_LOAD = 0). No STOP-button input (D-36, CR-01).
+ * PEND, link watchdog, jog dead-man, AFE stale, idle disable). MOVE_UNTIL_LOAD (FW-MOT-006, M4 scope
+ * pulled forward by D-44): FEAT_MOVE_UNTIL_LOAD = 1. No STOP-button input (D-36, CR-01).
  *
  * Contexts (FW_design §4.1): main loop (thread), core_tick_1ms (level 4), on_afe_sample (level 3),
  * step_isr (level 2), on_input_edge (levels 0/1, after the HAL fixed reaction). Shared data rules
@@ -51,7 +51,7 @@ extern "C" {
 #endif
 /* feature bits of this build (ICD §7.1); the twin build adds FEAT_TWIN via FW_FEATURE_EXTRA; a target
  * image with the synthetic AFE source (env nucleo_f446re_synth, bring-up without an HX711) sets
- * FW_FEAT_AFE_SRC = FEAT_AFE_SYNTHETIC. MOVE_UNTIL_LOAD is M4 (bit 0). */
+ * FW_FEAT_AFE_SRC = FEAT_AFE_SYNTHETIC. MOVE_UNTIL_LOAD since D-44 (FEAT_MOVE_UNTIL_LOAD). */
 #ifndef FW_FEATURE_EXTRA
 #define FW_FEATURE_EXTRA 0u
 #endif
@@ -59,7 +59,8 @@ extern "C" {
 #define FW_FEAT_AFE_SRC FEAT_AFE
 #endif
 #define FW_FEATURES ((uint32_t)(FW_FEAT_AFE_SRC) | \
-                     (uint32_t)(FEAT_MOTION | FEAT_HOMING | FEAT_NVM | FEAT_BUTTONS | FEAT_DRV_SIGNALS) | \
+                     (uint32_t)(FEAT_MOTION | FEAT_HOMING | FEAT_MOVE_UNTIL_LOAD | FEAT_NVM | FEAT_BUTTONS | \
+                                 FEAT_DRV_SIGNALS) | \
                      (uint32_t)(FW_FEATURE_EXTRA))
 
 typedef struct {
@@ -235,6 +236,12 @@ void     motion_disable(uint8_t dd_cause);   /* ENA disabled, NOT_ENABLED, HOMED
 void     motion_power_returned(uint32_t now_ms);
 void     motion_move_abs(int32_t target_um, uint32_t v_um_s, uint32_t a_um_s2);
 void     motion_jog(int32_t v_um_s, uint32_t a_um_s2, int32_t bound_um, uint32_t now_ms);
+/** MOVE_UNTIL_LOAD (FW-MOT-006): approach the absolute bound, stop on the first sample beyond raw_stop
+ *  (cmp CMP_GE / CMP_LE); already beyond before the first pulse -> MOVE_DONE LOAD_THRESHOLD, no pulse. */
+void     motion_move_until_load(int32_t bound_um, uint32_t v_um_s, uint32_t a_um_s2, int32_t raw_stop,
+                                uint8_t cmp);
+/** Sample ISR (level 3) hook after the FW load limit: MOVE_UNTIL_LOAD threshold decision + CLEAN halt. */
+void     motion_on_sample(int32_t raw, bool load_trip);
 void     motion_home(void);
 /** Stop the running motion: cause SC_* (SC_NONE = no STOPPED event, e.g. JOG 0), immediate (CLEAN)
  *  or controlled (a_stop, FW_design §5.6.4), MOVE_DONE reason md at standstill. Idempotent. */

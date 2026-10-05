@@ -13,14 +13,21 @@ stream, configuration (read / check / write+verify / NVM / reboot / board-config
 M2 (WP-B12/B13): ``backend.motion`` = ``core.motion.MotionController`` (enable / disable / home / move_to /
 move_by / jog / test zero, motion gates), SW travel limits (``limits.set``), the FW load-threshold manager with the
 default and manual-raw paths (``core.safety``), the system-wide Pause/Break → HALT key (``io.win_hotkey``) with its
-test mode, feature-dependent indicators UNKNOWN (D-37 b). M3–M4 members exist (``core.api``) and refuse with a
-``NOT_IMPLEMENTED`` gate item or raise ``NotImplementedError`` for pure accessors.
+test mode, feature-dependent indicators UNKNOWN (D-37 b).
+M3 (§22b): calibration store + session + marks (files under ``<data>``), ``LoadInput`` (active load calibration,
+session tare, no-specimen mode), pipeline scaling + derived channels, ``SafetySupervisor`` (SAF-SW-001 on every
+frame, before the sinks), the automatic FW-threshold rewrite whenever the SAF-SW-002 target changes, ``CaptureHub``,
+tare / load-calibration / travel-calibration engines (``terminate_all`` on stops, pauses, latches, link loss),
+take-sample, the complete recorder (derived columns, SW event rows, snapshot sidecar, failure handling). The
+sequencer and reports (M4) refuse with ``NOT_IMPLEMENTED`` or raise ``NotImplementedError``.
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/core/backend.py @37c87471 (facade pattern; rewritten for §15).
 
 Implements: SW-PLT-003, SW-ACQ-001, SW-ACQ-002 (record start/stop), SW-CFG-001…004 (API), SW-STOP-001/002
 (backend part), SAF-SW-005 (indicators incl. UNKNOWN, D-37 b), NFR-002 (priority path from the GUI thread),
-SW-MAN-001…006 / SW-LIM-001 (M2 backend part), SW-STOP-002 (hotkey), SAF-SW-002 (M2 part)
+SW-MAN-001…006 / SW-LIM-001 (M2 backend part), SW-STOP-002 (hotkey), SAF-SW-002, SAF-SW-001, SAF-SW-004
+(no-specimen confirmation), SAF-SW-005 (M3 indicators), SAF-SW-006, SW-LIM-001…004, SW-META-001/002, SW-ACQ-002…004,
+SW-CAL-001…009 (API), SW-TARE-001…003 (API), SW-RT-002/004 (channel availability)
 """
 from __future__ import annotations
 
@@ -29,35 +36,48 @@ import os
 import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
+
 from bend_stand import __version__
+from bend_stand.core import metadata as marks_mod
 from bend_stand.core import params_gen as pgen
+from bend_stand.core import paths
 from bend_stand.core import protocol_gen as pg
+from bend_stand.core import session as session_mod
+from bend_stand.core.calibration.load import LoadCalEngine
+from bend_stand.core.calibration.store import CalibrationStore
+from bend_stand.core.calibration.travel import TravelCalEngine
+from bend_stand.core.capture import CaptureHub, CaptureResult
 from bend_stand.core.channels import ChannelRegistry
 from bend_stand.core.clock import MONOTONIC, Clock, LockstepClock, wall_utc_iso
 from bend_stand.core.dataview import DataView
 from bend_stand.core.device import Device, DeviceSettings
-from bend_stand.core.errors import ConfirmationRequired, GateRefused, RecorderError
+from bend_stand.core.errors import ConfirmationRequired, FileFormatError, GateRefused, RecorderError
 from bend_stand.core.events import EventBus
-from bend_stand.core.gates import CLEAR_HINTS, GateSnapshot, all_gates, g_hotkey_test
+from bend_stand.core.gates import CLEAR_HINTS, GateSnapshot, all_gates
 from bend_stand.core.jobs import Job, Worker
 from bend_stand.core.link import SUPERVISOR_TICK_NS
 from bend_stand.core.liveness import LivenessMonitor
+from bend_stand.core.loadinput import LoadInput
 from bend_stand.core.motion import MotionController
 from bend_stand.core.model import (
     INT_DF, INT_DS, INT_SYS,
     INDICATOR_UNKNOWN, BackendStatus, BoardConfigFile, CalibrationStatus, ClearResult, DeviceInfo, EndpointInfo,
-    EngineState, GateCode, GateId, GateItem, GateResult, HotkeyStatus, Indicator, Indicators, Issue, IssueSeverity,
-    LimitConfig, LinkState, LinkStatus, MotionStatus, OperationStatus, SafetyStatus,
-    SeqStatus, SessionSettings, Severity, StopResult, StreamStatus, TestMarks, ThresholdState, Token,
+    GateCode, GateId, GateItem, GateResult, HotkeyStatus, Indicator, Indicators, Issue, IssueSeverity,
+    LimitConfig, LinkState, LinkStatus, MotionStatus, OperationStatus, SafetyStatus, SampleRow,
+    SeqStatus, SessionSettings, Severity, StopResult, StreamStatus, TareStatus, TestMarks, ThresholdState,
     TravelDiffState, VerifyReport,
 )
-from bend_stand.core.observers import ReleasingFuture, done_future, failed_future
+from bend_stand.core.observers import ReleasingFuture, failed_future
 from bend_stand.core.params import LOCKED_KEYS, check_edits, load_board_config, save_board_config
-from bend_stand.core.pipeline import Pipeline
-from bend_stand.core.recorder import Recorder
+from bend_stand.core.pipeline import DataRow, Pipeline
+from bend_stand.core.recorder import Recorder, append_sample
+from bend_stand.core.safety import SafetyInputs, SafetySupervisor
+from bend_stand.core.tare import TareEngine
 from bend_stand.io import ports
 from bend_stand.io.transport import LINK_BYTES_PER_S, Transport, parse_endpoint, transport_factory
 
@@ -84,6 +104,7 @@ class BackendSettings:
     sim_latency_ns: int = 0
     sim_nvm_path: str | None = None
     hotkey: Literal["auto", "win32", "fake", "off"] = "auto"    # auto: env BEND_STAND_HOTKEY, else win32
+    data_dir: str | None = None              # <data> root (calibration, sessions, presets); env BEND_STAND_DATA_DIR
 
 
 def _not_implemented(what: str, milestone: str) -> GateResult:
@@ -144,19 +165,28 @@ class ConfigAPI:
 
 
 class LimitsAPI:
-    """``backend.limits``: SW travel limits (SW-LIM-001, M2), FW load thresholds (SAF-SW-002: default / manual raw
-    in M2, calibrated in M3); SW load limits and the no-specimen mode are M3."""
+    """``backend.limits``: SW travel + load limits and the FW load-limit level (SW-LIM-001…003; stored in the session),
+    FW load thresholds (SAF-SW-002: default / manual raw / calibrated), no-specimen mode (SW-LIM-004)."""
 
     def __init__(self, be: Backend) -> None:
         self._be = be
-        self._cfg = LimitConfig()
 
     def get(self) -> LimitConfig:
-        return self._cfg
+        return self._be.session.get().limits
 
     def check(self, cfg: LimitConfig) -> list[Issue]:
-        """Travel limits inside the FW soft limits, min < max (SW-LIM-001); SW load limits / FW level: M3 (kept)."""
-        out: list[Issue] = []
+        """SW-LIM-001 (travel inside the FW soft limits, min < max) + SW-LIM-002 (load trips, warning level, FW level
+        ≤ 110 % FS and ≥ the enabled SW trips) + the SAF-SW-001 rule that a load limit may be switched off only while
+        the load input is valid."""
+        out: list[Issue] = list(session_mod.validate_limits(cfg))
+        be = self._be
+        st = be.load_input.evaluate(be.device.params.values(), be.device.info)
+        if (not cfg.pull_enabled or not cfg.push_enabled) and not st.valid:
+            old = self.get()
+            if (old.pull_enabled and not cfg.pull_enabled) or (old.push_enabled and not cfg.push_enabled):
+                out.append(Issue("pull_enabled" if not cfg.pull_enabled else "push_enabled", IssueSeverity.ERROR,
+                                 "LOAD_INPUT_INVALID", f"a load limit can be switched off only with a valid load "
+                                                       f"input ({st.reason}); use the no-specimen mode"))
         vals = self._be.device.params.values()
         lo = vals.get("limits.soft_min_um")
         hi = vals.get("limits.soft_max_um")
@@ -173,25 +203,27 @@ class LimitsAPI:
         if cfg.travel_min_enabled and cfg.travel_max_enabled and cfg.travel_min_mm is not None and \
                 cfg.travel_max_mm is not None and cfg.travel_min_mm >= cfg.travel_max_mm:
             out.append(Issue("travel_min_mm", E, "ORDER", "travel min must be < travel max"))
-        if cfg.fw_level_n > 2157.46 + 1e-6:
-            out.append(Issue("fw_level_n", E, "FW_LEVEL", "FW load-limit level above 110 % FS (SW-LIM-002)"))
         return out
 
     def set(self, cfg: LimitConfig) -> list[Issue]:
-        """Apply the limits (refused while moving); returns the ERROR issues (empty = applied)."""
+        """Apply the limits (refused while moving); returns the ERROR issues (empty = applied). Stored in the session
+        (SW-LIM-003); a changed FW level rewrites the FW thresholds (automatic recheck, SAF-SW-002)."""
         if self._be.device.last_flags & INT_DF.MOVING:
             return [Issue(None, IssueSeverity.ERROR, "MOVING", "limits cannot be changed while the axis moves")]
         issues = [i for i in self.check(cfg) if i.severity == IssueSeverity.ERROR]
         if not issues:
-            self._cfg = cfg
-            self._be.events.publish("log", {"text": "SW travel limits set"})
+            old = self.get()
+            self._be.session.apply_limits(cfg)
+            if old != cfg:
+                self._be.record_event("LIMITS", _limits_text(cfg))
+                self._be.events.publish("log", {"text": "SW limits set: " + _limits_text(cfg)})
         return issues
 
     def thresholds(self) -> ThresholdState:
         return self._be.device.thresholds
 
     def recheck_async(self) -> Future[ThresholdState]:
-        return self._be._job(self._be.device.session_values_job)  # noqa: SLF001
+        return self._be.thresholds_job()
 
     def set_manual_thresholds_async(self, raw_min: int, raw_max: int, zero_raw: int = 0) -> Future[ThresholdState]:
         """M2 bring-up path: operator-entered raw thresholds, written and verified (state VERIFIED, cal_id
@@ -210,98 +242,192 @@ class LimitsAPI:
         return self.recheck_async()
 
     def set_no_specimen_mode(self, on: bool, *, confirmed: bool = False) -> GateResult:
-        return _not_implemented("no-specimen mode", "M3")
+        """SW-LIM-004: enter (CONFIRM C-10, SAF-SW-004) / leave the no-specimen mode (session only)."""
+        be = self._be
+        li = be.load_input
+        if bool(on) == li.no_specimen:
+            return GATE_OK_
+        if not on:
+            if be.device.last_flags & INT_DF.MOVING or be.motion.busy:
+                return GateResult((GateItem(GateCode.MOTION_ACTIVE, Severity.REFUSE, "axis moving"),))
+            be.set_no_specimen(False)
+            return GATE_OK_
+        g = be._gates()[GateId.NO_SPECIMEN]  # noqa: SLF001
+        if not g.ok:
+            return g
+        if g.confirm_items and not confirmed:
+            return GateResult(g.items + (GateItem(GateCode.CONFIRMATION_REQUIRED, Severity.REFUSE,
+                                                  "confirm: " + g.confirm_items[0].text),))
+        be.set_no_specimen(True)
+        return g
+
+
+GATE_OK_ = GateResult()
+
+
+def _limits_text(c: LimitConfig) -> str:
+    def tr(v: float | None, en: bool) -> str:
+        return f"{v:g} mm" if en and v is not None else "off"
+    return (f"travel {tr(c.travel_min_mm, c.travel_min_enabled)}…{tr(c.travel_max_mm, c.travel_max_enabled)}; "
+            f"pull {c.pull_trip_n:g} N {'on' if c.pull_enabled else 'off'}; push {c.push_trip_n:g} N "
+            f"{'on' if c.push_enabled else 'off'}; warn {c.warn_pct:g} %; FW level {c.fw_level_n:g} N")
 
 
 class MarksAPI:
-    def __init__(self) -> None:
+    """``backend.marks`` (SW-META-001/002): marks with custom fields, presets, edits while recording."""
+
+    def __init__(self, be: Backend) -> None:
+        self._be = be
         self._marks = TestMarks()
 
     def get(self) -> TestMarks:
         return self._marks
 
     def set(self, marks: TestMarks) -> None:
-        self._marks = marks
+        errs = marks_mod.check_marks(marks)
+        if errs:
+            raise ValueError("; ".join(errs))
+        old, self._marks = self._marks, marks
+        be = self._be
+        if be.recorder.state == "RECORDING" and old != marks:
+            for key, a, b in _mark_diff(old, marks):
+                be.recorder.mark_edits.append({"key": key, "old": a, "new": b, "utc": wall_utc_iso(be.clock)})
+                be.record_event("MARK_EDIT", f"{key}: {a!r} -> {b!r}")
+                be.events.publish("marks.edited", {"key": key, "old": a, "new": b})
+
+    def presets_dir(self) -> Path:
+        return paths.presets_dir(self._be.data_dir)
 
     def list_presets(self) -> list[str]:
-        return []
+        return marks_mod.list_presets(self.presets_dir())
 
     def save_preset(self, path: str) -> None:
-        raise NotImplementedError("mark presets: M3")
+        p = Path(path)
+        if not p.is_absolute() and p.parent == Path("."):
+            p = self.presets_dir() / (p.name if p.name.endswith(marks_mod.SUFFIX) else p.name + marks_mod.SUFFIX)
+        marks_mod.save_preset(p, self._marks)
 
     def load_preset(self, path: str) -> TestMarks:
-        raise NotImplementedError("mark presets: M3")
+        m = marks_mod.load_preset(path)
+        self.set(m)
+        return m
+
+    def delete_preset(self, path: str) -> None:
+        """GRQ-B-27: delete a preset file (only ``*.bbmarks.json``)."""
+        p = Path(path)
+        if not p.name.endswith(marks_mod.SUFFIX):
+            raise ValueError("not a marks preset file")
+        p.unlink()
+
+
+def _mark_diff(a: TestMarks, b: TestMarks) -> list[tuple[str, str, str]]:
+    out = [(k, getattr(a, k), getattr(b, k)) for k in ("specimen", "number", "operator", "notes")
+           if getattr(a, k) != getattr(b, k)]
+    ca, cb = dict(a.custom), dict(b.custom)
+    for k in sorted(set(ca) | set(cb)):
+        if ca.get(k) != cb.get(k):
+            out.append((f"custom.{k}", ca.get(k, ""), cb.get(k, "")))
+    return out
 
 
 class SessionAPI:
-    def __init__(self) -> None:
+    """``backend.session`` (§13.5, SRS §5.2): validated settings, applied at start, auto-saved on every change."""
+
+    def __init__(self, be: Backend) -> None:
+        self._be = be
         self._s = SessionSettings()
+        self.path: Path | None = None
+        self.load_issues: list[Issue] = []
 
     def get(self) -> SessionSettings:
         return self._s
 
+    def check(self, settings: SessionSettings) -> list[Issue]:
+        return [i for i in session_mod.validate(settings) if i.severity == IssueSeverity.ERROR] + \
+            [i for i in self._be.limits.check(settings.limits) if i.severity == IssueSeverity.ERROR]
+
     def set(self, settings: SessionSettings) -> list[Issue]:
+        issues = self.check(settings)
+        if issues:
+            return issues
+        if settings.limits != self._s.limits and self._be.device.last_flags & INT_DF.MOVING:
+            return [Issue("limits", IssueSeverity.ERROR, "MOVING", "limits cannot be changed while the axis moves")]
         self._s = settings
+        self._after_change()
         return []
 
+    def apply_limits(self, cfg: LimitConfig) -> None:
+        self._s = replace(self._s, limits=cfg)
+        self._after_change()
+
+    def _after_change(self) -> None:
+        self._autosave()
+        self._be.on_scale_changed()
+
+    def _autosave(self) -> None:
+        if self.path is None:
+            return
+        try:
+            session_mod.save(self.path, self._s)
+        except OSError as exc:  # never fatal: the settings stay active for this run
+            log.warning("session auto-save failed: %s", exc)
+
     def load(self, path: str) -> SessionSettings:
-        raise NotImplementedError("session files: M3")
+        s, self.load_issues = session_mod.load(path)
+        errs = [i for i in self._be.limits.check(s.limits) if i.severity == IssueSeverity.ERROR
+                and i.code != "LOAD_INPUT_INVALID"]
+        if errs:
+            raise FileFormatError(f"{path}: " + "; ".join(i.text for i in errs))
+        self._s = s
+        self._after_change()
+        return s
 
     def save(self, path: str) -> None:
-        raise NotImplementedError("session files: M3")
+        session_mod.save(path, self._s)
 
-
-class StubEngine:
-    """Calibration / tare engines (M3): ``state()`` reports NOT_IMPLEMENTED, ``start`` refuses."""
-
-    def __init__(self, kind: str, phases: tuple[str, ...], milestone: str = "M3") -> None:
-        self.kind = kind
-        self.PHASES = phases
-        self.milestone = milestone
-
-    def state(self) -> EngineState:
-        return EngineState(self.kind, "IDLE", title=f"{self.kind}: available from {self.milestone}")
-
-    def subscribe(self, cb: Callable[[EngineState], None]) -> Token:
-        return 0
-
-    def start(self, **config: Any) -> GateResult:
-        return _not_implemented(self.kind, self.milestone)
-
-    def continue_(self, inputs: Mapping[str, float] | None = None, *, confirmed: bool = False) -> None:
-        return None
-
-    def repeat(self) -> None:
-        return None
-
-    def cancel(self) -> None:
-        return None
-
-    def undo(self) -> GateResult:
-        return _not_implemented(self.kind, self.milestone)
-
-    def finish_early(self) -> None:
-        return None
-
-    def retake(self, i: int) -> None:
-        return None
+    def load_default(self, path: Path) -> None:
+        """At start: the default / configured session file (missing → defaults; broken → defaults + log)."""
+        self.path = path
+        if not path.exists():
+            return
+        try:
+            s, self.load_issues = session_mod.load(path)
+            self._s = s
+        except FileFormatError as exc:
+            log.warning("session file ignored: %s", exc)
+            self.load_issues = [Issue(None, IssueSeverity.ERROR, "FILE", str(exc))]
 
 
 class CalibrationStoreAPI:
+    """``backend.calibrations`` (§9.6, §9.3.1): active records, history, travel restore / operator decisions."""
+
+    def __init__(self, be: Backend) -> None:
+        self._be = be
+
     def active_load(self) -> Mapping[str, Any] | None:
-        return None
+        cal = self._be.load_input.cal
+        return None if cal is None else dict(cal.record)
 
     def active_travel(self) -> Mapping[str, Any] | None:
-        return None
+        try:
+            return self._be.calibration_store.active_travel()
+        except FileFormatError:
+            return None
 
     def history(self, kind: str) -> list[str]:
-        return []
+        return self._be.calibration_store.history(kind)
 
     def restore_travel_async(self) -> Future[TravelDiffState]:
-        return done_future(TravelDiffState())
+        return self.resolve_travel_difference_async("restore")
 
     def resolve_travel_difference_async(self, action: str) -> Future[TravelDiffState]:
-        return done_future(TravelDiffState())
+        if action not in ("restore", "keep_board", "ignore_session"):
+            return failed_future(ValueError(f"unknown action {action!r}"))
+        be = self._be
+        if not be.device.connected:
+            return failed_future(GateRefused(GateResult((GateItem(GateCode.LINK_DOWN, Severity.REFUSE,
+                                                                  "not connected"),))))
+        return be._job(be.travel_cal.resolve_job, action)  # noqa: SLF001
 
 
 class SequencerAPI:
@@ -379,23 +505,47 @@ class Backend:
                                  on_events_lost=self.device._poll_now)  # noqa: SLF001
         self.device.on_async = self.pipeline.put
         self.device.on_link_change = self._on_link_change
-        self.recorder = Recorder(self.clock, on_state=lambda st: self.events.publish("rec.state", st))
+        self.recorder = Recorder(self.clock, on_state=lambda st: self.events.publish("rec.state", st),
+                                 on_failure=self._on_rec_failure,
+                                 on_warning=lambda text: self.events.log(text, logging.WARNING))
+        self.recorder.free_space_probe = self._free_space
+        self.recorder.op_name = lambda: "" if self.owner == "MANUAL" else self.owner
+        self.data_dir = paths.app_data_dir(s.data_dir)
+        self.calibration_store = CalibrationStore(paths.calibration_dir(self.data_dir))
+        self.load_input = LoadInput()
+        self.capture = CaptureHub()
+        self.owner = "MANUAL"                              # motion owner: MANUAL | TRAVEL_CAL (§3.5)
+        self._last_moving_t: int | None = None
+        self._latest_t: int | None = None
+        self._latest_epoch = 0
+        self._th_job: Any = None
+        self.safety = SafetySupervisor(stop=self._safety_stop, terminate=self.terminate_all,
+                                       publish=self.events.publish, event_row=self.record_event,
+                                       limits=lambda: self.session.get().limits, inputs=self._safety_inputs)
+        self.pipeline.safety = self.safety.process
+        self.pipeline.sinks.append(self._track_row)
+        self.pipeline.sinks.append(self.capture.on_row)
         self.pipeline.sinks.append(self.recorder.on_row)
         self.pipeline.event_sinks.append(self.recorder.on_event)
         self.channels = ChannelRegistry()
         self.channels.on_change = lambda: self.events.publish("channels.changed", None)
         self.data = DataView(self.pipeline, self.clock.monotonic_ns)
         self.config = ConfigAPI(self)
+        self.session = SessionAPI(self)
         self.limits = LimitsAPI(self)
         self.motion = MotionController(self)
-        self.marks = MarksAPI()
-        self.session = SessionAPI()
-        self.tare_engine = StubEngine("tare", ("CHECK", "CAPTURE", "EVALUATE", "DONE"))
-        self.travel_cal = StubEngine("travel_cal", ("CHECK", "BACKLASH", "REFERENCE", "MOVE1", "ENTER_D1", "MOVE2",
-                                                    "ENTER_DTOT", "RESULT", "ACCEPT", "DONE"))
-        self.load_cal = StubEngine("load_cal", ("CONFIG", "AWAIT_OPERATOR", "PRESETTLE", "CAPTURE", "EVALUATE",
-                                                "FIT", "ACCEPT", "DONE"))
-        self.calibrations = CalibrationStoreAPI()
+        self.marks = MarksAPI(self)
+        self.tare_engine = TareEngine(self)
+        self.travel_cal = TravelCalEngine(self)
+        self.load_cal = LoadCalEngine(self)
+        self.calibrations = CalibrationStoreAPI(self)
+        self.device.threshold_mgr.provider = self._threshold_target
+        self.device.on_synced = self._on_synced
+        self.events.subscribe("device.params", self._on_params_event, weak=False)
+        self.session.load_default(Path(s.session_path) if s.session_path
+                                  else paths.sessions_dir(self.data_dir) / "default.bbsession.json")
+        self._load_active_calibration()
+        self.on_scale_changed()
         self.sequencer = SequencerAPI()
         self.reports = ReportAPI()
         self.test_hooks: Any = None
@@ -483,6 +633,7 @@ class Backend:
         """Supervisor body: link / heartbeat / confirmations (Device), jog refresh (motion), hotkey ping."""
         self.device.tick(now)
         self.motion.tick(now)
+        self._auto_thresholds()
         hk = self.hotkey
         if hk is not None and now >= self._next_hotkey_ping_ns:
             self._next_hotkey_ping_ns = now + 250 * MS
@@ -554,11 +705,45 @@ class Backend:
             self.events.log("LINK LOST", logging.ERROR)
         if state in (LinkState.LOST, LinkState.DISCONNECTED):
             self.motion.on_link_down()
+            self.terminate_all("LINK_LOST" if state == LinkState.LOST else "DISCONNECTED")
+            self.capture.abort(None, "link down")
+            if self.load_input.no_specimen:          # the mode ends at disconnect / link loss (SW-LIM-004)
+                self.set_no_specimen(False, why="link down")
+            self.safety.reset()
+
+    _TERMINATING = frozenset({int(pg.Event.STOPPED), int(pg.Event.ESTOP_SET), int(pg.Event.HALT_SET),
+                              int(pg.Event.PAUSED), int(pg.Event.FAULT_SET), int(pg.Event.LINK_WDG)})
 
     def _on_fw_event(self, ev: Any) -> None:
-        """Pipeline thread: link-level reactions first (epoch, BOOT resync), then the motion controller."""
+        """Pipeline thread: link-level reactions first (epoch, BOOT resync), then the motion controller, then the
+        operations (§5.5.1: stops / latches / pause / driver power loss terminate wizards and captures)."""
         self.device.handle_fw_event(ev)
         self.motion.on_fw_event(ev)
+        code = int(ev.code)
+        if code in self._TERMINATING or (code == int(pg.Event.DRIVER_POWER) and ev.arg == 0):
+            name = pg.Event(code).name
+            if code == int(pg.Event.STOPPED):
+                try:
+                    name = f"STOPPED ({pg.StopCause(ev.arg).name})"
+                except ValueError:
+                    pass
+            self.terminate_all(name)
+        elif code == int(pg.Event.BOOT):
+            self.terminate_all("board reset")
+
+    def terminate_all(self, reason: str) -> None:
+        """Swap every running operation to ABORTED (no waiting, §3.5); take-sample captures are not affected."""
+        for eng in (self.travel_cal, self.load_cal, self.tare_engine):
+            try:
+                eng.terminate(reason)
+            except Exception:  # noqa: BLE001 — never raises
+                log.exception("terminate %s failed", eng.KIND)
+
+    def _safety_stop(self, reason: str) -> None:
+        try:
+            self.device.stop(pg.StopMode.IMMEDIATE, reason)
+        finally:
+            self.motion.on_stop_issued("STOP")
 
     # ---- Pause/Break hotkey (SW-STOP-002) -------------------------------------------------------------
     def _hotkey_choice(self) -> str:
@@ -608,7 +793,7 @@ class Backend:
             res = self.device.stop(pg.StopMode.IMMEDIATE, source)       # act first …
         except Exception as exc:  # noqa: BLE001 — never raises (§14)
             res = StopResult("STOP", source, False, None, str(exc))
-        self._after_stop("STOP")
+        self._after_stop("STOP", source)
         return res
 
     def halt(self, source: str = "gui") -> StopResult:
@@ -616,7 +801,7 @@ class Backend:
             res = self.device.halt(source)
         except Exception as exc:  # noqa: BLE001
             res = StopResult("HALT", source, False, None, str(exc))
-        self._after_stop("HALT")
+        self._after_stop("HALT", source)
         return res
 
     def pause(self, source: str = "gui") -> StopResult:
@@ -624,15 +809,18 @@ class Backend:
             res = self.device.pause(source)
         except Exception as exc:  # noqa: BLE001
             res = StopResult("PAUSE", source, False, None, str(exc))
-        self._after_stop("PAUSE")
+        self._after_stop("PAUSE", source)
         return res
 
-    def _after_stop(self, cmd: str) -> None:
-        """… then drop the jog session and the pending target (SW_design §4.5 (2))."""
+    def _after_stop(self, cmd: str, source: str = "") -> None:
+        """… then drop the jog session and the pending target (SW_design §4.5 (2)), terminate the operations (wizards
+        are not resumable, GRQ-B-10 d) and write the event row."""
         try:
             self.motion.on_stop_issued(cmd)
+            self.terminate_all(cmd)
+            self.record_event(cmd, source)
         except Exception:  # noqa: BLE001 pragma: no cover - never raises
-            log.exception("motion.on_stop_issued failed")
+            log.exception("after-stop handling failed")
 
     def resume(self, source: str = "gui") -> GateResult:
         """M1 manual Resume = RESUME 0x3C only (no motion re-issue; the sequencer's re-issue is M4)."""
@@ -649,28 +837,113 @@ class Backend:
     def _publish_resume(self, f: Future[ClearResult]) -> None:
         if f.exception() is None:
             self.events.publish("log", {"text": f"RESUME: {f.result().outcome} {f.result().text}"})
+            self.record_event("RESUME", f.result().outcome)
 
     def tare(self, window_s: float | None = None) -> GateResult:
-        return _not_implemented("tare", "M3")
+        """SW-TARE-001: from every tab; progress on topic ``tare.state`` (§9.5)."""
+        try:
+            return self.tare_engine.start_tare(window_s)
+        except Exception as exc:  # noqa: BLE001 — never raises
+            log.exception("tare start failed")
+            return GateResult((GateItem(GateCode.OPERATION_RUNNING, Severity.REFUSE, str(exc)),))
 
     def take_sample(self, window_s: float = 1.0) -> GateResult:
-        return _not_implemented("take sample", "M3")
+        """SW-ACQ-003: mean / std / N of F, x and raw over ``window_s`` (0.1–10 s) → ``samples.csv``."""
+        if not 0.1 <= float(window_s) <= 10.0:
+            return GateResult((GateItem("RANGE", Severity.REFUSE, "sample window must be 0.1…10 s"),))
+        g = self._gates()[GateId.SAMPLE]
+        if not g.ok:
+            return g
+        try:
+            self.capture.start("sample", float(window_s), presettle_s=0.0, require_still=False,
+                               on_done=self._sample_done, rate_hint=lambda: self.pipeline.latest_copy().rate_sps)
+        except RuntimeError as exc:
+            return GateResult((GateItem(GateCode.OPERATION_RUNNING, Severity.REFUSE, str(exc)),))
+        return g
+
+    def _sample_done(self, res: CaptureResult) -> None:
+        if not res.ok:
+            self.events.log(f"take sample aborted: {res.aborted}", logging.WARNING)
+            return
+
+        def ms(a: np.ndarray) -> tuple[float, float, int]:
+            v = a[np.isfinite(a)]
+            if v.size == 0:
+                return float("nan"), float("nan"), 0
+            return float(v.mean()), float(v.std(ddof=1)) if v.size > 1 else float("nan"), int(v.size)
+        fm, fs, fn = ms(res.f_n)
+        xm, xs, _xn = ms(res.x_mm)
+        rm, rs, rn = ms(res.raw)
+        row = SampleRow(wall_utc_iso(self.clock), self.pipeline.latest_copy().t_dev_s, res.window_s,
+                        res.n_frames, fm, fs, fn, xm, xs, rm, rs, rn, self.marks.get())
+        path = self.recorder.samples_path(self._recordings_root())
+        try:
+            append_sample(path, row)
+            row = replace(row, file=str(path))
+        except OSError as exc:
+            self.events.log(f"samples file not written: {exc}", logging.ERROR)
+        self.record_event("SAMPLE", f"F={fm:.4f}±{fs:.4f} N n={fn} x={xm:.4f} mm raw={rm:.1f}")
+        self.events.publish("sample.taken", row)
+
+    def _recordings_root(self) -> str:
+        return (self.settings.recordings_root or self.session.get().recordings_root
+                or str(paths.default_recordings_root()))
+
+    def _free_space(self, path: Path) -> int | None:
+        th = self.test_hooks
+        if th is not None and th.free_space is not None:
+            return int(th.free_space)
+        from bend_stand.core.recorder import free_space  # noqa: PLC0415
+
+        return free_space(path)
+
+    def _on_rec_failure(self, st: Any) -> None:
+        self.events.publish("rec.failure", st)
+        self.events.log(f"RECORDING FAILED: {st.failure}", logging.ERROR)
+
+    def record_event(self, name: str, text: str = "") -> None:
+        """SW event row in a running recording (TARE, SW_TRIP, NO_SPECIMEN_ON, MARK_EDIT, X_ZERO, CAL_*, …)."""
+        try:
+            self.recorder.event_row(name, text)
+        except Exception:  # noqa: BLE001 — recording problems are reported by the recorder itself
+            log.exception("event row failed")
+
+    def _snapshot(self) -> dict[str, Any]:
+        """Automatic snapshot for the recording sidecar (SW-META-002, SW-LIM-003)."""
+        li = self.load_input
+        info = self.device.info
+        tare = li.tare_for(info.uid if info else None)
+        st = li.evaluate(self.device.params.values(), info)
+        return {"calibration": None if li.cal is None else dict(li.cal.record),
+                "calibration_valid_for_limits": st.cal_valid, "load_input_reason": st.reason,
+                "tare": None if tare is None else asdict(tare), "limits": asdict(self.limits.get()),
+                "session": session_mod.to_dict(self.session.get()), "x_zero_mm": self.motion.x_zero_mm,
+                "travel_calibration": self.calibrations.active_travel(),
+                "travel_cal_differs": asdict(self.travel_cal.diff)}
 
     def record_start(self) -> GateResult:
         g = self.status().gates[GateId.RECORD_START]
         if not g.ok:
             return g
-        root = self.settings.recordings_root or os.path.join(os.path.expanduser("~"), "Documents", "BirdBendStand",
-                                                             "recordings")
+        root = self._recordings_root()
         info = self.device.info
-        meta = {"sw_version": __version__, "marks_at_start": vars(self.marks.get()),
+        meta = {"sw_version": __version__, "marks_at_start": marks_mod.marks_to_dict(self.marks.get()),
                 "board_params": self.device.params.values(),
-                "thresholds": vars(self.device.thresholds), "no_specimen_mode": False}
+                "thresholds": vars(self.device.thresholds), "no_specimen_mode": self.load_input.no_specimen,
+                "snapshot": self._snapshot()}
         if info is not None:
             meta.update(fw_version=".".join(map(str, info.fw_version)), board_uid=info.uid, build=info.build)
+        cal = self.load_input.cal
+        tare = self.load_input.tare_for(info.uid if info else None)
+        header = {"calibration": "none" if cal is None else f"K={cal.k:.12g} N/count status={cal.status} "
+                                                            f"file={cal.file}",
+                  "tare": "none" if tare is None else f"tare_raw={tare.tare_raw:.3f} id={tare.tare_id}",
+                  "limits": _limits_text(self.limits.get()), "thresholds": self.device.thresholds.state,
+                  "x_zero_mm": f"{self.motion.x_zero_mm:.4f}",
+                  "no_specimen_mode": str(self.load_input.no_specimen).lower()}
         try:
             m = self.marks.get()
-            self.recorder.start(root, meta, specimen=m.specimen, number=m.number)
+            self.recorder.start(root, meta, specimen=m.specimen, number=m.number, header=header)
         except RecorderError as exc:
             return GateResult((GateItem(GateCode.RECORDING_ACTIVE, Severity.REFUSE, exc.user_text),))
         except OSError as exc:                     # never surface the raw (localised) OS text (SWD-M1-09)
@@ -681,8 +954,102 @@ class Backend:
     def record_stop(self) -> GateResult:
         g = self.status().gates[GateId.RECORD_STOP]
         if g.ok:
-            self.recorder.stop({"link_stats": vars(self._link_stats())})
+            self.recorder.stop({"link_stats": vars(self._link_stats()),
+                                "marks_final": marks_mod.marks_to_dict(self.marks.get()),
+                                "no_specimen_mode_at_stop": self.load_input.no_specimen})
         return g
+
+    # ---- M3 state: calibration / tare / scale / thresholds / no-specimen -----------------------------------
+    def _load_active_calibration(self) -> None:
+        try:
+            rec = self.calibration_store.active_load()
+            self.load_input.set_calibration(rec)
+        except FileFormatError as exc:
+            self.load_input.set_calibration(None, str(exc))
+            log.warning("active load calibration ignored: %s", exc)
+
+    def activate_load_calibration(self, record: Mapping[str, Any]) -> None:
+        self.load_input.set_calibration(record)
+        self.on_scale_changed()
+
+    def _on_params_event(self, _rec: Any) -> None:
+        self.on_scale_changed()
+
+    def on_test_zero(self, x_zero_mm: float, text: str) -> None:
+        self.load_input.x_zero_mm = x_zero_mm
+        self.load_input.reset_epoch += 1
+        self.on_scale_changed()
+        self.record_event("X_ZERO", text)
+
+    def on_scale_changed(self) -> None:
+        """Calibration, tare, AFE params, x_zero or geometry changed: new ``ScaleConfig`` for the pipeline (atomic
+        swap) and channel availability (SW-RT-002); the threshold target is re-evaluated by the tick."""
+        li = self.load_input
+        s = self.session.get()
+        li.bend3p, li.compliance = s.bend3p, s.compliance_mm_per_n
+        params, info = self.device.params.values(), self.device.info
+        sc = li.scale_config(params, info)
+        self.pipeline.scale = sc
+        st = li.evaluate(params, info)
+        self.channels.apply_scale(sc.force_available, None if sc.force_available else st.reason,
+                                  li.cal is not None, s.bend3p is not None)
+
+    def _threshold_target(self) -> Any:
+        return self.load_input.threshold_target(self.device.params.values(), self.device.info,
+                                                self.session.get().limits.fw_level_n)
+
+    def _auto_thresholds(self) -> None:
+        """SAF-SW-002: rewrite + verify the FW thresholds whenever their target changed (calibration activated, tare /
+        undo, FW level edit, AFE change, …); idle only, one job at a time; a FAILED target is retried only by
+        ``limits.recheck_async()`` or a new target."""
+        d = self.device
+        if not d.connected or d.compat.read_only or not d.params.values() or d._sync_active:  # noqa: SLF001
+            return
+        if self._th_job is not None and not self._th_job.done():
+            return
+        if d.last_flags & INT_DF.MOVING or self.motion.busy:
+            return
+        if d.threshold_mgr.needs_apply():
+            self.thresholds_job()
+
+    def thresholds_job(self) -> ReleasingFuture:
+        """Write + verify the FW thresholds of the current target (one job registered at a time, so the automatic
+        rewrite never runs a second, competing write)."""
+        fut = self._job(self.device.session_values_job)
+        self._th_job = fut
+        return fut
+
+    def set_no_specimen(self, on: bool, why: str = "operator") -> None:
+        li = self.load_input
+        if li.no_specimen == on:
+            return
+        li.no_specimen = on
+        self.record_event("NO_SPECIMEN_ON" if on else "NO_SPECIMEN_OFF", why)
+        self.events.log(("no-specimen mode ON — PC load limits off" if on else "no-specimen mode OFF") + f" ({why})",
+                        logging.WARNING if on else logging.INFO)
+        self.events.publish("safety.no_specimen", on)
+
+    def _on_synced(self) -> None:
+        """Worker thread, end of the connect / BOOT resync: scale + post-sync checks (travel restore rule)."""
+        self.on_scale_changed()
+        self._job(self.travel_cal.post_sync_job)
+
+    def _safety_inputs(self) -> SafetyInputs:
+        li = self.load_input
+        d = self.device
+        st = li.evaluate(d.params.values(), d.info)
+        cal = li.cal
+        spm = d.params.get("motion.steps_per_mm")
+        return SafetyInputs(li.no_specimen, st.valid, st.reason, cal.k if cal is not None else None,
+                            float(spm) if spm else 800.0, self.session.get().pull_dir, self.motion.current_end_um())
+
+    def _track_row(self, row: DataRow) -> None:
+        """Pipeline sink: device time of the last MOVING = 1 (tare refusal < 1 s after a move, SW-TARE-003)."""
+        if row.epoch != self._latest_epoch:
+            self._latest_epoch, self._last_moving_t = row.epoch, None
+        self._latest_t = row.t_us_u
+        if row.flags & INT_DF.MOVING:
+            self._last_moving_t = row.t_us_u
 
     def hotkey_test_start(self, timeout_s: float = 10.0) -> GateResult:
         """GRQ-B-15: arm the Pause/Break key test window (≤ 10 s); motion is refused while it runs; result on the
@@ -796,12 +1163,18 @@ class Backend:
             if n:
                 put(n, bool(st is not None and st.sys_flags >> i & 1), status_ok)
         items["link_state"] = Indicator("ON" if connected else "OFF", None, d.state.value)
-        items["sw_trip"] = Indicator("OFF")
+        trip = self.safety.trip
+        items["sw_trip"] = (Indicator("ON", trip.t_us, trip.limit, trip.value, CLEAR_HINTS["SW_TRIP"])
+                            if trip is not None else Indicator("OFF"))
         th = d.thresholds
-        items["thresholds_state"] = Indicator("ON" if th.state in ("VERIFIED", "DEFAULT_ONLY") else "OFF", None,
-                                              th.state) if connected else INDICATOR_UNKNOWN
-        items["no_specimen_mode"] = Indicator("OFF")
-        items["travel_cal_differs"] = Indicator("OFF")
+        ok = th.state in ("VERIFIED", "DEFAULT_ONLY") and d.threshold_mgr.matches(th)
+        items["thresholds_state"] = Indicator("ON" if ok else "OFF", None, th.state, 1.0 if th.clamped else 0.0,
+                                              None if ok else "Recheck thresholds") if connected else INDICATOR_UNKNOWN
+        items["no_specimen_mode"] = Indicator("ON" if self.load_input.no_specimen else "OFF")
+        diff = self.travel_cal.diff
+        items["travel_cal_differs"] = (Indicator("ON", None, diff.source, diff.board_spm,
+                                                 "Restore / keep board value / ignore for this session")
+                                       if diff.differs and not diff.ignored else Indicator("OFF"))
         synth = d.info is not None and bool(d.info.feature_mask & pg.Features.AFE_SYNTHETIC)
         items["afe_synthetic"] = Indicator("ON" if synth else "OFF") if d.info else INDICATOR_UNKNOWN
         items["recording_failed"] = Indicator("ON" if self.recorder.state == "FAILED" else "OFF", None,
@@ -822,6 +1195,16 @@ class Backend:
         raw = None if not lt.t_host_ns or lt.raw != lt.raw else float(lt.raw)
         hk = self.hotkey
         params = d.params.values()
+        li = self.load_input
+        lst = li.evaluate(params, d.info)
+        cfg = self.session.get().limits
+        x = self.motion.position_mm() if d.connected else None
+        _lo, hi = self.motion.travel_range_mm()
+        room = None if x is None or hi is None else hi - x
+        latest_t = self._latest_t
+        recent = (latest_t is not None and self._last_moving_t is not None
+                  and latest_t - self._last_moving_t < 1_000_000)
+        op = next((e.KIND for e in (self.load_cal, self.tare_engine) if e.active), None)
         return GateSnapshot(
             link=d.state, compat=d.compat, stream_on=d.stream_on, data_fresh=fresh, flags=flags,
             status=status_bits & vmask, faults=st.faults if st else 0, io=(st.io & d.valid_io_mask()) if st else 0,
@@ -832,7 +1215,15 @@ class Backend:
                           else st.motion if st is not None else None), thresholds_state=d.thresholds.state,
             hotkey_test=bool(hk is not None and hk.test_mode_active), jogging=self.motion.jogging, raw=raw,
             zero_raw=int(params.get("safety.zero_raw", 0) or 0),
-            home_max_load_raw=int(params.get("home.max_load_raw", 322_123) or 322_123), load_known=False)
+            home_max_load_raw=int(params.get("home.max_load_raw", 322_123) or 322_123), load_known=lst.valid,
+            load_limits_on=(cfg.pull_enabled or cfg.push_enabled) and not li.no_specimen,
+            load_input_valid=lst.valid, load_input_reason=lst.reason, no_specimen=li.no_specimen,
+            thresholds_match=d.threshold_mgr.matches(d.thresholds),
+            sw_trip=None if self.safety.trip is None else self.safety.trip.limit, owner=self.owner, operation=op,
+            capture_kinds=self.capture.kinds(), moved_recently=recent,
+            afe_synthetic=bool(d.info is not None and d.info.feature_mask & pg.Features.AFE_SYNTHETIC),
+            travel_cal_differs=self.travel_cal.diff.differs and not self.travel_cal.diff.ignored,
+            travel_room_mm=room)
 
     def _gates(self, now: int | None = None) -> Mapping[GateId, GateResult]:
         return all_gates(self._gate_snapshot(now))
@@ -851,7 +1242,7 @@ class Backend:
             enabled=bool(flags & INT_DF.ENABLED), enabling_left_ms=m.enabling_left_ms(now),
             paused=bool(status_bits & INT_DS.PAUSED), position_mm=pos,
             test_position_mm=None if pos is None else pos - m.x_zero_mm, commanded_target_mm=m.commanded_target_mm,
-            pending_target_mm=m.pending_target_mm, x_zero_mm=m.x_zero_mm, owner="MANUAL",
+            pending_target_mm=m.pending_target_mm, x_zero_mm=m.x_zero_mm, owner=self.owner,
             motion_state=st.motion if st is not None else None, limits=m.limits() if self.device.connected else None,
             jogging=m.jogging, home_phase=hp, pos_uncertain=bool(status_bits & INT_DS.POS_UNCERTAIN))
 
@@ -872,9 +1263,10 @@ class Backend:
                                 bool(status_bits & INT_DS.AFE_RATE_MISMATCH), data_age),
             indicators=self._indicators(now),
             motion=self._motion_status(now, flags, status_bits, st),
-            safety=SafetyStatus(thresholds=d.thresholds),
-            calibration=CalibrationStatus(board_spm=d.params.get("motion.steps_per_mm")),
-            operation=OperationStatus(),
+            safety=self._safety_status(),
+            calibration=self._calibration_status(),
+            tare=self._tare_status(now),
+            operation=self._operation_status(),
             recording=self.recorder.status(),
             gates=self._gates(now),
             hotkey=self.hotkey_status(),
@@ -883,6 +1275,54 @@ class Backend:
             reboot_pending=None if st is None else bool(st.sys_flags & INT_SYS.REBOOT_PENDING),
             nvm_defaulted=None if st is None else bool(st.sys_flags & INT_SYS.NVM_DEFAULTED),
             board=st, seq=self._status_seq)
+
+
+    def _safety_status(self) -> SafetyStatus:
+        d = self.device
+        st = self.load_input.evaluate(d.params.values(), d.info)
+        trip = self.safety.trip
+        warns = self.safety.active_warnings() + (("FW_CLAMPED",) if d.thresholds.clamped else ())
+        return SafetyStatus(None if trip is None else trip.limit, warns, d.thresholds, st.valid, st.reason,
+                            self.load_input.no_specimen, trip)
+
+    def _calibration_status(self) -> CalibrationStatus:
+        d = self.device
+        li = self.load_input
+        cal = li.cal
+        st = li.evaluate(d.params.values(), d.info)
+        try:
+            act = self.calibration_store.active_travel()
+        except FileFormatError:
+            act = None
+        diff = self.travel_cal.diff
+        invalid = None
+        if cal is None:
+            invalid = li.cal_error or "no load calibration"
+        elif st.afe_mismatch:
+            invalid = "calibration invalid: AFE configuration differs (gain / channel / rate)"
+        return CalibrationStatus(
+            load_k=None if cal is None else cal.k, load_status=None if cal is None else cal.status,
+            low_span=bool(cal is not None and cal.low_span), load_date=None if cal is None else cal.created_utc,
+            load_valid_for_limits=st.cal_valid, travel_spm=None if act is None else float(act["spm2"]),
+            travel_date=None if act is None else act.get("created_utc"), board_spm=d.params.get("motion.steps_per_mm"),
+            travel_cal_differs=diff.differs and not diff.ignored, restore_pending=diff.restore_pending,
+            travel_diff=diff, load_invalid_reason=invalid, f_cal_max_n=None if cal is None else cal.f_cal_max,
+            load_file=None if cal is None else cal.file)
+
+    def _tare_status(self, now: int) -> TareStatus:
+        info = self.device.info
+        t = self.load_input.tare_for(info.uid if info is not None else None)
+        eng = self.tare_engine
+        state = "CAPTURING" if eng.active else ("ACTIVE" if t is not None else "NONE")
+        age = None if t is None or eng.tare_host_ns is None else (now - eng.tare_host_ns) / 1e9
+        return TareStatus(state, None if t is None else t.tare_raw, age, None if t is None else t.tare_id,
+                          self.load_input.can_undo())
+
+    def _operation_status(self) -> OperationStatus:
+        for e in (self.travel_cal, self.load_cal, self.tare_engine):
+            if e.active:
+                return OperationStatus(self.owner, f"{e.KIND}:{e.state().phase}")
+        return OperationStatus(self.owner)
 
 
 __all__ = ["Backend", "BackendSettings", "TWIN_ENDPOINT", "SIM_SERVER_ENDPOINT"]

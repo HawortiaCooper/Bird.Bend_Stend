@@ -34,6 +34,10 @@ from bend_stand.core.model import (
 )
 
 from bend_stand.core.channels import BIT_PREFIX, bit_key  # noqa: E402  status-bit channel keys (GRQ-B-20)
+from bend_stand.core.model import (  # noqa: E402  M3 result / payload types (GRQ-B-24)
+    Bend3pGeometry, SafetyWarning, SampleRow, SwTrip, TareResult, TravelCalResult,
+)
+from bend_stand.calc.loadcal import LoadCalResult  # noqa: E402
 
 #: A motion ticket: a future resolved with a ``MoveOutcome`` (SW_design §5.4).
 MoveTicket = Future  # Future[MoveOutcome]
@@ -103,6 +107,8 @@ class LimitsAPI(Protocol):
     def set(self, cfg: LimitConfig) -> list[Issue]: ...
     def thresholds(self) -> ThresholdState: ...
     def recheck_async(self) -> Future[ThresholdState]: ...
+    def set_manual_thresholds_async(self, raw_min: int, raw_max: int, zero_raw: int = 0) -> Future[ThresholdState]: ...
+    def set_default_thresholds_async(self) -> Future[ThresholdState]: ...
     def set_no_specimen_mode(self, on: bool, *, confirmed: bool = False) -> GateResult: ...
 
 
@@ -292,6 +298,7 @@ __all__ = [
     "ResumeIgnored", "SafetyStatus", "SeqStatus", "SeriesMinMax", "SessionSettings", "Severity", "StopResult",
     "StopConfirmation", "BIT_PREFIX", "bit_key", "StreamStatus", "TareStatus", "TestMarks", "ThresholdState", "Token", "TravelDiffState", "VerifyReport",
     "WriteItem", "WriteStatus", "XYSnapshot", "bit_names",
+    "Bend3pGeometry", "SafetyWarning", "SampleRow", "SwTrip", "TareResult", "TravelCalResult", "LoadCalResult",
     # errors
     "BendStandError", "CalibrationError", "CommandNotExecuted", "CommandOutcomeUnknown", "CommandTimeout",
     "ConfigReadOnly", "ConfirmationRequired", "FileFormatError", "GateRefused", "IncompatibleFirmware",

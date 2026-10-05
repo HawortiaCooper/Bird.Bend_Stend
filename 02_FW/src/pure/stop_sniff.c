@@ -1,4 +1,4 @@
-/* Stop sniffer + sniffed-stop hold. Implements: SAF-FW-002, SAF-FW-003, FW-MOT-007, D-31 */
+/* Stop sniffer + sniffed-stop hold. Implements: SAF-FW-002, SAF-FW-003, FW-MOT-007, D-31, DEF-M3-01 */
 #include "stop_sniff.h"
 
 #include <string.h>
@@ -91,6 +91,42 @@ void hold_init(sniff_hold_t *h)
     memset(h, 0, sizeof *h);
 }
 
+/* FIFO helpers: drop the first n entries; push (drops the oldest when full); find (type, seq) */
+static void q_drop(hold_ent_t *q, uint8_t *qn, uint8_t n)
+{
+    uint8_t i;
+    if (n >= *qn) {
+        *qn = 0u;
+        return;
+    }
+    for (i = 0u; (uint8_t)(i + n) < *qn; i++) {
+        q[i] = q[i + n];
+    }
+    *qn = (uint8_t)(*qn - n);
+}
+
+static void q_push(hold_ent_t *q, uint8_t *qn, uint8_t type, uint8_t seq, uint32_t t_ms)
+{
+    if (*qn >= HOLD_FIFO) {
+        q_drop(q, qn, 1u);
+    }
+    q[*qn].type = type;
+    q[*qn].seq = seq;
+    q[*qn].t_ms = t_ms;
+    (*qn)++;
+}
+
+static int q_find(const hold_ent_t *q, uint8_t qn, uint8_t type, uint8_t seq)
+{
+    uint8_t i;
+    for (i = 0u; i < qn; i++) {
+        if (q[i].type == type && q[i].seq == seq) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
 void hold_set(sniff_hold_t *h, const sniff_hit_t *hit, uint32_t now_ms)
 {
     h->type = hit->type;                        /* the hold lasts until the LATEST sniffed frame */
@@ -98,21 +134,51 @@ void hold_set(sniff_hold_t *h, const sniff_hit_t *hit, uint32_t now_ms)
     h->cause = sniff_cause(hit);
     h->pending = true;
     h->t_ms = now_ms;
+    q_push(h->sq, &h->sn, hit->type, hit->seq, now_ms);
+}
+
+bool hold_on_dispatch_at(sniff_hold_t *h, uint8_t type, uint8_t seq, uint32_t now_ms)
+{
+    int j;
+    if (!CMD_IS_SNIFFED(type)) {
+        return false;
+    }
+    j = q_find(h->sq, h->sn, type, seq);
+    if (j >= 0) {                               /* sniffed first: reached in order */
+        q_drop(h->sq, &h->sn, (uint8_t)(j + 1));
+        if (h->sn == 0u && h->pending) {
+            h->pending = false;
+            return true;
+        }
+        return false;
+    }
+    q_push(h->dq, &h->dn, type, seq, now_ms);  /* dispatched before the sniffer saw it (DEF-M3-01) */
+    return false;
 }
 
 bool hold_on_dispatch(sniff_hold_t *h, uint8_t type, uint8_t seq)
 {
-    if (h->pending && h->type == type && h->seq == seq) {
-        h->pending = false;
-        return true;
+    return hold_on_dispatch_at(h, type, seq, h->t_ms);
+}
+
+bool hold_already_dispatched(sniff_hold_t *h, const sniff_hit_t *hit)
+{
+    int j = q_find(h->dq, h->dn, hit->type, hit->seq);
+    if (j < 0) {
+        return false;
     }
-    return false;
+    q_drop(h->dq, &h->dn, (uint8_t)(j + 1));   /* older entries: frames the sniffer lost */
+    return true;
 }
 
 bool hold_timeout(sniff_hold_t *h, uint32_t now_ms, uint32_t max_ms)
 {
+    while (h->dn != 0u && (uint32_t)(now_ms - h->dq[0].t_ms) >= max_ms) {
+        q_drop(h->dq, &h->dn, 1u);
+    }
     if (h->pending && (uint32_t)(now_ms - h->t_ms) >= max_ms) {
         h->pending = false;
+        h->sn = 0u;
         return true;
     }
     return false;

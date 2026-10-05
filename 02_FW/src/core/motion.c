@@ -13,8 +13,15 @@
  * DIR polarity (motion.dir_invert): the seam has no field for it; hal_step_set_dir() receives the
  * logical direction +-1, or +-2 when the DIR output must be inverted (the HAL counts by the sign) -
  * interim encoding, seam request SR-M2-01 to the Integrator (FW_design §9.7).
+ * MOVE_UNTIL_LOAD (FW-MOT-006, D-44: M4 scope pulled forward): one segment from the position to the
+ * absolute bound; the threshold compare is armed in the same CRIT_MOTION section that starts the timer
+ * (after a last pre-check of the newest sample), decided per sample in the sample ISR
+ * (motion_on_sample(), level 3: CLEAN halt + hit record, like the FW load limit) and folded into
+ * MOVE_DONE LOAD_THRESHOLD by the tick (or by the next motion_stop()); the bound is a planned stop
+ * (MOVE_DONE BOUND). LOAD_THRESHOLD is not a stop source: no STOPPED, VALID unchanged (ICD §5.4, §6.2).
  * Implements: FW-MOT-001 (start / DIR setup / PW via the HAL), FW-MOT-002, FW-MOT-003, FW-MOT-004,
- *             FW-MOT-005, FW-MOT-007 (motion part), FW-MOT-008, FW-HOM-001, FW-HOM-002, FW-HOM-004,
+ *             FW-MOT-005, FW-MOT-006, FW-MOT-007 (motion part), FW-MOT-008, FW-HOM-001, FW-HOM-002,
+ *             FW-HOM-004,
  *             SAF-FW-001 (discard target, MOVE_DONE), SAF-FW-002 (CLEAN stops), SAF-FW-003
  *             (controlled-stop paths), SAF-FW-004 (step fault, POS_UNCERTAIN), SAF-FW-016 (dead-man),
  *             SAF-FW-017 (disable part), SAF-FW-024 (settle after power return), FW-SW-004 (NOT_SETTLED)
@@ -27,6 +34,7 @@
 #include "hal_sys.h"
 #include "hal_time.h"
 #include "homing.h"
+#include "mul.h"
 #include "ramp.h"
 #include "stepgen.h"
 #include "units.h"
@@ -86,6 +94,20 @@ typedef struct {
 } motion_t;
 
 static motion_t M;
+
+/* MOVE_UNTIL_LOAD compare, shared with the sample ISR (level 3): configured by the thread before the
+ * start, armed inside the CRIT_MOTION section that starts the timer (masks level 3), disarmed in
+ * finish(); `hit` is written by the sample ISR (or by the start pre-check under CRIT_MOTION) and
+ * cleared by the thread before a new start */
+typedef struct {
+    volatile bool    armed;
+    volatile bool    hit;
+    int32_t          raw_stop;
+    uint8_t          cmp;
+    volatile int32_t hit_raw;            /* deciding sample (diagnostics) */
+} mul_isr_t;
+
+static mul_isr_t MUL;
 
 /* ------------------------------------------------------------------ helpers */
 static int32_t pos_now(void) { return hal_step_count(); }
@@ -247,25 +269,36 @@ static void hw_start(void)
 {
     uint32_t gen = hal_step_stop_gen();
     uint32_t c1, c2 = 0u;
+    bool mul = M.kind == (uint8_t)MS_MOVE_UNTIL_LOAD;
+    bool started = false;
     int dir_hw = g_fw.p.motion.dir_invert ? 2 * M.dir : M.dir;
     hal_step_set_dir(dir_hw);                          /* only while stopped (FW-MOT-001) */
     c1 = ramp_next(&M.ramp);
     if (M.ramp.rem != 0u) {
         c2 = ramp_next(&M.ramp);
     }
-    CRIT_BEGIN(HAL_CRIT_MOTION);
-    M.isr_count = pos_now();
-    M.last_armed = false;
-    M.running = true;
-    hal_step_start(c1);                                /* first edge >= dir_setup after this call */
-    if (c2 == 0u) {
-        hal_step_arm_last();
-        M.last_armed = true;
+    CRIT_BEGIN(HAL_CRIT_MOTION);                       /* masks the sample ISR (level 3) as well */
+    /* FW-MOT-006: the newest sample before the first pulse decides; no sample can slip between this
+     * pre-check and the armed compare (both happen inside this section) */
+    if (mul && mul_precheck(g_fw.afe.raw_last != PROTO_AFE_NO_DATA, g_fw.afe.raw_last, MUL.raw_stop, MUL.cmp)) {
+        MUL.hit = true;                                /* already beyond: no pulse */
+        MUL.hit_raw = g_fw.afe.raw_last;
     } else {
-        hal_step_set_period(c2);
+        MUL.armed = mul;
+        M.isr_count = pos_now();
+        M.last_armed = false;
+        M.running = true;
+        started = true;
+        hal_step_start(c1);                            /* first edge >= dir_setup after this call */
+        if (c2 == 0u) {
+            hal_step_arm_last();
+            M.last_armed = true;
+        } else {
+            hal_step_set_period(c2);
+        }
     }
     CRIT_END();
-    if (hal_step_stop_gen() != gen) {
+    if (started && hal_step_stop_gen() != gen) {
         (void)hal_step_stop_now();                     /* start-then-recheck: a fixed reaction raced it */
     }
 }
@@ -396,6 +429,7 @@ static uint32_t span(int32_t from, int32_t to, int8_t dir)
 static void finish(uint8_t md)
 {
     int32_t p = pos_now();
+    MUL.armed = false;                                 /* no compare outside a running MOVE_UNTIL_LOAD */
     M.active = false;
     M.running = false;
     M.parked = false;
@@ -425,6 +459,61 @@ void motion_move_abs(int32_t target_um, uint32_t v_um_s, uint32_t a_um_s2)
     }
     M.active = true;
     g_fw.motion_state = (uint8_t)MS_MOVE_ABS;
+}
+
+/* FW-MOT-006 (ICD §5.4): accepted by cmd_check (HOMED, bound inside the soft limits and != position,
+ * v <= v_limit with v_max_load, raw_stop / cmp in range, BLOCK mask incl. LIMIT toward the switch) */
+void motion_move_until_load(int32_t bound_um, uint32_t v_um_s, uint32_t a_um_s2, int32_t raw_stop, uint8_t cmp)
+{
+    int32_t b = steps_of(bound_um);
+    int32_t p = pos_now();
+    int8_t dir = mul_dir(b, p);
+    CRIT_BEGIN(HAL_CRIT_DATA);                         /* the sample ISR reads MUL */
+    MUL.armed = false;
+    MUL.hit = false;
+    MUL.raw_stop = raw_stop;
+    MUL.cmp = cmp;
+    CRIT_END();
+    M.kind = (uint8_t)MS_MOVE_UNTIL_LOAD;
+    M.target_um = bound_um;
+    M.end_md = (uint8_t)MD_BOUND;
+    if (dir == 0 || !seg_start(dir, span(p, b, dir), v_um_s, acc_or_max(a_um_s2))) {
+        /* the bound rounds to the current step (bound != position in um, F-B-28): already at the
+         * bound, but the last sample is compared first (a repeated command never moves further) */
+        bool beyond = mul_precheck(g_fw.afe.raw_last != PROTO_AFE_NO_DATA, g_fw.afe.raw_last, raw_stop, cmp);
+        ev((uint16_t)EV_MOVE_DONE, (uint16_t)(beyond ? MD_LOAD_THRESHOLD : MD_BOUND), um_of(p), p);
+        return;
+    }
+    if (!M.running && !M.parked) {                     /* pre-check in hw_start: already beyond */
+        MUL.hit = false;
+        ev((uint16_t)EV_MOVE_DONE, (uint16_t)MD_LOAD_THRESHOLD, um_of(p), p);   /* no pulse */
+        return;
+    }
+    M.active = true;
+    g_fw.motion_state = (uint8_t)MS_MOVE_UNTIL_LOAD;
+}
+
+/* level 3, from on_afe_sample() right after the FW load limit (FW_design §5.8): the first sample
+ * beyond raw_stop -> CLEAN halt in this ISR (SAF-FW-002 load path, <= 200 us after data-ready) */
+void motion_on_sample(int32_t raw, bool load_trip)
+{
+    if (mul_sample_stop(MUL.armed, MUL.hit, hal_step_running(), load_trip, raw, MUL.raw_stop, MUL.cmp)) {
+        (void)hal_step_stop_now();
+        MUL.hit_raw = raw;
+        MUL.hit = true;                                /* folded by the tick: MOVE_DONE LOAD_THRESHOLD */
+    }
+}
+
+/* threshold record -> the running MOVE_UNTIL_LOAD ends with LOAD_THRESHOLD (no STOPPED, VALID kept);
+ * a stop already in progress keeps its own reason (STOPPED) */
+static void mul_fold(void)
+{
+    if (M.active && M.kind == (uint8_t)MS_MOVE_UNTIL_LOAD && MUL.hit && !M.stopping) {
+        M.stopping = true;
+        M.ctrl = false;
+        M.reversing = false;
+        M.stop_md = (uint8_t)MD_LOAD_THRESHOLD;
+    }
 }
 
 static int32_t jog_end_steps(int8_t dir, int32_t bound_um, bool *bounded)
@@ -612,6 +701,7 @@ void motion_stop(uint8_t cause, bool controlled, uint8_t md)
     if (!M.active) {
         return;
     }
+    mul_fold();                                        /* a threshold hit decided earlier ended it */
     p = pos_now();
     if (!M.stopping || M.reversing) {
         M.reversing = false;
@@ -855,6 +945,7 @@ void motion_tick(uint32_t now_ms)
             ramp_commit(&e);
         }
     }
+    mul_fold();                                        /* FW-MOT-006 hit record (sample ISR) */
     if (M.active && M.running && !hal_step_running()) {
         segment_ended(now_ms);
     } else {

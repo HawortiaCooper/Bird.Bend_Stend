@@ -54,8 +54,8 @@ static void test_get_info(void)
     TEST_ASSERT_EQUAL_HEX8(0x10u, b[10]);                              /* hal_uid */
     TEST_ASSERT_EQUAL_STRING("host", (const char *)&b[22]);
     TEST_ASSERT_EQUAL_UINT16(PARAM_COUNT, le_get16(&b[38]));
-    TEST_ASSERT_EQUAL_HEX32(FEAT_AFE | FEAT_MOTION | FEAT_HOMING | FEAT_NVM | FEAT_BUTTONS | FEAT_DRV_SIGNALS,
-                            le_get32(&b[40]));                 /* M2; MOVE_UNTIL_LOAD is M4 */
+    TEST_ASSERT_EQUAL_HEX32(FEAT_AFE | FEAT_MOTION | FEAT_HOMING | FEAT_MOVE_UNTIL_LOAD | FEAT_NVM | FEAT_BUTTONS |
+                            FEAT_DRV_SIGNALS, le_get32(&b[40]));   /* M2 + MOVE_UNTIL_LOAD (D-44) */
 }
 
 /* production path GET_ALL_PARAMS with defaults == the vectors' default-table pages */

@@ -118,6 +118,7 @@ class Device:
         self.confirmer: StopConfirmer | None = None
         self.on_async: Callable[[Frame], None] | None = None          # → pipeline queue (backend)
         self.on_link_change: Callable[[LinkState], None] | None = None
+        self.on_synced: Callable[[], None] | None = None                # after connect / BOOT resync (M3)
         self.submit_job: Callable[[Callable[..., Job]], Any] | None = None   # Worker.submit (backend)
         self.threaded_reader = not clock.is_lockstep
         # latest FW indications (DATA, then STATUS)
@@ -349,6 +350,9 @@ class Device:
             yield from self.stream_job(True)
         elif stream:                                     # read-only state: monitoring still allowed
             yield from self.stream_job(True)
+        cb = self.on_synced
+        if cb is not None:
+            cb()
 
     def disconnect_job(self) -> Job:
         self._user_disconnected = True

@@ -525,6 +525,28 @@ def gen_motion(v):
                    f"{x['n_dec']}u, {float(x['v_peak'])!r}, {float(x['t'])!r} }},")
     out.append("};")
     out.append(f"#define VEC_PLAN_N {len(v['planner'])}u")
+    # v0.7.2: immediate CLEAN stops of a running segment (MOVE_UNTIL_LOAD threshold, FW-MOT-006)
+    names = [c["name"] for c in v["cases"]]
+    ist = v.get("immediate_stops", [])
+    out.append("typedef struct { const char *name; uint16_t base; uint32_t after; uint8_t reason; } vec_istop_t;")
+    out.append("static const vec_istop_t VEC_ISTOP[] = {")
+    for x in ist:
+        out.append(f"    {{ {cstr(x['name'])}, {names.index(x['base_case'])}u, {x['after_step']}u, "
+                   f"(uint8_t)MD_{x['reason']} }},")
+    if not ist:
+        out.append("    { \"none\", 0u, 0u, 0u },")
+    out.append("};")
+    out.append(f"#define VEC_ISTOP_N {len(ist)}u")
+    # v0.7.2 (OI-FW-43 b): threshold sample during the base case's controlled stop (events applied first)
+    tcs = v.get("threshold_in_controlled_stop", [])
+    out.append("static const vec_istop_t VEC_TICS[] = {")
+    for x in tcs:
+        out.append(f"    {{ {cstr(x['name'])}, {names.index(x['base_case'])}u, {x['after_step']}u, "
+                   f"(uint8_t)MD_{x['reason']} }},")
+    if not tcs:
+        out.append("    { \"none\", 0u, 0u, 0u },")
+    out.append("};")
+    out.append(f"#define VEC_TICS_N {len(tcs)}u")
     return out
 
 

@@ -6,7 +6,11 @@ Layout (M1):
   ``NoFocus``, fires on press, calls ``backend.stop("toolbar")`` synchronously) · Pause/Resume · Clear stop (badge)
   · TARE · Stream · Record · Take sample · stretch · link widget. No toolbar item has a keyboard shortcut.
 * **Banner stack** in a second full-width toolbar row: stop banner, no-specimen mode banner, notice strip, toast.
-* **Tabs** (GQ-01 order) in a scroll area; M1 implements *Connection & Config*, the others are placeholders.
+* **Tabs** (GQ-01 order) in a scroll area: Connection & Config (M1), Safety limits, Test marks, Manual,
+  Calibration & Tare (M3); Sequence and Report are placeholders (M4). The current tab is refreshed every tick.
+* **Wizards / popups** (non-modal, STOP inside): travel and load calibration wizards, TARE popup (toolbar TARE on
+  every tab), Pause/Break key test (Tools menu); refreshed every tick while open.
+* **Units**: View ▸ Units N / kgf (SYS-003) → readouts, X-Y pane, Manual / limits tabs (display only).
 * **Docks**: Plot 1 (right), Readouts (right), Event log (bottom, hidden by default) — every dock has STOP.
 * **Indicator bar**: fixed two-row strip in the bottom toolbar area (full width, never hidden).
 * **Refresh**: one 33 ms PreciseTimer (``RefreshScheduler``) → ``gui_beat()``, ``status()``, then indicators /
@@ -28,12 +32,13 @@ per time window, layout persistence), SW-RT-001 (several plot windows, layout re
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -54,15 +59,23 @@ from bend_stand.gui.bridge import QtBridge
 from bend_stand.gui.dialogs.about import AboutDialog
 from bend_stand.gui.dialogs.clear_stop_dialog import ClearStopDialog
 from bend_stand.gui.dialogs.confirm_dialog import make_confirm
+from bend_stand.gui.dialogs.hotkey_test import HotkeyTestDialog
 from bend_stand.gui.dialogs.link_stats import LinkStatsDialog
-from bend_stand.gui.dialogs.safe_dialog import SafeMessageBox
+from bend_stand.gui.dialogs.safe_dialog import SafeMessageBox, get_open_file_name, get_save_file_name
 from bend_stand.gui.dialogs.status_help import StatusHelpDialog
+from bend_stand.gui.dialogs.tare_popup import TarePopup
 from bend_stand.gui.mode_state import no_specimen
 from bend_stand.gui.plots.plot_dock import PlotDock
 from bend_stand.gui.refresh import RefreshScheduler
 from bend_stand.gui.stop import set_stop_handler
+from bend_stand.gui.settings import KEY_LAST_TAB, KEY_UNITS
+from bend_stand.gui.tabs.calibration_tab import CalibrationTab
 from bend_stand.gui.tabs.connection_tab import ConnectionTab
+from bend_stand.gui.tabs.limits_tab import LimitsTab
+from bend_stand.gui.tabs.manual_tab import ManualTab
+from bend_stand.gui.tabs.marks_tab import MarksTab
 from bend_stand.gui.theme import BANNER_STYLE
+from bend_stand.gui.units_state import FORCE_UNITS, force_unit
 from bend_stand.gui.widgets.event_log import EventLogDock
 from bend_stand.gui.widgets.indicator_bar import IndicatorBar
 from bend_stand.gui.widgets.mode_banner import ModeBanner
@@ -72,13 +85,15 @@ from bend_stand.gui.widgets.readout import ReadoutDock
 from bend_stand.gui.widgets.status_led import StatusLed
 from bend_stand.gui.widgets.stop_banner import StopBanner
 from bend_stand.gui.widgets.stop_button import StopButton
+from bend_stand.gui.wizards.load_cal import LoadCalWizard
+from bend_stand.gui.wizards.travel_cal import TravelCalWizard
 
 log = logging.getLogger(__name__)
 
 TAB_NAMES = ("Connection & Config", "Safety limits", "Test marks", "Manual", "Calibration & Tare", "Sequence",
              "Report")
-PLACEHOLDER_MS = {"Safety limits": "M3", "Test marks": "M3", "Manual": "M2", "Calibration & Tare": "M3",
-                  "Sequence": "M4", "Report": "M4"}
+PLACEHOLDER_MS = {"Sequence": "M4", "Report": "M4"}
+PARAMS_EVERY = 10                    # board values for the K1 chip (drv.k1_check_enable) every 10th tick
 SAMPLE_WINDOWS_S = (0.1, 0.5, 1.0, 2.0, 5.0, 10.0)
 TOAST_MS = 6000
 DEFAULT_PLOT_KEYS = ("raw",)
@@ -89,8 +104,24 @@ PLOT_LAYOUT_VERSION = 1
 LINK_LED = {"CONNECTED": "green", "CONNECTING": "yellow", "DEGRADED": "yellow", "LOST": "red"}
 
 
+SESSION_FILTER = "Sessions (*.bbsession.json);;All files (*)"
+
+
 def _err_text(exc: BaseException) -> str:
     return str(getattr(exc, "user_text", "") or exc or type(exc).__name__)
+
+
+def sample_text(row: Any) -> str:
+    """Toast text of a ``SampleRow`` (B5-13) — display only."""
+    if not hasattr(row, "f_mean"):
+        return str(getattr(row, "text", "") or row)
+    from bend_stand.gui.format import fmt_value  # noqa: PLC0415
+    txt = (f"F̄ = {fmt_value(row.f_mean, 'N')} N, σ {fmt_value(row.f_std, 'N')} N, N {row.f_n}; "
+           f"x̄ = {fmt_value(row.x_mean, 'mm')} mm; raw {fmt_value(row.raw_mean, 'counts')} "
+           f"({row.window_s:g} s)")
+    if getattr(row, "file", None):
+        txt += f" → {row.file}"
+    return txt
 
 
 def latched_count(status: Any) -> int:
@@ -130,6 +161,10 @@ class MainWindow(QMainWindow):
         self.confirm_dialog: Any = None
         self.last_status: Any = None
         self.exit_summary = ""
+        self.tare_popup: TarePopup | None = None
+        self.wizards: dict[str, Any] = {}
+        self._params: Any = None
+        self._status_n = 0
 
         self._build_toolbar()
         self._build_banner_bar()
@@ -148,6 +183,7 @@ class MainWindow(QMainWindow):
         self.refresh.add_stage("link", self.connection_tab.update_link_line, every=30)
         self._reload_channels()
         self.restore_layout()
+        self._restore_ui_prefs()
         try:
             st = backend.status()
             self._on_status(st)
@@ -184,7 +220,7 @@ class MainWindow(QMainWindow):
         f = self.tare_button.font()
         f.setBold(True)
         self.tare_button.setFont(f)
-        self.tare_button.clicked.connect(self.on_tare)
+        self.tare_button.clicked.connect(lambda: self.on_tare(None))
 
         self.stream_button = self._tool_button(tb, "▶ Stream", "streamButton")
         self.stream_button.setCheckable(True)
@@ -274,6 +310,7 @@ class MainWindow(QMainWindow):
         self.stop_banner.clearStopRequested.connect(self.open_clear_stop)
         self.stop_banner.resumeRequested.connect(lambda: self._on_resume_result(self.backend.resume("banner")))
         self.stop_banner.connectionRequested.connect(lambda: self.tabs.setCurrentIndex(0))
+        self.stop_banner.noSpecimenRequested.connect(self.enter_no_specimen)
         self.mode_banner.leaveRequested.connect(self._leave_no_specimen)
         self.notice_strip.actionRequested.connect(self._on_notice_action)
 
@@ -283,8 +320,22 @@ class MainWindow(QMainWindow):
         self.connection_tab = ConnectionTab(self.backend, self.bridge, self.tabs)
         self.connection_tab.message.connect(self.toast)
         self.tabs.addTab(self.connection_tab, TAB_NAMES[0])
-        for name in TAB_NAMES[1:]:
+        self.limits_tab = LimitsTab(self.backend, self.bridge, self.tabs)
+        self.marks_tab = MarksTab(self.backend, self.bridge, self.tabs)
+        self.manual_tab = ManualTab(self.backend, self.bridge, self.tabs)
+        self.calibration_tab = CalibrationTab(self.backend, self.bridge, self.tabs)
+        for name, tab in zip(TAB_NAMES[1:5], (self.limits_tab, self.marks_tab, self.manual_tab,
+                                               self.calibration_tab), strict=True):
+            tab.message.connect(self.toast)
+            self.tabs.addTab(tab, name)
+        for name in TAB_NAMES[5:]:
             self.tabs.addTab(_Placeholder(name, PLACEHOLDER_MS[name], self.tabs), name)
+        self.manual_tab.resumeRequested.connect(lambda: self._on_resume_result(self.backend.resume("manual")))
+        self.calibration_tab.travelWizardRequested.connect(self.open_travel_wizard)
+        self.calibration_tab.loadWizardRequested.connect(self.open_load_wizard)
+        self.calibration_tab.tareRequested.connect(self.on_tare)
+        self.calibration_tab.travelActionRequested.connect(lambda a: self._on_notice_action(f"travel:{a}"))
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.tabs)
@@ -320,6 +371,9 @@ class MainWindow(QMainWindow):
     def _build_menus(self) -> None:
         mb = self.menuBar()
         m_file = mb.addMenu("&File")
+        m_file.addAction("Open session…", self.open_session)
+        m_file.addAction("Save session as…", self.save_session)
+        m_file.addSeparator()
         act = QAction("E&xit", self)
         act.setShortcut(QKeySequence("Ctrl+Q"))
         act.triggered.connect(self.close)
@@ -328,6 +382,17 @@ class MainWindow(QMainWindow):
         self.view_menu = m_view
         m_view.addAction("New plot window", self.new_plot_window)
         m_view.addAction("Save layout now", self.save_layout)
+        m_units = m_view.addMenu("Units")
+        self.unit_actions: dict[str, QAction] = {}
+        grp = QActionGroup(self)
+        grp.setExclusive(True)
+        for u in FORCE_UNITS:
+            act = QAction(u, self, checkable=True)
+            act.triggered.connect(lambda _c=False, uu=u: self.set_force_unit(uu))
+            grp.addAction(act)
+            m_units.addAction(act)
+            self.unit_actions[u] = act
+        self.unit_actions["N"].setChecked(True)
         m_view.addSeparator()
         for dock in (*self.plot_docks, self.readout_dock, self.event_log):
             m_view.addAction(dock.toggleViewAction())
@@ -352,8 +417,14 @@ class MainWindow(QMainWindow):
     # ================================================================== refresh stages
     def _on_status(self, status: Any) -> None:
         self.last_status = status
+        self._status_n += 1
         no_specimen().set(bool(getattr(status.safety, "no_specimen_mode", False)))
-        self.indicator_bar.update_status(status)
+        if self._status_n % PARAMS_EVERY == 1:
+            try:
+                self._params = self.backend.config.values()
+            except Exception:  # noqa: BLE001
+                self._params = None
+        self.indicator_bar.update_status(status, self._params)
         self.stop_banner.update_status(status)
         self.mode_banner.update_status(status)
         self.notice_strip.update_status(status)
@@ -362,7 +433,27 @@ class MainWindow(QMainWindow):
         self._update_toolbar(status)
         self._update_hotkey_fallback(status)
         self.connection_tab.update_status(status)
+        tab = self.tabs.currentWidget()
+        if tab is not self.connection_tab and hasattr(tab, "update_status"):
+            tab.update_status(status)
+        self._update_windows(status)
         self._update_banner_bar()
+
+    def _update_windows(self, status: Any) -> None:
+        """Open wizards, the tare popup and the hotkey test follow the engines every tick (§6.1)."""
+        for w in list(self.wizards.values()):
+            if _alive(w) and w.isVisible():
+                w.refresh()
+        if self.tare_popup is not None and _alive(self.tare_popup) and self.tare_popup.isVisible():
+            self.tare_popup.refresh()
+        hk = self.dialogs.get("hotkey")
+        if hk is not None and _alive(hk) and hk.isVisible():
+            hk.update_status(status)
+
+    def _on_tab_changed(self, _i: int) -> None:
+        tab = self.tabs.currentWidget()
+        if self.last_status is not None and hasattr(tab, "update_status") and tab is not self.connection_tab:
+            tab.update_status(self.last_status)
 
     def _update_banner_bar(self) -> None:
         any_shown = any(not w.isHidden() for w in (self.stop_banner, self.mode_banner, self.notice_strip,
@@ -582,21 +673,27 @@ class MainWindow(QMainWindow):
 
     def _on_recording_event(self, record: Any) -> None:
         if record.topic == "sample.taken":
-            self.toast(f"Sample taken: {getattr(record.payload, 'text', '') or record.payload}", "info")
+            self.toast("Sample taken: " + sample_text(record.payload), "info")
         elif record.topic == "rec.failure":
             self.toast(f"Recording failed: {getattr(record.payload, 'text', '') or record.payload}", "error")
 
     def _on_safety_event(self, record: Any) -> None:
         if record.topic == "safety.no_specimen":
             p = record.payload
-            on = getattr(p, "on", None)
+            on = p if isinstance(p, bool) else getattr(p, "on", None)       # B5-02: payload bool
             if on is False:
-                self.toast(f"No-specimen mode ended ({getattr(p, 'reason', '')}) – PC load limits active again",
+                why = getattr(p, "reason", "") if not isinstance(p, bool) else ""
+                self.toast("No-specimen mode ended" + (f" ({why})" if why else "") + " – PC load limits active again",
                            "warn")
+            elif on is True:
+                self.toast("No-specimen mode ON – PC load limits off for this session", "warn")
+        elif record.topic == "safety.trip":
+            p = record.payload
+            self.toast("SW limit trip: " + (getattr(p, "text", "") or str(p)) + " – STOP sent", "error")
 
     def open_clear_stop(self) -> None:
         dlg = self.dialogs.get("clear")
-        if dlg is None or not _alive(dlg):
+        if dlg is None or not _reusable(dlg):
             dlg = ClearStopDialog(self.backend, self.bridge, self)
             dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             self.dialogs["clear"] = dlg
@@ -604,8 +701,23 @@ class MainWindow(QMainWindow):
         dlg.raise_()
 
     # ================================================================== toolbar actions
-    def on_tare(self) -> None:
-        gate = self.backend.tare()
+    def on_tare(self, window_s: float | None = None) -> None:
+        """Toolbar / Calibration-tab TARE (every tab): non-modal TarePopup (§6.4); refusals verbatim."""
+        popup = self.tare_popup
+        if popup is None or not _reusable(popup):
+            popup = TarePopup(self.backend, self.bridge, self)
+            popup.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            popup.message.connect(self.toast)
+            self.tare_popup = popup
+            self.dialogs["tare"] = popup
+        anchor = self.mapToGlobal(self.toolbar.geometry().bottomLeft())
+        popup.move(anchor.x() + 40, anchor.y() + 4)
+        popup.show()
+        popup.raise_()
+        gate = popup.start(window_s if isinstance(window_s, (int, float)) and not isinstance(window_s, bool)
+                           else None)
+        if gate is None:
+            return
         if gate.ok:
             self.toast("Tare started", "info")
         else:
@@ -693,8 +805,102 @@ class MainWindow(QMainWindow):
             self, "Keyboard", "Pause/Break and Ctrl+Break: HALT (latched stop, system-wide; works before Connect).\n"
                               "No other keyboard stop key exists (GQ-19).\n\n" + indicator_map.KL01_TEXT)
 
-    def open_hotkey_test(self) -> None:
-        self.toast("Pause/Break key test: implemented in M3 (HotkeyTestDialog)", "info")
+    def open_hotkey_test(self) -> Any:
+        dlg = self.dialogs.get("hotkey")
+        if dlg is None or not _reusable(dlg):
+            dlg = HotkeyTestDialog(self.backend, self.bridge, self)
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            self.dialogs["hotkey"] = dlg
+        dlg.show()
+        dlg.raise_()
+        return dlg
+
+    # ================================================================== wizards / no-specimen / units
+    def _open_wizard(self, kind: str, cls: Any, engine: Any) -> Any:
+        w = self.wizards.get(kind)
+        if w is None or not _reusable(w):
+            w = cls(self.backend, self.bridge, engine, self)
+            w.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            w.message.connect(self.toast)
+            w.noSpecimenRequested.connect(self.enter_no_specimen)
+            self.wizards[kind] = w
+        w.show()
+        w.raise_()
+        w.refresh()
+        return w
+
+    def open_travel_wizard(self) -> Any:
+        return self._open_wizard("travel_cal", TravelCalWizard, self.backend.travel_cal)
+
+    def open_load_wizard(self) -> Any:
+        return self._open_wizard("load_cal", LoadCalWizard, self.backend.load_cal)
+
+    def open_session(self) -> None:
+        """File ▸ Open session… (SW-LIM-003): ``session.load(path)``; tabs re-read limits / speeds / unit."""
+        path = get_open_file_name(self, "Open session", "", SESSION_FILTER)
+        if not path:
+            return
+        try:
+            s = self.backend.session.load(path)
+        except Exception as exc:  # noqa: BLE001 - FileFormatError / OSError
+            self.toast(f"Session not loaded: {_err_text(exc)}", "error")
+            return
+        self.limits_tab.revert()
+        self.manual_tab._load_session_defaults()                         # noqa: SLF001
+        unit = getattr(s, "display_unit", None)
+        if unit in FORCE_UNITS:
+            self.set_force_unit(unit)
+        self.toast(f"Session loaded: {path}", "info")
+
+    def save_session(self) -> None:
+        """File ▸ Save session as… (SW-LIM-003): ``session.save(path)`` (limits, speeds, unit; never tare / mode)."""
+        path = get_save_file_name(self, "Save session", "", SESSION_FILTER, "bbsession.json")
+        if not path:
+            return
+        try:
+            self.backend.session.save(path)
+        except Exception as exc:  # noqa: BLE001
+            self.toast(f"Session not saved: {_err_text(exc)}", "error")
+            return
+        self.toast(f"Session saved: {path}", "info")
+
+    def enter_no_specimen(self) -> None:
+        """Every [Enter no-specimen mode…] (banner, wizard start page, limits tab) → C-10 (limits tab)."""
+        self.limits_tab.enter_no_specimen()
+
+    def set_force_unit(self, unit: str) -> None:
+        """View ▸ Units N / kgf (SYS-003): display only; stored in the session and the GUI settings."""
+        force_unit().set(unit)
+        act = self.unit_actions.get(unit)
+        if act is not None and not act.isChecked():
+            act.setChecked(True)
+        self.readout_dock.set_force_unit(unit)
+        for d in self.plot_docks:
+            d.update_xy_choices()
+        try:
+            s = self.backend.session.get()
+            if getattr(s, "display_unit", unit) != unit:
+                self.backend.session.set(dataclasses.replace(s, display_unit=unit))
+        except Exception:  # noqa: BLE001 - persistence is a convenience
+            log.debug("session display unit not stored", exc_info=True)
+        if self.settings is not None:
+            self.settings.setValue(KEY_UNITS, unit)
+
+    def _restore_ui_prefs(self) -> None:
+        unit = self.settings.value(KEY_UNITS) if self.settings is not None else None
+        if unit not in FORCE_UNITS:
+            try:
+                unit = self.backend.session.get().display_unit
+            except Exception:  # noqa: BLE001
+                unit = "N"
+        self.set_force_unit(str(unit) if unit in FORCE_UNITS else "N")
+        if self.settings is not None:
+            try:
+                i = int(self.settings.value(KEY_LAST_TAB, 0))
+            except (TypeError, ValueError):
+                i = 0
+            if 0 <= i < self.tabs.count():
+                self.tabs.setCurrentIndex(i)
 
     # ================================================================== toast
     def toast(self, text: str, severity: str = "info") -> None:
@@ -743,6 +949,7 @@ class MainWindow(QMainWindow):
             if self.settings is not None:
                 try:
                     self.settings.setValue("main/geometry", self.saveGeometry())
+                    self.settings.setValue(KEY_LAST_TAB, self.tabs.currentIndex())
                 except Exception:  # noqa: BLE001
                     pass
                 self.save_layout()
@@ -774,5 +981,14 @@ def _alive(w: Any) -> bool:
     try:
         w.isVisible()
         return True
+    except RuntimeError:
+        return False
+
+
+def _reusable(w: Any) -> bool:
+    """An open (visible) window can be raised again; a closed one may already be scheduled for deletion
+    (WA_DeleteOnClose), so a new one is created."""
+    try:
+        return bool(w.isVisible())
     except RuntimeError:
         return False

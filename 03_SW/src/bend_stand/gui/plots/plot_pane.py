@@ -1022,6 +1022,8 @@ class XYPane(PlotPane):
         self.selector_bar = bar
         self.x_combo.currentIndexChanged.connect(self._on_choice)
         self.y_combo.currentIndexChanged.connect(self._on_choice)
+        self.y_user = False                       # True once the operator picked y himself
+        self.y_combo.activated.connect(self._on_y_user)
         self.xy_curve = FastCurve(pen=pg.mkPen(PALETTE[0], width=PEN_WIDTH), name="x-y")
         self.plot_item.addItem(self.xy_curve)
         self.live_point = pg.ScatterPlotItem(size=8, brush=pg.mkBrush(PALETTE[1]), pen=None)
@@ -1050,6 +1052,8 @@ class XYPane(PlotPane):
         """(key, label) candidates; keeps the current choice when still offered."""
         for combo, opts, want in ((self.x_combo, x_opts, x), (self.y_combo, y_opts, y)):
             cur = want or combo.currentData()
+            if combo is self.y_combo and not want and not self.y_user and opts:
+                cur = opts[0][0]          # automatic y = the preferred one (force when calibrated, SW-RT-003)
             combo.blockSignals(True)
             combo.clear()
             for key, label in opts:
@@ -1058,6 +1062,9 @@ class XYPane(PlotPane):
             combo.setCurrentIndex(i if i >= 0 else (0 if combo.count() else -1))
             combo.blockSignals(False)
         self._on_choice()
+
+    def _on_y_user(self, *_a: Any) -> None:
+        self.y_user = True
 
     @property
     def x_key(self) -> str | None:

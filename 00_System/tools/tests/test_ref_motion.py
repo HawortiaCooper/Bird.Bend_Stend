@@ -75,3 +75,23 @@ def test_ctrl_stop_path_rule(p_ticks: int, spm: float, a_stop: int, path: str) -
                and r["a_stop_um_s2"] == a_stop)
     assert row["path"] == path
     assert rm.ctrl_stop_path(p_ticks, F, rm.steps_per_s(a_stop, spm))[0] == path
+
+
+def test_immediate_stops_reference_base_cases():
+    """v0.7.2 (FW-MOT-006): every immediate stop names an existing base case and a step inside it."""
+    import json  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    mv = json.loads((Path(__file__).resolve().parents[1] / "vectors" / "motion_vectors.json").read_text(encoding="utf-8"))
+    cases = {c["name"]: c for c in mv["cases"]}
+    assert mv["immediate_stops"] and mv["threshold_in_controlled_stop"]
+    for s in mv["threshold_in_controlled_stop"]:
+        stop = [e for e in cases[s["base_case"]]["events"] if e["event"] == "controlled_stop"]
+        assert stop and stop[0]["after_step"] < s["after_step"] <= cases[s["base_case"]]["n_periods"], s
+        assert s["reason"] == "STOPPED"
+    for s in mv["immediate_stops"]:
+        base = cases[s["base_case"]]
+        assert 0 <= s["after_step"] <= base["n_periods"], s
+        stop = [e for e in base["events"] if e["event"] == "controlled_stop"]
+        # OI-FW-43 b: a threshold during a controlled stop keeps the reason STOPPED
+        assert s["reason"] == ("STOPPED" if stop and s["after_step"] > stop[0]["after_step"] else "LOAD_THRESHOLD"), s

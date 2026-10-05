@@ -6,7 +6,8 @@ the registry (e.g. force before M3) reads "n/a".
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/gui/widgets/readout.py @37c87471 (adapted: fixed channel list,
 state from the backend, no EMA in M1, SafeDock base).
 
-Implements: SW-RT-005 (readouts with state; M1: raw and sample rate), SW-CAL-008 (EXTRAPOLATED shown)
+Implements: SW-RT-005 (readouts with state: force, travel, raw, sample rate), SW-CAL-008 (EXTRAPOLATED shown),
+SYS-003 (force in N or kgf)
 """
 from __future__ import annotations
 
@@ -65,6 +66,19 @@ class ReadoutDock(SafeDock):
 
     def keys(self) -> list[str]:
         return [k for k, _l, _u in self._readouts]
+
+    def set_force_unit(self, unit: str) -> None:
+        """View ▸ Units (SYS-003): the force row reads ``F_N`` or ``F_kgf`` (backend channels, no conversion here)."""
+        key = {"N": "F_N", "kgf": "F_kgf"}.get(unit, "F_N")
+        rows = list(self._readouts)
+        for r, (k, label, _u) in enumerate(rows):
+            if k in ("F_N", "F_kgf") and k != key:
+                rows[r] = (key, label, unit)
+                self._minmax.pop(k, None)
+                self.table.item(r, 2).setText(unit)
+                for c in range(self.table.columnCount()):
+                    self.table.item(r, c).setToolTip(key)
+        self._readouts = tuple(rows)
 
     def refresh(self, data: Any, available: set[str] | None = None) -> None:
         for r, (key, _label, unit) in enumerate(self._readouts):

@@ -232,12 +232,16 @@ def _src(item: Any) -> str:
 
 # --------------------------------------------------------------------------------------------- evaluation
 
-def evaluate_chips(status: Any) -> list[ChipView]:
-    """All chips for one ``BackendStatus`` (pure; called once per refresh tick)."""
+def evaluate_chips(status: Any, params: Mapping[str, Any] | None = None) -> list[ChipView]:
+    """All chips for one ``BackendStatus`` (pure; called once per refresh tick). ``params`` = the board values
+    (``config.values()``) for chips whose meaning depends on a board parameter (K1: ``drv.k1_check_enable``)."""
     ind = getattr(status, "indicators", None)
     out: list[ChipView] = []
     for chip in CHIP_IDS:
         try:
+            if chip == "K1":
+                out.append(_eval_k1(chip, status, ind, params))
+                continue
             out.append(_EVAL.get(chip, _eval_generic)(chip, status, ind))
         except Exception as exc:  # noqa: BLE001 - a display defect must not hide the other chips
             out.append(ChipView(chip, CHIP_LABEL[chip], "unknown", "?", f"display error: {exc}"))
@@ -311,6 +315,18 @@ def _eval_drv(chip: str, status: Any, ind: Any) -> ChipView:
     level, text, tip = _generic(chip, ind, ok_text="on")
     if level == "alarm":
         text = "OFF – position lost"            # optional 48 V presence sense (D-41)
+    return _view(chip, level, text, tip)
+
+
+def _eval_k1(chip: str, status: Any, ind: Any, params: Mapping[str, Any] | None) -> ChipView:
+    """K1_WELDED is only checked with ``drv.k1_check_enable`` (and pwr sense, D-43 e; default off since CR-03 /
+    D-41: no contactor). While the board reports the check disabled the chip is hidden (M2 gate condition, cosmetic);
+    without board values (not connected) it shows the indicator state (UNKNOWN grey)."""
+    level, text, tip = _generic(chip, ind)
+    check = None if params is None else params.get("drv.k1_check_enable")
+    if check is not None and not bool(check) and level != "alarm":
+        return _view(chip, "neutral", "check off", tip + "\nK1 weld check disabled (drv.k1_check_enable = false, "
+                     "CR-03 / D-41: no power-removal contactor)", visible=False)
     return _view(chip, level, text, tip)
 
 

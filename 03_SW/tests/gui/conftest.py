@@ -47,12 +47,19 @@ def _isolated_gui_state(tmp_path, monkeypatch):
     from bend_stand.gui.mode_state import no_specimen
 
     monkeypatch.setenv("BEND_STAND_GUI_SETTINGS", str(tmp_path / "gui.ini"))
+    # B5-10/11: calibration, session and preset files of a real Backend go to a per-test data root (never %APPDATA%)
+    monkeypatch.setenv("BEND_STAND_DATA_DIR", str(tmp_path / "data"))
     prev = stop_mod.stop_handler()
     yield
     safe_dialog.FILE_DIALOG_HOOK[0] = None
     stop_mod.set_stop_handler(prev)
     try:
         no_specimen().set(False)
+    except RuntimeError:
+        pass
+    try:
+        from bend_stand.gui.units_state import force_unit
+        force_unit().set("N")
     except RuntimeError:
         pass
 

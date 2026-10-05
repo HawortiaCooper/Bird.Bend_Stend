@@ -143,7 +143,10 @@ def test_icd_generated_tables_present() -> None:
 # ---------------------------------------------------------------------------- dictionary (D-29)
 def test_dictionary_d29_d33_d27() -> None:
     keys = {p.key: p for p in PD.params}
-    assert PD.dict_version == 5
+    assert PD.dict_version == 6
+    m = {k: keys[f"motion.{k}"].default for k in ("pulse_high_ns", "pulse_low_min_ns", "max_step_rate_hz")}
+    assert m == {"pulse_high_ns": 12500, "pulse_low_min_ns": 12500, "max_step_rate_hz": 40000}   # D-45 e
+    assert 1e9 / m["max_step_rate_hz"] >= m["pulse_high_ns"] + m["pulse_low_min_ns"]           # H3
     assert "io.stop_active_level" not in keys and all(p.id != 0x0603 for p in PD.params)   # D-36
     assert len(PD.params) == 48
     to = keys["afe.timeout_ms"]

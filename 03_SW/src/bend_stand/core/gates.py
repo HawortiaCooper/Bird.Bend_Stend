@@ -8,14 +8,17 @@ would NACK it; the FW stays the authority.
 M2: link / stream / config / pause / resume / clear / record gates (M1) plus the **motion gates** ``move``,
 ``jog``, ``home``, ``enable``, ``disable`` and ``test_zero``. Status bits of a feature whose GET_INFO bit is 0 are
 invalid (D-37 b): the snapshot carries them already masked (``core.device.valid_status_mask``), so DRV_UNPOWERED /
-DRIVER_ALARM are never derived from them. Calibration, tare, sequence and SW load-limit gates are M3/M4
-(``NOT_IMPLEMENTED``); until M3 every motion gate carries a WARN that the PC load limits are not active (the FW load
-limit is). Direction-dependent items (LIMIT toward a switch, SW travel limits, speed caps) are added by
-``MotionController.check()``.
+DRIVER_ALARM are never derived from them. Direction-dependent items (LIMIT toward a switch, SW travel limits, SW
+trip latch, speed caps, SAF-SW-006 margin) are added by ``MotionController.check()``.
+M3: SAF-SW-001 load-input rule (REFUSE ``LOAD_INPUT_INVALID`` while a SW load limit is enabled outside the
+no-specimen mode), thresholds verified **for the current target**, SW trip latch (WARN, direction in ``check``),
+motion owner (wizards), gates ``tare``, ``sample``, ``cal_travel_start``, ``cal_load_start``, ``no_specimen``. The
+sequencer gates stay ``NOT_IMPLEMENTED`` until M4.
 
 Implements: SW-ACQ-001 (stream gates), SW-CFG-003/004 (config gate), SW-STOP-003/004 (clear / resume gates),
-SAF-SW-004 (confirmation items: HOME under unknown load, DISABLE, E-stop clear), SAF-SW-005 (motion refusals
-mirror the FW state), SW-MAN-001…006 (motion gates)
+SAF-SW-004 (confirmation items: HOME under unknown load, DISABLE, E-stop clear, no-specimen mode), SAF-SW-005
+(motion refusals mirror the FW state), SW-MAN-001…006 (motion gates), SAF-SW-001 (load-input rule), SW-LIM-004,
+SW-TARE-003 (tare refusals), SW-ACQ-003 (sample gate), SW-CAL-001/005 (wizard start gates)
 """
 from __future__ import annotations
 
@@ -52,7 +55,15 @@ CLEAR_HINTS: Mapping[str, str] = MappingProxyType({
     "LIMIT": "only motion away from the active limit switch is accepted",
     "AFE_STALE": "no HX711 samples — check the AFE",
     "AFE_SATURATED": "HX711 at a rail — unload / check the cell",
+    "SW_TRIP": "move back / unload — the latch clears inside the limit",
+    "LOAD_INPUT_INVALID": "Calibrate + Tare, or enter the no-specimen mode",
 })
+
+#: C-10 text of the no-specimen confirmation (SW_design §6.7)
+NO_SPECIMEN_TEXT = ("No specimen is mounted. The PC load limits are switched OFF for this session. The board load "
+                    "limit stays active (calibrated thresholds if a calibration and a tare exist, otherwise its "
+                    "nominal default ±7 022 271 counts around raw 0 ≈ ±109 % FS). Mount no specimen until a load "
+                    "calibration and a tare exist.")
 
 
 def clear_procedure(code: str) -> str | None:
@@ -85,6 +96,20 @@ class GateSnapshot:
     zero_raw: int = 0
     home_max_load_raw: int = 322_123
     load_known: bool = False               # a valid load calibration + tare exist (M3)
+    # M3
+    load_limits_on: bool = True            # a SW load limit is enabled and the no-specimen mode is off
+    load_input_valid: bool = False         # static load input (calibration + tare + AFE match) valid
+    load_input_reason: str | None = "no load calibration"
+    no_specimen: bool = False
+    thresholds_match: bool = False         # verified board thresholds belong to the current target
+    sw_trip: str | None = None             # latched SW-limit trip (limit id)
+    owner: str = "MANUAL"                  # motion owner: MANUAL | TRAVEL_CAL
+    operation: str | None = None           # running non-motion operation (load_cal, tare)
+    capture_kinds: tuple[str, ...] = ()
+    moved_recently: bool = False           # < 1 s (device time) since the last MOVING = 1
+    afe_synthetic: bool = False
+    travel_cal_differs: bool = False
+    travel_room_mm: float | None = None    # room in + direction from the position to the travel max (wizard)
 
 
 def _link_items(s: GateSnapshot) -> list[GateItem]:
@@ -219,7 +244,7 @@ def _feature_items(s: GateSnapshot, *names: str) -> list[GateItem]:
             for n in names if n not in s.features]
 
 
-def motion_items(s: GateSnapshot, kind: MotionKind) -> list[GateItem]:
+def motion_items(s: GateSnapshot, kind: MotionKind, owner: str = "MANUAL") -> list[GateItem]:
     """REFUSE / WARN items common to MOVE, JOG, HOME (SW_design §5.6); direction-free."""
     items = _link_items(s) + _ro(s)
     if items:
@@ -249,22 +274,35 @@ def motion_items(s: GateSnapshot, kind: MotionKind) -> list[GateItem]:
     elif s.valid_status & DS.ALM and s.status & DS.ALM and not (kind == MotionKind.JOG and s.jogging):
         items.append(GateItem("DRIVER_ALARM", R, "driver alarm (ALM) — new motion blocked",
                               CLEAR_HINTS["DRIVER_ALARM"]))
-    if s.thresholds_state not in ("VERIFIED", "DEFAULT_ONLY"):
-        items.append(GateItem(GateCode.THRESHOLDS_UNVERIFIED, R, f"FW load thresholds not verified "
-                              f"({s.thresholds_state}) — Recheck thresholds"))
+    if s.thresholds_state not in ("VERIFIED", "DEFAULT_ONLY") or not s.thresholds_match:
+        why = s.thresholds_state if s.thresholds_state not in ("VERIFIED", "DEFAULT_ONLY") else "being rewritten"
+        items.append(GateItem(GateCode.THRESHOLDS_UNVERIFIED, R, f"FW load thresholds not verified for the active "
+                              f"calibration + tare ({why}) — Recheck thresholds"))
+    if s.load_limits_on and not s.load_input_valid:
+        items.append(GateItem(GateCode.LOAD_INPUT_INVALID, R, f"PC load limits enabled without a valid input: "
+                              f"{s.load_input_reason}", "Calibrate + Tare, or enter the no-specimen mode"))
+    if s.owner != owner:
+        items.append(GateItem(GateCode.OWNER_CONFLICT, R, f"motion owned by {s.owner.lower().replace('_', ' ')}"))
     if s.hotkey_test:
         items.append(GateItem(GateCode.HOTKEY_TEST, R, "Pause/Break key test running"))
     if s.moving and (kind == MotionKind.HOME or (kind == MotionKind.JOG and not s.jogging)):
         items.append(GateItem(GateCode.MOTION_ACTIVE, R, "axis moving"))
     if s.status & (DS.LIMIT_START | DS.LIMIT_END):
         items.append(GateItem("LIMIT", W, "limit switch active — only motion away from it", CLEAR_HINTS["LIMIT"]))
-    items.append(GateItem(GateCode.PC_LOAD_LIMITS_OFF, W, "PC load limits (SAF-SW-001) active from M3 — the FW load "
-                                                          "limit is active"))
+    if s.sw_trip is not None:
+        items.append(GateItem(GateCode.SW_TRIP, W, f"SW limit {s.sw_trip} tripped — only motion that reduces the "
+                              "violation", CLEAR_HINTS["SW_TRIP"]))
+    if s.no_specimen:
+        items.append(GateItem(GateCode.NO_SPECIMEN_MODE, W, "no-specimen mode: PC load limits off (FW load limit "
+                                                            "active)"))
+    if s.travel_cal_differs:
+        items.append(GateItem(GateCode.TRAVEL_CAL_DIFFERS, W, "board steps/mm differs from the active travel "
+                                                              "calibration"))
     return items
 
 
-def g_motion(s: GateSnapshot, kind: MotionKind) -> GateResult:
-    items = motion_items(s, kind)
+def g_motion(s: GateSnapshot, kind: MotionKind, owner: str = "MANUAL") -> GateResult:
+    items = motion_items(s, kind, owner)
     if kind == MotionKind.HOME and not any(i.severity == R for i in items):
         over = s.raw is not None and abs(s.raw - s.zero_raw) > s.home_max_load_raw
         if over:
@@ -324,16 +362,101 @@ def g_hotkey_test(s: GateSnapshot) -> GateResult:
     return GateResult(tuple(items))
 
 
+def _busy_items(s: GateSnapshot) -> list[GateItem]:
+    out = []
+    if s.owner != "MANUAL":
+        out.append(GateItem(GateCode.OPERATION_RUNNING, R, f"{s.owner.lower().replace('_', ' ')} running"))
+    if s.operation is not None:
+        out.append(GateItem(GateCode.OPERATION_RUNNING, R, f"{s.operation.replace('_', ' ')} running"))
+    return out
+
+
+def g_tare(s: GateSnapshot) -> GateResult:
+    """SW-TARE-003 refusals that can be decided before the capture (§9.5)."""
+    items = _link_items(s) + _ro(s)
+    if items:
+        return GateResult(tuple(items))
+    if s.afe_synthetic:
+        items.append(GateItem(GateCode.AFE_PLACEHOLDER, R, "AFE synthetic (placeholder samples): no tare"))
+    if s.stream_on and not s.data_fresh:
+        items.append(GateItem(GateCode.STREAM_STALE, R, "no DATA for 500 ms"))
+    if s.moving:
+        items.append(GateItem(GateCode.MOTION_ACTIVE, R, "axis moving"))
+    elif s.moved_recently:
+        items.append(GateItem(GateCode.MOVED_RECENTLY, R, "less than 1 s after a move — wait"))
+    items += _latched(s)
+    if s.status & DS.AFE_STALE:
+        items.append(GateItem("AFE_STALE", R, "HX711 stale", CLEAR_HINTS["AFE_STALE"]))
+    if "tare" in s.capture_kinds or s.operation == "tare":
+        items.append(GateItem(GateCode.OPERATION_RUNNING, R, "tare already running"))
+    if "load_cal" in s.capture_kinds:
+        items.append(GateItem(GateCode.OPERATION_RUNNING, R, "load calibration capture running"))
+    return GateResult(tuple(items))
+
+
+def g_sample(s: GateSnapshot) -> GateResult:
+    items = _link_items(s)
+    if items:
+        return GateResult(tuple(items))
+    if not s.stream_on:
+        items.append(GateItem(GateCode.STREAM_OFF, R, "stream off"))
+    if "sample" in s.capture_kinds:
+        items.append(GateItem(GateCode.OPERATION_RUNNING, R, "a sample is being taken"))
+    if not s.recording:
+        items.append(GateItem(GateCode.NOT_RECORDING, W, "not recording: the row goes to the daily samples file"))
+    return GateResult(tuple(items))
+
+
+def g_cal_travel_start(s: GateSnapshot) -> GateResult:
+    """Travel calibration (SW-CAL-002): the ``move`` gate + room for 2 + 10 + 50 mm in the + direction."""
+    items = [i for i in motion_items(s, MotionKind.MOVE) if i.code != GateCode.OWNER_CONFLICT]
+    items += _busy_items(s)
+    if not s.load_input_valid and not any(i.severity == R for i in items):
+        items.append(GateItem(GateCode.NO_SPECIMEN_MOUNTED, C, "load unknown: confirm that no specimen is mounted — the "
+                                                               "travel calibration moves 62 mm in the + direction"))
+    if s.travel_room_mm is not None and s.travel_room_mm < 62.0:
+        items.append(GateItem(GateCode.TRAVEL_ROOM, R, f"only {s.travel_room_mm:.1f} mm of travel in + direction "
+                                                f"(62 mm needed) — move back first"))
+    return GateResult(tuple(items))
+
+
+def g_cal_load_start(s: GateSnapshot) -> GateResult:
+    items = _link_items(s) + _ro(s)
+    if items:
+        return GateResult(tuple(items))
+    items += _busy_items(s)
+    if s.afe_synthetic:
+        items.append(GateItem(GateCode.AFE_PLACEHOLDER, R, "AFE synthetic (placeholder samples)"))
+    if s.status & DS.AFE_STALE:
+        items.append(GateItem("AFE_STALE", R, "HX711 stale", CLEAR_HINTS["AFE_STALE"]))
+    if s.moving:
+        items.append(GateItem(GateCode.MOTION_ACTIVE, R, "axis moving"))
+    if s.capture_kinds:
+        items.append(GateItem(GateCode.OPERATION_RUNNING, R, "another capture is running"))
+    items.append(GateItem(GateCode.CAL_REPLACE, W, "the active load calibration is replaced when the new one is accepted"))
+    return GateResult(tuple(items))
+
+
+def g_no_specimen(s: GateSnapshot) -> GateResult:
+    """Entering the no-specimen mode (SW-LIM-004, SAF-SW-004 C-10); leaving needs no confirmation."""
+    items = _link_items(s)
+    if items:
+        return GateResult(tuple(items))
+    if s.moving:
+        items.append(GateItem(GateCode.MOTION_ACTIVE, R, "axis moving"))
+    items += _busy_items(s)
+    if not s.no_specimen and not any(i.severity == R for i in items):
+        items.append(GateItem(GateCode.NO_SPECIMEN_CONFIRM, C, NO_SPECIMEN_TEXT))
+    return GateResult(tuple(items))
+
+
 def g_not_implemented(s: GateSnapshot, what: str, milestone: str) -> GateResult:
     return GateResult(tuple(_link_items(s) + _ro(s) + [
         GateItem(GateCode.NOT_IMPLEMENTED, R, f"{what}: available from {milestone}")]))
 
 
 _NOT_YET: Mapping[GateId, tuple[str, str]] = MappingProxyType({
-    GateId.SAMPLE: ("take sample", "M3"), GateId.TARE: ("tare", "M3"),
-    GateId.CAL_TRAVEL_START: ("travel calibration", "M3"), GateId.CAL_LOAD_START: ("load calibration", "M3"),
     GateId.SEQUENCE_START: ("sequencer", "M4"), GateId.SEQUENCE_EDIT: ("sequencer", "M4"),
-    GateId.NO_SPECIMEN: ("no-specimen mode", "M3"),
 })
 
 
@@ -347,6 +470,8 @@ def all_gates(s: GateSnapshot) -> Mapping[GateId, GateResult]:
         GateId.MOVE: g_motion(s, MotionKind.MOVE), GateId.JOG: g_motion(s, MotionKind.JOG),
         GateId.HOME: g_motion(s, MotionKind.HOME), GateId.ENABLE: g_enable(s), GateId.DISABLE: g_disable(s),
         GateId.TEST_ZERO: g_test_zero(s), GateId.HOTKEY_TEST: g_hotkey_test(s),
+        GateId.TARE: g_tare(s), GateId.SAMPLE: g_sample(s), GateId.CAL_TRAVEL_START: g_cal_travel_start(s),
+        GateId.CAL_LOAD_START: g_cal_load_start(s), GateId.NO_SPECIMEN: g_no_specimen(s),
     }
     for gid, (what, ms) in _NOT_YET.items():
         out[gid] = g_not_implemented(s, what, ms)

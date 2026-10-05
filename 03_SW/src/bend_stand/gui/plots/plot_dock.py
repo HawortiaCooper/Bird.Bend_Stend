@@ -62,6 +62,7 @@ from PySide6.QtWidgets import (
 from bend_stand.gui.plots.pane_grid import COLUMN_CHOICES, PaneGrid
 from bend_stand.gui.plots.plot_pane import BIT_UNIT, PlotPane, XYPane, pane_from_mime
 from bend_stand.gui.plots.quantity import BITS, quantity_group
+from bend_stand.gui.units_state import force_unit
 from bend_stand.gui.widgets.channel_tree import ChannelTree, bit_name
 from bend_stand.gui.widgets.safe_dock import SafeDock
 
@@ -635,9 +636,20 @@ class PlotDock(SafeDock):
                 xs.append((key, label))
             if q in ("Force", "Raw counts"):
                 ys.append((key, label))
-        ys.sort(key=lambda kv: 0 if quantity_group(self.tree.spec(kv[0])) == "Force" else 1)
+        unit = force_unit().unit                  # View ▸ Units: the force channel of the display unit first
+
+        def y_rank(kv: tuple[str, str]) -> int:
+            spec = self.tree.spec(kv[0])
+            if quantity_group(spec) == "Force":
+                return 0 if getattr(spec, "unit", "") == unit else 1
+            return 2
+        ys.sort(key=y_rank)
         xs.sort(key=lambda kv: 0 if kv[0] == "x_test_mm" else 1)
         return xs, ys
+
+    def update_xy_choices(self) -> None:
+        """Re-evaluate the X-Y candidates (registry change, View ▸ Units)."""
+        self._update_xy_choices()
 
     def _update_xy_choices(self, pane: XYPane | None = None, x: str | None = None, y: str | None = None) -> None:
         xs, ys = self.xy_candidates()

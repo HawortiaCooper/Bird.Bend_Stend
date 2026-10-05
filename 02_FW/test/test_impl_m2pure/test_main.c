@@ -1,9 +1,9 @@
 /* M2 pure modules: CLEAN/TRUNCATE/stretch decisions (stepgen.h), FW load limit (loadlim), driver
  * monitor (drvmon: DRV_PWR 20 ms filter, K1 timer, ALM filter), input filters (inputs.h), homing
- * phase logic (homing), HX711 math.
+ * phase logic (homing), HX711 math, newest entry of a stamp ring (stampring, OBS-M2-08).
  * Verifies: SAF-FW-002/004 (TC-SAF-FW-004-02 halt decision grid), SAF-FW-003 (extend-only stretch),
  *           SAF-FW-008/009/011 (TC-SAF-FW-008-02 trip samples, rails, regrow), SAF-FW-024/025,
- *           FW-SW-001/003/004/005, FW-HOM-001/002/004, FW-AFE-001/002/003
+ *           FW-SW-001/003/004/005, FW-HOM-001/002/004, FW-AFE-001/002/003, REQ-A-M2-08 (OBS-M2-08)
  */
 #include <unity.h>
 
@@ -14,6 +14,7 @@
 #include "loadlim.h"
 #include "params_gen.h"
 #include "proto_gen.h"
+#include "stampring.h"
 #include "stepgen.h"
 #include "vec_loadlim.h"
 
@@ -302,6 +303,45 @@ static void test_hx711_math(void)
     }
 }
 
+/* ---------------- stampring (OBS-M2-08) ---------------- */
+static uint32_t fill_ring(uint32_t *r, uint32_t n, uint32_t count, uint32_t t0, uint32_t gap)
+{
+    uint32_t k, t = t0;
+    for (k = 0u; k < n; k++) {
+        r[k] = 0u;                                         /* cleared at boot */
+    }
+    for (k = 0u; k < count; k++) {                          /* circular DMA writes */
+        r[k % n] = t;
+        t += gap;
+    }
+    return t - gap;                                         /* newest written stamp */
+}
+
+static void test_stampring_newest(void)
+{
+    static uint32_t r[64];
+    uint32_t want;
+    TEST_ASSERT_EQUAL_HEX32(0u, stampring_newest(r, 64u));                       /* empty ring */
+    want = fill_ring(r, 64u, 10u, 1000u, 50u);
+    TEST_ASSERT_EQUAL_HEX32(want, stampring_newest(r, 64u));   /* partial */
+    /* partial ring with the newest stamp >= 2^31 us (v0.6 signed compare returned 0 here) */
+    want = fill_ring(r, 64u, 10u, 0x90000000u, 50u);
+    TEST_ASSERT_EQUAL_HEX32(want, stampring_newest(r, 64u));
+    want = fill_ring(r, 64u, 64u, 5000u, 7u);
+    TEST_ASSERT_EQUAL_HEX32(want, stampring_newest(r, 64u));    /* exactly full */
+    want = fill_ring(r, 64u, 64u * 3u + 17u, 5000u, 7u);
+    TEST_ASSERT_EQUAL_HEX32(want, stampring_newest(r, 64u));  /* laps */
+    want = fill_ring(r, 64u, 64u * 2u + 3u, 0x90000000u, 13u);
+    TEST_ASSERT_EQUAL_HEX32(want, stampring_newest(r, 64u));  /* laps after > 35.8 min of uptime */
+    TEST_ASSERT_EQUAL_HEX32(0u, stampring_newest(r, 0u));
+    /* stamps crossing the 2^32 wrap of the time base */
+    want = fill_ring(r, 64u, 100u, 0xFFFFFF00u, 9u);
+    TEST_ASSERT_EQUAL_HEX32(want, stampring_newest(r, 64u));
+    /* full ring spanning more than 2^31 us (v0.6 limit 35.8 min): gap 40 s, 63 gaps = 42 min */
+    want = fill_ring(r, 64u, 64u + 5u, 1000u, 40000000u);
+    TEST_ASSERT_EQUAL_HEX32(want, stampring_newest(r, 64u));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -315,5 +355,6 @@ int main(void)
     RUN_TEST(test_homing_phases);
     RUN_TEST(test_home_zero_and_drift);
     RUN_TEST(test_hx711_math);
+    RUN_TEST(test_stampring_newest);
     return UNITY_END();
 }

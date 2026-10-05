@@ -27,6 +27,7 @@ MS = 1_000_000
 
 
 def _ready(home: bool = True, **kw) -> Backend:
+    kw.setdefault("no_specimen", True)
     be = lockstep_backend(**kw)
     h = be.test_hooks
     h.advance(50)
@@ -54,7 +55,7 @@ def _settle(be: Backend, ms: int = 20_000) -> None:
 
 @pytest.mark.req("SW-MAN-006", "SAF-SW-004")
 def test_enable_home_and_confirmations() -> None:
-    be = lockstep_backend()
+    be = lockstep_backend(no_specimen=True)
     try:
         h = be.test_hooks
         g = be.status().gates[GateId.MOVE]
@@ -281,7 +282,8 @@ def test_test_zero_and_valid_toggle() -> None:
 def test_motion_gate_items_and_d37b_invalid_bits() -> None:
     base = GateSnapshot(link=LinkState.CONNECTED, stream_on=True, data_fresh=True,
                         flags=int(pg.DataFlags.ENABLED | pg.DataFlags.HOMED), features=frozenset(pg.FEATURES_BITS),
-                        thresholds_state="DEFAULT_ONLY", motion_state="IDLE", status=int(pg.DataStatus.DRV_PWR))
+                        thresholds_state="DEFAULT_ONLY", motion_state="IDLE", status=int(pg.DataStatus.DRV_PWR),
+                        thresholds_match=True, load_limits_on=False)
     assert g_motion(base, MotionKind.MOVE).ok
     cases = {"DRV_UNPOWERED": replace(base, status=0),
              "DRIVER_ALARM": replace(base, status=int(pg.DataStatus.ALM | pg.DataStatus.DRV_PWR)),

@@ -1,28 +1,40 @@
-"""Recorder skeleton (SW_design §8, §13.7/§13.8) — M1: ``data.csv`` + ``meta.json`` sidecar.
+"""Recorder (SW_design §8, §13.7/§13.8; SRS SW-ACQ-002…004, SW-META-002, SW-LIM-003).
 
-* Folder ``<root>/<YYYYMMDD_HHMMSS>_<specimen>_<number>/`` (sanitised).
-* ``data.csv``: ``# `` header block (format id ``bird.bend.data/1``, versions, board UID, start time, pointer to the
-  sidecar), then the column header; one ``D`` row per DATA frame exactly once and ``E`` rows for FW events,
-  time-ordered by arrival (the pipeline delivers DATA and EVENT in arrival order).
-* ``meta.json`` (``bird.bend.recording`` v1): written at start (marks, versions, dictionary hash, board
-  parameters, thresholds) and rewritten at stop with link statistics and integrity
-  ``{complete, rows_written, rows_lost, failures}``.
-* Rows go through a bounded queue (60 s of rows); the writer runs in its own thread (real clock) or from
-  ``step()`` (lockstep). A write error / disk full → state FAILED, ``rows_lost`` counted, never silent
-  (SW-ACQ-004). Test hook ``fail(exc, after_rows)`` (hook g, ENOSPC).
-M3 adds derived columns, marks edits, raw frame dump, free-space checks and take-sample rows.
+* Folder ``<root>/<YYYYMMDD_HHMMSS>_<specimen>_<number>/`` (sanitised, unique — ``_2`` … for a restart within the
+  same second).
+* ``data.csv``: ``# `` header block (format id ``bird.bend.data/1``, versions, board UID, start time, calibration,
+  tare, limits, thresholds, x_zero, pointer to the sidecar), the column header, then one ``D`` row per DATA frame
+  **exactly once** (raw fields, unwrapped time, flags, status, raw, setpoint, machine travel and every derived column
+  of ``core.scaling.DERIVED_KEYS``) and interleaved ``E`` rows in arrival order: FW EVENTs (``NAME:arg:value:value2``)
+  and SW events (``NAME:text`` — TARE, TARE_UNDO, VALID_ON/OFF, STOP / HALT / PAUSE / RESUME, SW_TRIP, NO_SPECIMEN_ON
+  / OFF, MARK_EDIT, X_ZERO, CAL_*, TRAVEL_DIFF_*, REC_GAP …). SW event rows carry the receive stamp / device time of
+  the newest DATA row, so the file stays ordered by arrival.
+* ``meta.json`` (``bird.bend.recording`` v1): written at start (marks + automatic snapshot: board configuration,
+  calibration record, tare, limits, verified thresholds, versions, dictionary hash, session, ``no_specimen_mode``,
+  ``travel_cal_differs``) and rewritten at stop (``marks_final``, ``mark_edits``, link statistics, integrity
+  ``{complete, rows_written, rows_lost, failures}``).
+* ``samples.csv`` (take-sample rows, SW-ACQ-003) next to ``data.csv`` while recording, else
+  ``<root>/samples/samples_<YYYYMMDD>.csv``.
+* Back-pressure / failure (SW-ACQ-004): bounded queue (60 s of rows); ≥ 50 % → warning; a write / flush error, disk
+  full or free space below ``max(500 MB, …)`` (checked at start and every 10 s) → state ``FAILED``, ``on_failure``
+  callback (backend: topic ``rec.failure``, indicator, event); rows are never dropped silently (``rows_lost`` +
+  ``REC_GAP`` row when writing resumes after a queue overflow; sidecar ``complete: false``). Test hook
+  ``fail(exc, after_rows)`` (ENOSPC) and the free-space probe override.
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/core/recorder.py @37c87471 (pattern: bounded queue + writer +
-sidecar rewrite; rewritten for the bend columns, M1 subset).
+sidecar rewrite; rewritten for the bend columns).
 
-Implements: SW-ACQ-002 (folder, CSV + sidecar), SW-ACQ-004 (integrity, no silent loss)
+Implements: SW-ACQ-002 (folder, CSV + sidecar, derived columns, event rows), SW-ACQ-003 (samples.csv), SW-ACQ-004
+(integrity, failure handling, no silent loss), SW-META-002 (marks + snapshot), SW-LIM-003 (limits in the metadata)
 """
 from __future__ import annotations
 
 import collections
 import logging
+import math
 import os
 import re
+import shutil
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -33,15 +45,24 @@ from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.clock import Clock, wall_utc_iso
 from bend_stand.core.errors import RecorderError
-from bend_stand.core.model import FwEvent, RecordingStatus
+from bend_stand.core.model import FwEvent, RecordingStatus, SampleRow
 from bend_stand.core.pipeline import DataRow
+from bend_stand.core.scaling import DERIVED_KEYS
 from bend_stand.core.schema import atomic_write_json
 
 log = logging.getLogger("bend_stand.core.recorder")
-COLUMNS = ("row_type", "t_dev_s", "t_us_u", "t_us", "t_host", "frame_seq", "seq_lost", "flags", "status", "valid",
-           "moving", "raw", "raw_state", "setpoint_um", "x_mm", "event")
+COLUMNS = (("row_type", "t_dev_s", "t_us_u", "t_us", "t_host", "frame_seq", "seq_lost", "flags", "status", "valid",
+            "moving", "raw", "raw_state", "setpoint_um", "x_mm") + DERIVED_KEYS + ("calc_reason", "op", "event"))
 QUEUE_ROWS = 60 * 96
 FORMAT_ID = "bird.bend.data/1"
+FREE_MIN_BYTES = 500 * 1024 * 1024
+FREE_CHECK_NS = 10_000_000_000
+BYTES_PER_ROW = 300
+SAMPLE_COLUMNS = ("utc", "t_dev_s", "window_s", "n", "f_mean_n", "f_std_n", "f_n", "x_mean_mm", "x_std_mm",
+                  "raw_mean", "raw_std", "raw_n", "specimen", "number", "operator", "notes", "custom")
+_EMPTY_DERIVED = "," * (len(DERIVED_KEYS) - 1)
+_COL = {c: i for i, c in enumerate(COLUMNS)}
+_E_TEMPLATE = ["E"] + [""] * (len(COLUMNS) - 1)
 
 
 def sanitise(s: str) -> str:
@@ -80,17 +101,66 @@ def _errname(exc: OSError) -> str:
     return _errno.errorcode.get(exc.errno or 0, "OS error") if exc.errno else "OS error"
 
 
+def _csv_text(s: str) -> str:
+    """One CSV field without separators / line breaks (event texts)."""
+    return re.sub(r"[,\r\n]+", ";", str(s))
+
+
+def _g(v: float) -> str:
+    return "nan" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:.9g}"
+
+
+def free_space(path: Path) -> int | None:
+    try:
+        p = path
+        while not p.exists() and p.parent != p:
+            p = p.parent
+        return shutil.disk_usage(p).free
+    except OSError:
+        return None
+
+
+def append_sample(path: Path, row: SampleRow) -> None:
+    """Append one take-sample row (header when the file is new)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new = not path.exists()
+    m = row.marks
+    custom = ";".join(f"{k}={v}" for k, v in m.custom)
+    vals = (row.utc, f"{row.t_dev_s:.6f}", f"{row.window_s:g}", str(row.n), _g(row.f_mean), _g(row.f_std),
+            str(row.f_n), _g(row.x_mean), _g(row.x_std), _g(row.raw_mean), _g(row.raw_std), str(row.raw_n),
+            _csv_text(m.specimen), _csv_text(m.number), _csv_text(m.operator), _csv_text(m.notes), _csv_text(custom))
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        if new:
+            f.write(",".join(SAMPLE_COLUMNS) + "\n")
+        f.write(",".join(vals) + "\n")
+
+
 @dataclass
 class _EventRow:
     t_host_ns: int
     ev: FwEvent
 
 
+@dataclass
+class _SwRow:
+    t_host_ns: int
+    t_us_u: int | None
+    t_dev_s: float | None
+    name: str
+    text: str
+
+
 class Recorder:
-    def __init__(self, clock: Clock, *, on_state: Callable[[RecordingStatus], None] | None = None) -> None:
+    def __init__(self, clock: Clock, *, on_state: Callable[[RecordingStatus], None] | None = None,
+                 on_failure: Callable[[RecordingStatus], None] | None = None,
+                 on_warning: Callable[[str], None] | None = None) -> None:
         self.clock = clock
         self.on_state = on_state
-        self._q: collections.deque[DataRow | _EventRow] = collections.deque()
+        self.on_failure = on_failure
+        self.on_warning = on_warning
+        self.free_space_probe: Callable[[Path], int | None] = free_space
+        self.op_name: Callable[[], str] = lambda: ""
+        self._q: collections.deque[DataRow | _EventRow | _SwRow] = collections.deque()
         self._cv = threading.Condition()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -103,17 +173,33 @@ class Recorder:
         self.meta: dict[str, Any] = {}
         self._fail_exc: BaseException | None = None
         self._fail_after = 0
+        self._last_host = 0
+        self._last_t_u: int | None = None
+        self._last_t_dev: float | None = None
+        self._gap: list[int] | None = None          # [count, first t_us_u, last t_us_u] of a queue overflow
+        self._warned_fill = False
+        self._next_free_check = 0
+        self.mark_edits: list[dict[str, Any]] = []
 
     # ---- control ----------------------------------------------------------------------------------------
     def start(self, root: str | os.PathLike[str], meta: Mapping[str, Any], *, specimen: str = "",
-              number: str = "") -> Path:
+              number: str = "", header: Mapping[str, Any] | None = None) -> Path:
         if self.state == "RECORDING":
             raise RecorderError("already recording")
+        root_p = Path(root)
+        free = self.free_space_probe(root_p)
+        if free is not None and free < FREE_MIN_BYTES:
+            raise RecorderError(f"not enough free disk space ({free // (1024 * 1024)} MB < "
+                                f"{FREE_MIN_BYTES // (1024 * 1024)} MB)")
         wall = wall_utc_iso(self.clock)
-        folder = unique_folder(Path(root), folder_name(wall, specimen, number))
+        folder = unique_folder(root_p, folder_name(wall, specimen, number))
         self.folder = folder
         self.rows = self.rows_lost = 0
         self.failure = None
+        self._gap = None
+        self._warned_fill = False
+        self.mark_edits = []
+        self._next_free_check = self.clock.monotonic_ns() + FREE_CHECK_NS
         self.meta = {"schema": "bird.bend.recording", "schema_version": 1, "start_utc": wall,
                      "format": FORMAT_ID, "icd_version": pg.ICD_VERSION,
                      "param_dict_hash": f"0x{pgen.PARAM_DICT_HASH:08X}", **dict(meta),
@@ -124,6 +210,8 @@ class Recorder:
         for k in ("sw_version", "fw_version", "board_uid"):
             if k in meta:
                 f.write(f"# {k} {meta[k]}\n")
+        for k, v in (header or {}).items():
+            f.write(f"# {k} {_csv_text(str(v)).replace(chr(10), ' ')}\n")
         f.write(",".join(COLUMNS) + "\n")
         self._f = f
         self.state = "RECORDING"
@@ -154,6 +242,7 @@ class Recorder:
                 self._failed(exc)
         complete = self.failure is None and self.rows_lost == 0
         self.meta.update(dict(extra_meta or {}))
+        self.meta["mark_edits"] = list(self.mark_edits)
         self.meta["stop_utc"] = wall_utc_iso(self.clock)
         self.meta["integrity"] = {"complete": complete, "rows_written": self.rows, "rows_lost": self.rows_lost,
                                   "failures": [self.failure] if self.failure else []}
@@ -161,7 +250,7 @@ class Recorder:
         if folder is not None:
             try:
                 atomic_write_json(folder / "meta.json", self.meta)
-            except OSError as exc:  # pragma: no cover
+            except (OSError, ValueError) as exc:  # pragma: no cover
                 log.error("sidecar rewrite failed: %s", exc)
         self.state = "IDLE"
         self._publish()
@@ -171,24 +260,55 @@ class Recorder:
         """Test hook (g): raise ``exc`` from the next write after ``after_rows`` more rows."""
         self._fail_exc, self._fail_after = exc, self.rows + int(after_rows)
 
+    def samples_path(self, root: str | os.PathLike[str]) -> Path:
+        """Where a take-sample row goes now (SW-ACQ-003)."""
+        if self.state == "RECORDING" and self.folder is not None:
+            return self.folder / "samples.csv"
+        stamp = wall_utc_iso(self.clock)[:10].replace("-", "")
+        return Path(root) / "samples" / f"samples_{stamp}.csv"
+
     # ---- sinks (pipeline thread) -------------------------------------------------------------------------
     def on_row(self, row: DataRow) -> None:
-        self._enqueue(row)
+        self._last_t_u, self._last_t_dev = row.t_us_u, row.t_dev_s
+        self._enqueue(row, row.t_host_ns)
 
     def on_event(self, ev: FwEvent) -> None:
-        self._enqueue(_EventRow(ev.t_host_ns, ev))
+        self._enqueue(_EventRow(ev.t_host_ns, ev), ev.t_host_ns)
 
-    def _enqueue(self, item: DataRow | _EventRow) -> None:
+    def event_row(self, name: str, text: str = "") -> None:
+        """SW event row (any thread); stamped with the newest row's receive time / device time (arrival order)."""
+        self._enqueue(_SwRow(0, self._last_t_u, self._last_t_dev, name, text), None)
+
+    def _enqueue(self, item: DataRow | _EventRow | _SwRow, t_host: int | None) -> None:
         if self.state != "RECORDING":
             if self.state == "FAILED":
                 self.rows_lost += 1
             return
+        warn = False
         with self._cv:
+            if t_host is None:
+                assert isinstance(item, _SwRow)
+                item.t_host_ns = self._last_host
+            else:
+                self._last_host = max(self._last_host, int(t_host))
             if len(self._q) >= QUEUE_ROWS:
                 self.rows_lost += 1
+                t = getattr(item, "t_us_u", None) or 0
+                if self._gap is None:
+                    self._gap = [0, t, t]
+                self._gap[0] += 1
+                self._gap[2] = t
                 return
+            if self._gap is not None:
+                n, a, b = self._gap
+                self._gap = None
+                self._q.append(_SwRow(self._last_host, b, None, "REC_GAP", f"{n} rows lost t_us_u {a}…{b}"))
             self._q.append(item)
+            if not self._warned_fill and len(self._q) >= QUEUE_ROWS // 2:
+                self._warned_fill = warn = True
             self._cv.notify()
+        if warn and self.on_warning is not None:
+            self.on_warning("recording queue ≥ 50 % full (disk too slow?)")
 
     # ---- writer ------------------------------------------------------------------------------------------
     def _run(self) -> None:
@@ -224,6 +344,12 @@ class Recorder:
                 f.flush()
             except OSError as exc:  # pragma: no cover
                 self._failed(exc)
+        now = self.clock.monotonic_ns() if now_ns is None else now_ns
+        if self.state == "RECORDING" and now >= self._next_free_check and self.folder is not None:
+            self._next_free_check = now + FREE_CHECK_NS
+            free = self.free_space_probe(self.folder)
+            if free is not None and free < FREE_MIN_BYTES:
+                self._failed(OSError(28, f"free disk space below {FREE_MIN_BYTES // (1024 * 1024)} MB"))
         return n
 
     def _failed(self, exc: BaseException) -> None:
@@ -232,19 +358,35 @@ class Recorder:
             self.failure = f"{type(exc).__name__}: {exc}"
             log.error("recording failed: %s", self.failure)
             self._publish()
+            cb = self.on_failure
+            if cb is not None:
+                try:
+                    cb(self.status())
+                except Exception:  # noqa: BLE001
+                    log.exception("recording failure callback failed")
 
-    @staticmethod
-    def _format(item: DataRow | _EventRow) -> str:
+    def _format(self, item: DataRow | _EventRow | _SwRow) -> str:
         if isinstance(item, _EventRow):
             e = item.ev
             arg = e.arg_name if e.arg_name is not None else str(e.arg)
-            return (f"E,,,{e.t_us},{item.t_host_ns},,,,,,,,,,,"
-                    f"{e.name}:{arg}:{e.value}:{e.value2}\n")
+            out = _E_TEMPLATE.copy()
+            out[_COL["t_us"]], out[_COL["t_host"]] = str(e.t_us), str(item.t_host_ns)
+            out[_COL["event"]] = f"{e.name}:{arg}:{e.value}:{e.value2}"
+            return ",".join(out) + "\n"
+        if isinstance(item, _SwRow):
+            out = _E_TEMPLATE.copy()
+            out[_COL["t_dev_s"]] = "" if item.t_dev_s is None else f"{item.t_dev_s:.6f}"
+            out[_COL["t_us_u"]] = "" if item.t_us_u is None else str(item.t_us_u)
+            out[_COL["t_host"]] = str(item.t_host_ns)
+            out[_COL["event"]] = f"{item.name}:{_csv_text(item.text)}"
+            return ",".join(out) + "\n"
         r = item
         valid = r.flags & 1
         moving = (r.flags >> 1) & 1
+        der = ",".join(_g(v) for v in r.derived) if r.derived else _EMPTY_DERIVED
         return (f"D,{r.t_dev_s:.6f},{r.t_us_u},{r.t_us},{r.t_host_ns},{r.frame_seq},{r.seq_lost},{r.flags},"
-                f"{r.status},{valid},{moving},{r.raw},{r.raw_state},{r.setpoint_um},{r.setpoint_um / 1000.0:.6f},\n")
+                f"{r.status},{valid},{moving},{r.raw},{r.raw_state},{r.setpoint_um},{r.setpoint_um / 1000.0:.6f},"
+                f"{der},{r.calc_reason},{self.op_name()},\n")
 
     def status(self) -> RecordingStatus:
         with self._cv:
@@ -256,3 +398,6 @@ class Recorder:
         cb = self.on_state
         if cb is not None:
             cb(self.status())
+
+
+__all__ = ["Recorder", "COLUMNS", "append_sample", "free_space", "FORMAT_ID", "SAMPLE_COLUMNS"]

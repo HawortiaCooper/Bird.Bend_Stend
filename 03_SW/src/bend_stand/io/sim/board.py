@@ -54,7 +54,7 @@ from bend_stand.io import protocol as P
 from bend_stand.io.framing import Frame, FrameDecoder, encode_frame
 from bend_stand.io.sim.check import MOVING, SimCheckState, check
 from bend_stand.io.sim.loadlim import LoadLimit
-from bend_stand.io.sim.models import Hx711Model, World
+from bend_stand.io.sim.models import GAIN_SCALE, Hx711Model, World
 from bend_stand.io.sim.nvm import NvmStore
 from bend_stand.io.transport import Transport
 
@@ -326,7 +326,14 @@ class SimBoard:
     def _x_true(self) -> float:
         """World position of the carriage (µm): machine position (sign of the DIR wiring) + offset + lost steps
         (``world_shift``)."""
-        return self.dir_sign * self.steps * 1000.0 / self.spm + self.true_offset_um + self.world.x_um_true_offset
+        return self.dir_sign * self.steps * self.um_per_step + self.true_offset_um + self.world.x_um_true_offset
+
+    @property
+    def um_per_step(self) -> float:
+        """World travel per pulse = the **mechanics** (tools/README, ICD v0.7.2 SWC-M3-03): 1000 / the world's
+        steps/mm, independent of the board parameter ``motion.steps_per_mm`` (which only changes the µm per commanded
+        step — what the travel calibration measures)."""
+        return 1000.0 / self.world.steps_per_mm
 
     def set_dir_inverted(self, inverted: bool) -> None:
         """World DIR wiring inversion (vocabulary ``driver dir_wiring_inverted``, S variant); x stays continuous."""
@@ -405,7 +412,7 @@ class SimBoard:
                 break
             if t_afe is not None and (t_afe < t_tick or t_tick > now):
                 self._advance_axis(t_afe)
-                raw = self.afe.convert(self._force_n(t_afe))
+                raw = self.afe.convert(self._force_n(t_afe), self._gain_scale())
                 if raw is not None:
                     self._on_sample(t_afe, raw)
                 else:
@@ -699,11 +706,9 @@ class SimBoard:
         value = e.value()
         if meta.key in self.store_mismatch:          # test hook: "as stored" differs
             value = self.store_mismatch.pop(meta.key)
-        old_spm = self.spm
         self.params[meta.key] = value
-        if meta.key == "motion.steps_per_mm":
-            # HOMED kept: machine zero is a step count, µm positions rescale (FW-MOT-009); the carriage stays
-            self.true_offset_um += self.dir_sign * (self.steps * 1000.0 / old_spm - self.steps * 1000.0 / self.spm)
+        # motion.steps_per_mm: HOMED kept, machine zero is a step count, µm positions rescale (FW-MOT-009); the
+        # carriage stays and its travel per pulse is the world's mechanics (SWC-M3-03)
         if meta.reboot_required:
             self.reboot_pending = True
         if meta.key == "io.pause_active_level":       # re-arm without generating a press
@@ -960,7 +965,7 @@ class SimBoard:
         else:
             self._home_drift = 0
         new = self.steps - edge - offset                        # the edge lies at x = −home.offset_um
-        self.true_offset_um += self.dir_sign * (self.steps - new) * 1000.0 / self.spm
+        self.true_offset_um += self.dir_sign * (self.steps - new) * self.um_per_step
         self.steps = new
         self._home_leg("MOVE_TO_ZERO", t_us=t)
 
@@ -1097,12 +1102,13 @@ class SimBoard:
         if m is None:
             return
         t = float(self.now_us() if t_us is None else t_us)
-        if 0 < m.t_next_us - t < self._pw_us():
-            if truncate:
-                self.pos_uncertain = True
-            else:
-                self.steps += m.direction
-                self.pulses += 1
+        if truncate:
+            # ICD v0.7.2 §6.2 (MC2-6, SWC-M3-01): the E-stop TRUNCATE sets POS_UNCERTAIN whenever the step output was
+            # running at the edge (the FW core does not know the pulse phase); a pulse in its high phase is cut
+            self.pos_uncertain = True
+        elif 0 < m.t_next_us - t < self._pw_us():
+            self.steps += m.direction
+            self.pulses += 1
 
     def _immediate_stop(self, cause: int, *, truncate: bool = False) -> None:
         """Immediate stop of the running motion: HOME_FAILED(ABORTED) for homing, STOPPED(cause), MOVE_DONE STOPPED
@@ -1157,7 +1163,7 @@ class SimBoard:
             self.steps += m.direction
             self.pulses += 1
             if lost:
-                self.true_offset_um -= self.dir_sign * m.direction * 1000.0 / self.spm
+                self.true_offset_um -= self.dir_sign * m.direction * self.um_per_step
             if self._step_switches(m):
                 m = self.motion
                 continue
@@ -1437,7 +1443,11 @@ class SimBoard:
 
     # ============================================================================== samples / DATA
     def _force_n(self, t_us: int | None = None) -> float:
-        return self.world.specimen.force_n(self._x_true(), t_us)
+        return self.world.specimen.force_n(self._x_true(), t_us) + self.world.cell_force_n(t_us)
+
+    def _gain_scale(self) -> float:
+        """Cell sensitivity of the selected HX711 channel / gain relative to A128 (M3 load model)."""
+        return GAIN_SCALE.get(int(self.params.get("afe.gain_channel", 0)), 1.0)
 
     def _on_sample(self, t_us: int, raw: int) -> None:
         if self.afe_stale:
@@ -1459,9 +1469,12 @@ class SimBoard:
                 self._immediate_stop(int(SC.LOAD_LIMIT))
             self._clear_valid(int(SC.LOAD_LIMIT))
         m = self.motion
-        if m is not None and m.kind == "MOVE_UNTIL_LOAD" and not m.stopping and self._beyond(raw, m.raw_stop, m.cmp):
+        if m is not None and m.kind == "MOVE_UNTIL_LOAD" and self._beyond(raw, m.raw_stop, m.cmp):
+            # ICD v0.7.2 §5.4 (a) the load limit above decided first; (b) during a controlled stop the compare stays
+            # armed: a threshold sample cuts the deceleration with a CLEAN halt, the MOVE_DONE reason stays the stop's
+            # (no second STOPPED); (d) LOAD_THRESHOLD is not a stop source: no STOPPED, VALID kept
             self._clean_halt_position(t_us)
-            self._finish("LOAD_THRESHOLD")
+            self._finish(m.stop_reason if m.stopping else "LOAD_THRESHOLD")
         settling = self.settle_left > 0
         if settling:
             self.settle_left -= 1

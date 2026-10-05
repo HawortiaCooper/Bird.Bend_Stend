@@ -1,8 +1,8 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/params.yaml (dict_version 5, schema 1)
+Source : 00_System/specs/params.yaml (dict_version 6, schema 1)
 Tool   : 00_System/tools/gen_params.py
-Hash   : PARAM_DICT_HASH = 0xB7B0263F
+Hash   : PARAM_DICT_HASH = 0xF8BCDCB8
 
 Parameter metadata for the GUI (typed config fields) and the protocol codec.
 f32 min/max/default are stored already rounded to binary32, so read-back values
@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from types import MappingProxyType
 
-PARAM_DICT_HASH = 0xB7B0263F
-PARAM_DICT_VERSION = 5
+PARAM_DICT_HASH = 0xF8BCDCB8
+PARAM_DICT_VERSION = 6
 PARAM_SCHEMA_VERSION = 1
 PARAM_COUNT = 48
 
@@ -210,7 +210,7 @@ PARAMS: tuple[ParamMeta, ...] = (
         srs=('FW-MOT-001', 'FW-MOT-008', 'FW-PAR-002', 'D-13')),
     ParamMeta(
         id=0x0205, key='motion.pulse_high_ns', type=ParamType.U32, unit='ns',
-        min=2500, max=100000, default=10000,
+        min=2500, max=100000, default=12500,
         description='Step pulse active width. Hard rule H3 with max_step_rate_hz and pulse_low_min_ns.',
         enum=None,
         group='motion', group_label='Motion / step generation', label='PUL high width', name='pulse_high_ns',
@@ -219,7 +219,7 @@ PARAMS: tuple[ParamMeta, ...] = (
         srs=('FW-MOT-001', 'FW-PAR-002', 'D-16')),
     ParamMeta(
         id=0x0206, key='motion.pulse_low_min_ns', type=ParamType.U32, unit='ns',
-        min=2500, max=100000, default=10000,
+        min=2500, max=100000, default=12500,
         description='Minimum inactive time between two step pulses. Hard rule H3.',
         enum=None,
         group='motion', group_label='Motion / step generation', label='PUL minimum low width', name='pulse_low_min_ns',
@@ -228,7 +228,7 @@ PARAMS: tuple[ParamMeta, ...] = (
         srs=('FW-MOT-001', 'FW-PAR-002', 'D-16')),
     ParamMeta(
         id=0x0207, key='motion.max_step_rate_hz', type=ParamType.U32, unit='Hz',
-        min=100, max=100000, default=50000,
+        min=100, max=100000, default=40000,
         description='Pulse-rate cap. The effective speed limit of every motion command is min(v_max_*, max_step_rate_hz * 1000 / steps_per_mm) um/s (FW-MOT-009); reported as STATUS v_limit_um_s. Hard rule H3. Maximum 100 kHz (FW_design OI-FW-04; SRS cap 200 kHz).',
         enum=None,
         group='motion', group_label='Motion / step generation', label='Maximum step rate', name='max_step_rate_hz',

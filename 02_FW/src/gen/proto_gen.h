@@ -1,5 +1,5 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.1, PROTO 1.0, PAYLOAD 1)
+ * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.3, PROTO 1.0, PAYLOAD 1)
  * Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
  * Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes
  * and their argument enums. FW code uses these identifiers only (no hand-listed codes).
@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define PROTO_ICD_VERSION      "0.7.1"
+#define PROTO_ICD_VERSION      "0.7.3"
 #define PROTO_MAJOR            1u
 #define PROTO_MINOR            0u
 #define PROTO_PAYLOAD_VERSION  1u

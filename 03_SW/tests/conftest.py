@@ -8,6 +8,8 @@
   place from ``00_System/tools/vectors/``, never copied), ``ref_oracle`` (adds ``00_System/tools`` to
   ``sys.path`` for tests only), ``fake_clock``.
 - Rule (SW_test_plan §1 rule 4): every test under ``tests/unit`` carries ``@pytest.mark.req(...)``.
+- **Private data folder** (autouse, M3): ``BEND_STAND_DATA_DIR`` points at a fresh folder per test, so calibration,
+  session and preset files never touch %APPDATA% and never leak between tests.
 
 Origin: Thrust_Stand_HAW/03_SW/tests/unit/conftest.py @37c87471 (adapted: repo paths, D-06 guard, options).
 
@@ -72,6 +74,19 @@ def _forbidden(*_a, **_k):
     from bend_stand.core.errors import HardwareAccessForbidden  # noqa: PLC0415
 
     raise HardwareAccessForbidden()
+
+
+_DATA_COUNTER = [0]
+
+
+@pytest.fixture(autouse=True)
+def _private_data_dir(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
+    """M3: every test gets its own application data folder (calibrations, sessions, presets) via
+    ``BEND_STAND_DATA_DIR`` (created lazily by the backend) — no test reads or writes the operator's %APPDATA% files,
+    and files written by one test (e.g. an accepted calibration) never leak into another (order independence)."""
+    _DATA_COUNTER[0] += 1
+    monkeypatch.setenv("BEND_STAND_DATA_DIR", str(tmp_path_factory.getbasetemp() / f"appdata-{_DATA_COUNTER[0]}"))
+    yield
 
 
 @pytest.fixture(autouse=True)

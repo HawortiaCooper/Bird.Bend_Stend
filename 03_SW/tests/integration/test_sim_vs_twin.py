@@ -32,13 +32,15 @@ from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.io import protocol as proto
 
-from io_client import IoClient
+from io_client import IoClient, LockstepIoClient
 
 
 SIM_VS = os.environ.get("BEND_SIM_VS", "auto")
 if SIM_VS == "auto":
-    SIM_VS = "inproc"      # server mode cannot select the M1 feature mask yet (finding SW-C-M1-01 to B)
-pytestmark = [pytest.mark.twin, pytest.mark.rt]
+    SIM_VS = "lockstep"    # M3 / OBS-M2-09: both boards in virtual time (no wall clock); inproc / server = realtime
+pytestmark = [pytest.mark.twin] + ([] if SIM_VS == "lockstep" else [pytest.mark.rt])
+if SIM_VS == "lockstep":
+    pytestmark.append(pytest.mark.needs_b("bend_stand.io.sim.board", "SimBoard"))
 if SIM_VS == "server":
     pytestmark.append(pytest.mark.needs_b("bend_stand.io.sim.server"))
 if SIM_VS == "inproc":
@@ -204,14 +206,16 @@ def _resp(r: proto.Response) -> tuple:
     return (r.status_name, r.detail)
 
 
-def run_script(endpoint: str, ctl_port: int) -> dict:
-    """The M1 differential scenario; returns a normalised transcript."""
+def run_script(endpoint: str | None, ctl_port: int | None, board=None) -> dict:  # noqa: ANN001
+    """The M1 differential scenario; returns a normalised transcript. ``board`` (lock-step, default since M3):
+    the client waits in the board's virtual time and ``board.act`` is the control port."""
     T: dict = {}
-    ctl = Ctl(ctl_port)
+    ctl = board if board is not None else Ctl(ctl_port)
     for a, kw in (("load_offset", {"counts": 50000}), ("afe", {"noise_counts": 0, "rate_error": 0.0}),
                   ("specimen", {"kind": "none"})):
         assert ctl.act(a, **kw)["ok"], a
-    with IoClient(endpoint) as c:
+    client = LockstepIoClient(board) if board is not None else IoClient(endpoint)
+    with client as c:
         c.pump(0.1)
         info = c.info()
         T["info"] = (info.proto_major, info.proto_minor, info.payload_version, info.param_dict_hash, info.param_count)
@@ -264,7 +268,8 @@ def run_script(endpoint: str, ctl_port: int) -> dict:
         st = c.status()
         T["status_end"] = (pg.MotionState(st.motion_state).name, st.halt_src, st.pause_src,
                            _bits(st.status & ~int(pg.DataStatus.AFE_SETTLING), pg.DATA_STATUS_BITS))
-    ctl.close()
+    if board is None:
+        ctl.close()
     return T
 
 
@@ -295,7 +300,25 @@ def transcripts(tmp_path_factory):
 
     if twin_unavailable():
         pytest.xfail(twin_unavailable())
-    exe = twin_build.ensure_built(os.environ.get("BEND_TWIN_CORE", "fw"))
+    exe = twin_build.ensure_built_private(os.environ.get("BEND_TWIN_CORE", "fw"))    # the run's binary (OBS-M2-09)
+    if SIM_VS == "lockstep":
+        from lockstep_boards import SimBoardSide, TwinBoard  # noqa: PLC0415
+
+        tb = TwinBoard(exe, tmp_path_factory.mktemp("twin"))
+        try:
+            tb.advance_ms(5)
+            tb.read()                                   # boot bytes went out before the port was opened
+            twin_t = run_script(None, None, tb)
+        finally:
+            tb.close()
+        sb = SimBoardSide(twin_features(exe), tmp_path_factory.mktemp("sim"))
+        try:
+            sb.advance_ms(5)
+            sb.read()
+            sim_t = run_script(None, None, sb)
+        finally:
+            sb.close()
+        return _dump(twin_t, sim_t)
     tw = Twin("realtime", exe=exe, run_dir=tmp_path_factory.mktemp("twin"))
     try:
         p, c = tw.serve(0, 0)
@@ -304,6 +327,10 @@ def transcripts(tmp_path_factory):
         tw.close()
     with sim_host(exe, tmp_path_factory.mktemp("sim"), twin_features(exe)) as (ep, ctl):
         sim_t = run_script(ep, ctl)
+    return _dump(twin_t, sim_t)
+
+
+def _dump(twin_t: dict, sim_t: dict) -> tuple[dict, dict]:
     out = os.environ.get("BEND_DIFF_OUT")
     if out:
         Path(out).write_text(json.dumps({"twin": twin_t, "sim": sim_t, "diffs": _diffs(twin_t, sim_t)}, indent=1,

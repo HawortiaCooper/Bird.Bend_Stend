@@ -118,9 +118,12 @@ def banner_rows(status: Any, recent: RecentStop | None, now: float) -> list[Bann
                 val = f" ({it.value:g})" if getattr(it, "value", None) is not None else ""
                 rows.append(BannerRow(5, "alarm", f"{name}: {pg.FAULTS_DESC.get(name, '')}{val}." + _hint(it),
                                       "clear", name.lower()))
-    trip = getattr(getattr(status, "safety", None), "sw_trip", None)
+    safety = getattr(status, "safety", None)
+    trip = getattr(safety, "sw_trip", None)
     if trip:
-        rows.append(BannerRow(6, "alarm", f"SW load limit: {trip} – STOP sent, sequence terminated.", "", "sw_trip"))
+        detail = getattr(getattr(safety, "trip", None), "text", "") or str(trip)     # B5-04 / B5-05 SwTrip
+        rows.append(BannerRow(6, "alarm", f"SW limit trip: {detail} – STOP sent, sequence terminated. Move back / "
+                                          "unload – the latch clears inside the limit.", "", "sw_trip"))
     link = getattr(status, "link", None)
     if str(getattr(getattr(link, "state", None), "value", "")) == "LOST":
         rows.append(BannerRow(7, "warn", link_lost_text(recent, now), "connection", "link"))
@@ -141,7 +144,8 @@ def banner_rows(status: Any, recent: RecentStop | None, now: float) -> list[Bann
     if move is not None:
         for item in move.refused:
             if item.code == "LOAD_INPUT_INVALID":
-                rows.append(BannerRow(11, "warn", item.text + _hint(item), "", "first_use"))
+                action = "" if getattr(getattr(status, "safety", None), "no_specimen_mode", False) else "nospec"
+                rows.append(BannerRow(11, "warn", item.text + _hint(item), action, "first_use"))
                 break
     if recent is not None and recent.state in ("sent", "confirmed") and now - recent.t_mono < SENT_AUTOHIDE_S:
         if recent.cmd == "PAUSE":
@@ -159,6 +163,7 @@ class StopBanner(QFrame):
     clearStopRequested = Signal()
     resumeRequested = Signal()
     connectionRequested = Signal()
+    noSpecimenRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None, clock: Callable[[], float] = time.monotonic) -> None:
         super().__init__(parent)
@@ -225,7 +230,8 @@ class StopBanner(QFrame):
             self._style = style
             self.setStyleSheet(f"QFrame#stopBanner {{{style}}}")
         self._action = top.action
-        label = {"clear": "Clear stop…", "resume": "Resume", "connection": "Connection tab"}.get(top.action, "")
+        label = {"clear": "Clear stop…", "resume": "Resume", "connection": "Connection tab",
+                 "nospec": "Enter no-specimen mode…"}.get(top.action, "")
         self.action_button.setText(label)
         self.action_button.setVisible(bool(label))
         more = len(self.rows) - 1
@@ -239,6 +245,6 @@ class StopBanner(QFrame):
 
     def _on_action(self) -> None:
         sig = {"clear": self.clearStopRequested, "resume": self.resumeRequested,
-               "connection": self.connectionRequested}.get(self._action)
+               "connection": self.connectionRequested, "nospec": self.noSpecimenRequested}.get(self._action)
         if sig is not None:
             sig.emit()

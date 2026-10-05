@@ -88,8 +88,8 @@ class IndicatorBar(QFrame):
         outer.addLayout(row)
         self.views: dict[str, imap.ChipView] = {}
 
-    def update_status(self, status: Any) -> None:
-        for view in imap.evaluate_chips(status):
+    def update_status(self, status: Any, params: Any = None) -> None:
+        for view in imap.evaluate_chips(status, params):
             self.views[view.key] = view
             chip = self.chips.get(view.key)
             if chip is not None:

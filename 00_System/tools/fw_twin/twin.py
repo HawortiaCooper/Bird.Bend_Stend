@@ -85,6 +85,29 @@ class TwinError(RuntimeError):
     pass
 
 
+_PRIVATE_EXE: dict[str, Path] = {}
+
+
+def private_exe(exe: Path) -> Path:
+    """OBS-M2-09: an exe in the **shared** build dir (``fw_twin/build``) is copied once per process into a private
+    temp dir and every engine of this process (incl. the restarts after a reset) runs the copy, so another role's
+    rebuild can neither fail on a locked exe nor swap the binary in the middle of a run. Binaries elsewhere (a
+    private ``--build-dir`` / ``build.private_build_dir()``) are already private and used in place."""
+    exe = Path(exe).resolve()
+    if exe.parent != twin_build.SHARED_BUILD.resolve():
+        return exe
+    key = str(exe).lower()
+    if key not in _PRIVATE_EXE:
+        import atexit  # noqa: PLC0415
+        d = Path(tempfile.mkdtemp(prefix="fw_twin_bin_"))
+        atexit.register(shutil.rmtree, d, True)
+        dst = d / exe.name                             # name kept: Twin.core is derived from it ("probe")
+        shutil.copyfile(exe, d / (exe.name + ".part"))
+        os.replace(d / (exe.name + ".part"), dst)
+        _PRIVATE_EXE[key] = dst
+    return _PRIVATE_EXE[key]
+
+
 # =============================================================================================== engine
 class _Engine:
     """One engine process = one MCU power-on period."""
@@ -133,11 +156,14 @@ class Twin:
     def __init__(self, clock: str = "lockstep", *, core: str = "auto", exe: Path | None = None,
                  run_dir: Path | None = None, fresh_flash: bool = True, scenario: dict | str | Path | None = None,
                  t0_us: int = 0, speed: float = 1.0, uid: str = "5457494E2D5549442D303031", seed: int = 1,
-                 boot_delay_ms: float = 2.0, log_max: int = 1_000_000, hw_meas: bool = False):
+                 boot_delay_ms: float = 2.0, log_max: int = 1_000_000, hw_meas: bool = False,
+                 private: bool = True):
         if clock not in ("lockstep", "realtime"):
             raise ValueError("clock must be lockstep or realtime")
         self.clock, self.speed, self.t0_us, self.uid, self.seed = clock, speed, t0_us, uid, seed
         self.exe = Path(exe) if exe else twin_build.ensure_built(core)
+        if private:
+            self.exe = private_exe(self.exe)         # OBS-M2-09: never run the shared fw_twin.exe in place
         self.core = "probe" if "probe" in self.exe.name else "fw"
         self._tmp = None
         if run_dir is None:
@@ -197,6 +223,10 @@ class Twin:
         self.lim_forced = {"start": -1, "end": -1}
         self.afe_cfg: dict[str, float] = {}
         self.spec_line = "W spec 0"
+        # M3 load model (ICD v0.7.2): hung weights, zero drift, cell creep / non-linearity, specimen relaxation
+        self.load_cfg = {"weight_n": 0.0, "drift_cps": 0.0, "creep_frac": 0.0, "creep_tau_s": 0.0,
+                         "relax_frac": 0.0, "relax_tau_s": 0.0, "nonlin_frac": 0.0, "fs_n": 1961.33}
+        self.load_state: dict[str, float] | None = None     # creep / relaxation / drift carried over a reset
         self.shift_um = 0.0
         self.scenario_params: dict[str, Any] = {}
         self._stop = threading.Event()
@@ -269,6 +299,16 @@ class Twin:
         if getattr(self, "fault_rec", None):
             lines.append("W faultrec %x %x" % self.fault_rec)
             self.fault_rec = None
+        lc, ls = self.load_cfg, self.load_state
+        lines.append(f"W weight {lc['weight_n']}")
+        lines.append(f"W afe creep {lc['creep_frac']} {lc['creep_tau_s']}")
+        lines.append(f"W afe nonlin {lc['nonlin_frac']} {lc['fs_n']}")
+        lines.append(f"W relax {lc['relax_frac']} {lc['relax_tau_s']}" + (f" {ls['relax_n']}" if ls else ""))
+        if ls:
+            lines.append(f"W afe creep_state {ls['creep_counts']}")
+            lines.append(f"W afe drift {lc['drift_cps']} {ls['drift_counts']} {int(ls['t_ns'])}")
+        elif lc["drift_cps"]:
+            lines.append(f"W afe drift {lc['drift_cps']}")
         afe = w.get("afe", {})
         lines += [f"W afe rate_error {afe.get('rate_error', 0.0)}", f"W afe noise {afe.get('noise_counts', 0.0)}"]
         for k, v in self.afe_cfg.items():
@@ -296,6 +336,9 @@ class Twin:
             y = self._engine_query()
             if "x_um_true" in y:
                 self.world_x_um = float(y["x_um_true"])
+            if "creep_counts" in y:
+                self.load_state = {"creep_counts": float(y["creep_counts"]), "relax_n": float(y["relax_n"]),
+                                   "drift_counts": float(y["drift_counts"]), "t_ns": float(self.now)}
             if "noinit" in y:
                 self.noinit = y["noinit"]
         if cause_name == "power":
@@ -359,6 +402,9 @@ class Twin:
             self.conversions.append(c)
         elif tag == "N":
             self.noinit = ":".join(p)                  # opaque .noinit words (twin_meas.c)
+        elif tag == "V":                               # load-model states at an MCU reset (world, ICD v0.7.2)
+            self.load_state = {"creep_counts": float(p[0]), "relax_n": float(p[1]), "drift_counts": float(p[2]),
+                               "t_ns": float(p[3])}
         elif tag == "M" and p[0] == "stim":
             self._stim(int(p[1]), int(p[2]), int(p[3]), int(p[4]), int(p[5]), int(p[6]))
         elif tag == "I":
@@ -741,18 +787,49 @@ class Twin:
         self.world["specimen"] = {"kind": kind, "k_n_per_mm": k_n_per_mm, "x_contact_um": x_contact_um}
         self.spec_line = f"W spec {kc} {k_n_per_mm} {x_contact_um} {k2_n_per_mm} {f_yield_n} {f_break_n}"
         self._send(self.spec_line)
-        if relax_pct:
-            return {"ok": True, "note": "relaxation not modelled in the twin yet (M3)"}
+        # M3 (ICD v0.7.2): stress relaxation at constant position — the specimen force decays by relax_pct %
+        # with the time constant relax_tau_s (first order, follows the elastic force while moving)
+        self.load_cfg["relax_frac"] = float(relax_pct or 0.0) / 100.0
+        self.load_cfg["relax_tau_s"] = float(relax_tau_s or 0.0)
+        if self.load_state:
+            self.load_state["relax_n"] = 0.0
+        self._send(f"W relax {self.load_cfg['relax_frac']} {self.load_cfg['relax_tau_s']} 0")
+
+    def _a_weight(self, kg: float | None = None, n: float | None = None, g_mps2: float = 9.80665):
+        """M3 (ICD v0.7.2): known weights hung on the cell for a load calibration — force kg·g (or `n` newtons;
+        + = tension, the sign of a spring specimen pushed by the axis); 0 / none = removed. Adds to the specimen."""
+        f = float(n) if n is not None else float(kg or 0.0) * float(g_mps2)
+        self.load_cfg["weight_n"] = f
+        self._send(f"W weight {f}")
+        return {"ok": True, "force_n": f}
 
     def _a_load_offset(self, counts: int):
         self.world["load_offset_counts"] = counts
         self._send(f"W afe offset {counts}")
 
     def _a_afe(self, rate_error=None, noise_counts=None, stall=None, saturate="_", drop_every=None, miss_next=None,
-               sck_overrun=None, raw_script=None):
+               sck_overrun=None, raw_script=None, drift_counts_per_s=None, creep_pct=None, creep_tau_s=None,
+               nonlin_pct_fs=None, fs_n=None):
         def keep(k, v):
             self.afe_cfg[k] = v
             self._send(f"W afe {k} {v}")
+        lc = self.load_cfg
+        if drift_counts_per_s is not None:              # M3: linear zero drift from now on (TC zero, R2 §3)
+            lc["drift_cps"] = float(drift_counts_per_s)
+            self.load_state = None
+            self._send(f"W afe drift {lc['drift_cps']}")
+        if creep_pct is not None or creep_tau_s is not None:   # M3: cell creep (R2: 0.02 % FS / 30 min)
+            if creep_pct is not None:
+                lc["creep_frac"] = float(creep_pct) / 100.0
+            if creep_tau_s is not None:
+                lc["creep_tau_s"] = float(creep_tau_s)
+            self._send(f"W afe creep {lc['creep_frac']} {lc['creep_tau_s']}")
+        if nonlin_pct_fs is not None or fs_n is not None:      # M3: non-linearity (R2: 0.03 % FS)
+            if nonlin_pct_fs is not None:
+                lc["nonlin_frac"] = float(nonlin_pct_fs) / 100.0
+            if fs_n is not None:
+                lc["fs_n"] = float(fs_n)
+            self._send(f"W afe nonlin {lc['nonlin_frac']} {lc['fs_n']}")
         if rate_error is not None:
             self.world["afe"]["rate_error"] = rate_error
             self._send(f"W afe rate_error {rate_error}")
@@ -789,7 +866,8 @@ class Twin:
 
     def _stim(self, src: int, pol: int, hold_ms: int, n: int, period_ticks: int, seed: int) -> None:
         """DIAG_MEAS STIM_RUN (model): n pulses on the selected input, each after a seeded random delay of
-        0…1 step period, active for hold_ms, then hold_ms idle (FW_test_plan §6.1 MT-7)."""
+        0…1 step period, active for hold_ms; the next delay starts at the end of the hold (board meas_f4.c,
+        v0.7.3 OBS-E-HG-02; earlier models added another hold_ms idle gap) (FW_test_plan §6.1 MT-7)."""
         import random as _r  # noqa: PLC0415
         rnd = _r.Random(seed)
         name = {0: "estop", 1: "start", 2: "end", 3: "pause", 5: "drv_power"}.get(src)
@@ -805,7 +883,7 @@ class Twin:
             else:
                 self.at(t1, lambda nm=name, lv=active: self._stim_level(nm, lv), "stim")
                 self.at(t2, lambda nm=name: self._stim_level(nm, None), "stim")
-            t = t2 + int(hold_ms * 1e6)
+            t = t2                                     # next delay starts at the end of the hold (OBS-E-HG-02, as meas_f4.c)
 
     def _stim_level(self, name: str, level: int | None) -> None:
         if name in ("start", "end"):
@@ -910,7 +988,10 @@ class Twin:
         if what == "world":
             return {"ok": True, "now_us": self.now_us, "fw_t_us": self.fw_t_us(), "boot_us": self.boot_ns / 1000,
                     "t0_us": self.t0_us, "x_um_true": float(y["x_um_true"]), "pos_steps": int(y["pos_steps"]),
-                    "load_n": float(y["load_n"]), "inputs": {n: self._level(n) for n in INPUT_ID if n != "stop"},
+                    "load_n": float(y["load_n"]), "specimen_n": float(y["spec_n"]), "weight_n": float(y["weight_n"]),
+                    "relax_n": float(y["relax_n"]), "creep_counts": float(y["creep_counts"]),
+                    "drift_counts": float(y["drift_counts"]), "raw_ideal": float(y["load_raw_ideal"]),
+                    "inputs": {n: self._level(n) for n in INPUT_ID if n != "stop"},
                     "broken": sorted(self.broken), "drv_power": self.drv_on, "estop_open": bool(self.inputs["estop"]),
                     "afe_rate_sps": int(y["afe_rate_sps"]), "afe_conversions": int(y["afe_conversions"]),
                     "rx_overruns": int(y["rx_overruns"]), "resets": list(self.resets), "core": self.core}
@@ -963,6 +1044,21 @@ class Twin:
             if k in w:
                 self.world[k] = w[k]
         self.world["afe"].update(w.get("afe", {}))
+        afe = w.get("afe", {})                       # v0.7.2 cell model in scenarios (SWC-M3-02: the simulator's
+        if "drift_counts_per_s" in afe:              # drift_counts_per_min accepted as an alias)
+            self.load_cfg["drift_cps"] = float(afe["drift_counts_per_s"])
+        elif "drift_counts_per_min" in afe:
+            self.load_cfg["drift_cps"] = float(afe["drift_counts_per_min"]) / 60.0
+        if "creep_pct" in afe:
+            self.load_cfg["creep_frac"] = float(afe["creep_pct"]) / 100.0
+            self.load_cfg["creep_tau_s"] = float(afe.get("creep_tau_s", 600.0))
+        if "nonlin_pct_fs" in afe:
+            self.load_cfg["nonlin_frac"] = float(afe["nonlin_pct_fs"]) / 100.0
+        if "weight_kg" in w:
+            self.load_cfg["weight_n"] = float(w["weight_kg"]) * 9.80665
+        if spec_relax := w.get("specimen", {}).get("relax_pct"):
+            self.load_cfg["relax_frac"] = float(spec_relax) / 100.0
+            self.load_cfg["relax_tau_s"] = float(w["specimen"].get("relax_tau_s", 10.0))
         self.world["steps_per_mm"] = float(sc.get("params", {}).get("motion.steps_per_mm", 800.0))
         spec = w.get("specimen", {"kind": "none"})
         kc = {"none": 0, "spring": 1, "bilinear": 2}[spec.get("kind", "none")]

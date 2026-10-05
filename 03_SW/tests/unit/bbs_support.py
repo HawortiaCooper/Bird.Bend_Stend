@@ -15,8 +15,10 @@ def vectors(name: str) -> dict:
 
 
 def lockstep_backend(*, connect: bool = True, wire_log: bool = True, seed: int = 7, endpoint: str = "sim",
-                     **kw):
-    """A started lock-step Backend (test hooks on), optionally connected to the in-process simulator."""
+                     no_specimen: bool = False, **kw):
+    """A started lock-step Backend (test hooks on), optionally connected to the in-process simulator.
+    ``no_specimen=True``: enter the no-specimen mode after connecting (M3: motion without a load calibration + tare
+    is refused otherwise, SAF-SW-001 / SW-LIM-004)."""
     from bend_stand.core.backend import Backend, BackendSettings  # noqa: PLC0415
 
     be = Backend(BackendSettings(clock="lockstep", test_hooks=True, wire_log=wire_log, seq_seed=seed, **kw))
@@ -24,6 +26,9 @@ def lockstep_backend(*, connect: bool = True, wire_log: bool = True, seed: int =
     if connect:
         be.test_hooks.result(be.connect_async(endpoint), 5000)
         be.test_hooks.advance(50)
+        if no_specimen:
+            g = be.limits.set_no_specimen_mode(True, confirmed=True)
+            assert g.ok and be.status().safety.no_specimen_mode, g
     return be
 
 

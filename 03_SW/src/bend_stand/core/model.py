@@ -343,6 +343,14 @@ class GateCode(StrEnum):
     ACCEL_CAP = "ACCEL_CAP"
     BOUND_NOT_AHEAD = "BOUND_NOT_AHEAD"
     LIMIT_TOWARD = "LIMIT_TOWARD"
+    # M3
+    MOVED_RECENTLY = "MOVED_RECENTLY"
+    TRAVEL_ROOM = "TRAVEL_ROOM"
+    NO_SPECIMEN_CONFIRM = "NO_SPECIMEN_CONFIRM"
+    CAL_REPLACE = "CAL_REPLACE"
+    AFE_PLACEHOLDER = "AFE_PLACEHOLDER"
+    CAPTURE_RUNNING = "CAPTURE_RUNNING"
+    NO_SPECIMEN_MOUNTED = "NO_SPECIMEN_MOUNTED"
 
 
 @dataclass(frozen=True)
@@ -546,6 +554,31 @@ class ThresholdState:
 
 
 @dataclass(frozen=True)
+class SwTrip:
+    """A SW-limit trip (SAF-SW-001; topic ``safety.trip``, ``SafetyStatus.trip``). ``limit`` = PULL / PUSH /
+    TRAVEL_MIN / TRAVEL_MAX / LOAD_INPUT_INVALID; ``side`` = +1 (pull / max) or −1 (push / min)."""
+
+    limit: str
+    side: int
+    value: float
+    threshold: float
+    unit: str
+    t_us: int | None = None
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class SafetyWarning:
+    """Warning edge (topic ``safety.warning``): ``code`` PULL_WARN / PUSH_WARN / FW_CLAMPED, ``active`` on/off."""
+
+    code: str
+    active: bool
+    value: float | None = None
+    level: float | None = None
+    text: str = ""
+
+
+@dataclass(frozen=True)
 class SafetyStatus:
     sw_trip: str | None = None
     warnings: tuple[str, ...] = ()
@@ -553,17 +586,21 @@ class SafetyStatus:
     load_input_valid: bool = False
     load_input_reason: str | None = "no calibration"
     no_specimen_mode: bool = False
+    trip: SwTrip | None = None
 
 
 @dataclass(frozen=True)
 class TravelDiffState:
-    """Active travel calibration vs board steps/mm (§9.3.1, B3-19; M3)."""
+    """Active travel calibration vs board steps/mm (§9.3.1, B3-19; M3). ``session_spm`` = the reference value
+    (spm0 of a restore-pending record, else the active travel calibration)."""
 
     differs: bool = False
     session_spm: float | None = None
     board_spm: float | None = None
     restore_pending: bool = False
     actions: tuple[str, ...] = ()
+    source: str | None = None                # "restore_pending" | "active_file"
+    ignored: bool = False
 
 
 @dataclass(frozen=True)
@@ -579,6 +616,9 @@ class CalibrationStatus:
     travel_cal_differs: bool = False
     restore_pending: bool = False
     travel_diff: TravelDiffState = field(default_factory=TravelDiffState)
+    load_invalid_reason: str | None = None   # why the active load calibration is not valid for the limits (M3)
+    f_cal_max_n: float | None = None         # largest calibration force (extrapolation limit = 3 ×, SW-CAL-008)
+    load_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -813,6 +853,8 @@ class EngineState:
 
 @dataclass(frozen=True)
 class TestMarks:
+    """Report marks (SW-META-001): fixed fields + user-defined ``custom`` (key, value) pairs."""
+
     __test__ = False  # not a pytest class
     specimen: str = ""
     number: str = ""
@@ -822,8 +864,17 @@ class TestMarks:
 
 
 @dataclass(frozen=True)
+class Bend3pGeometry:
+    """Optional 3-point-bend geometry (SW-REP-004, R4 §10): span L, width b, thickness h in mm."""
+
+    span_mm: float
+    width_mm: float
+    thickness_mm: float
+
+
+@dataclass(frozen=True)
 class SessionSettings:
-    """Session settings (§13.5; M3 fills the full set). Never contains tare / no-specimen mode."""
+    """Session settings (§13.5, SRS §5.2). Never contains a tare or the no-specimen mode (session-only)."""
 
     display_unit: Literal["N", "kgf"] = "N"
     pull_dir: int = 1
@@ -831,12 +882,71 @@ class SessionSettings:
     recordings_root: str | None = None
     raw_dump: bool = True
     sample_window_s: float = 1.0
-    tare_window_s: float = 2.0
+    tare_window_s: float = 10.0              # SW-TARE-002 default 10 s (2–60 s)
     k_est_n_mm: float | None = None
     g_local: float = 9.80665
     limits: LimitConfig = field(default_factory=LimitConfig)
     manual_speed_mm_s: float = 5.0           # default speed of move_to / move_by (≤ the cap that applies, M2)
     manual_accel_mm_s2: float | None = None  # None = the FW default motion.a_max_um_s2 (accel 0 on the wire)
+    cal_presettle_s: float = 2.0             # SW-CAL-005 pre-settle
+    cal_capture_s: float = 10.0              # SW-CAL-005 capture
+    cal_v_mm_s: float = 2.0                  # travel-calibration move speed
+    bend3p: Bend3pGeometry | None = None     # optional 3-point-bend outputs (off by default)
+    compliance_mm_per_n: float = 0.0         # machine compliance C_m (specimen deflection = x − C_m·F)
+
+
+@dataclass(frozen=True)
+class TareResult:
+    """A successful tare (SW-TARE-002): robust mean + window statistics; session-only (board UID)."""
+
+    tare_id: str
+    tare_raw: float
+    std: float
+    se: float
+    drift: float
+    n_used: int
+    n_rejected: int
+    n_lost: int
+    window_s: float
+    t_us_u: int
+    utc: str
+    board_uid: str | None
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TravelCalResult:
+    """Travel-calibration values (SW-CAL-002…004; file §13.3)."""
+
+    spm0: float
+    n1: int | None = None
+    d1_mm: float | None = None
+    spm1: float | None = None
+    n2: int | None = None
+    d_tot_mm: float | None = None
+    spm2: float | None = None
+    spm2_inc: float | None = None
+    consistency: float | None = None
+
+
+@dataclass(frozen=True)
+class SampleRow:
+    """One take-sample row (SW-ACQ-003, ``samples.csv``; topic ``sample.taken``)."""
+
+    utc: str
+    t_dev_s: float
+    window_s: float
+    n: int
+    f_mean: float
+    f_std: float
+    f_n: int
+    x_mean: float
+    x_std: float
+    raw_mean: float
+    raw_std: float
+    raw_n: int
+    marks: TestMarks
+    file: str | None = None
 
 
 # --------------------------------------------------------------------------------------------- data view
