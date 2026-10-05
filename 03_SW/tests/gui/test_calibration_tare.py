@@ -392,42 +392,42 @@ def test_calibration_panels_and_travel_actions(window, connected_fake, qtbot) ->
 
 
 @pytest.mark.req("SW-CAL-007")
-def test_load_fit_residual_view(load, connected_fake, qtbot) -> None:
-    """Verifies: SW-CAL-007 — a ``LoadCalResult``-shaped fit (K, B, residuals, status; no point table, B5-08) shows
-    its summary and a residual plot; the re-take menu has ``step_count`` entries."""
+def test_load_fit_points_and_line(load, connected_fake, qtbot) -> None:
+    """Verifies: SW-CAL-007 — a real ``LoadCalResult`` (B5-20): summary (K, status, …), the per-point table from
+    ``point_table()`` and the mini plot with the points and the fitted line; re-take menu from ``step_count``;
+    without points the residuals are plotted."""
+    from bend_stand.core.api import LoadCalResult
+    pts = ((0.0, 0.0, 10.0, 0.01), (1.0, 9.80665, 322_220.0, -0.02), (10.0, 98.0665, 3_221_000.0, 0.01))
+    res = LoadCalResult(3.0445e-5, -0.0003, (0.01, -0.02, 0.01), 0.9999999, 0.03, 0.0015, "PASS", 98.07, True,
+                        None, (), pts)
     eng = connected_fake.load_cal
     _started(load, eng, qtbot)
     eng.set_state(phase="FIT", step_count=3, step_index=3, can_continue=True, continue_label="Accept calibration ▶",
-                  result={"K": 3.0e-5, "B": -0.01, "residuals": (0.01, -0.02, 0.01), "r2": 0.9999999,
-                          "nl_pct_span": 0.03, "status": "PASS", "low_span": True})
+                  result=res)
     load.refresh()
-    assert "status = PASS" in load.summary_label.text() and "residuals = 0.01, -0.02, 0.01" in \
-        load.summary_label.text()
-    assert load.plot.isVisibleTo(load) and load.plot.getPlotItem().getAxis("left").labelText == "residual [N]"
+    assert "status = PASS" in load.summary_label.text() and "points" not in load.summary_label.text()
+    assert load.result_table.rowCount() == 3 and load.result_table.horizontalHeaderItem(1).text() == "force_n"
+    assert load.plot.isVisibleTo(load) and load.plot.getPlotItem().getAxis("left").labelText == "F [N]"
+    xs, ys = load.fit_scatter.getData()
+    assert list(xs) == [10.0, 322_220.0, 3_221_000.0] and ys[2] == pytest.approx(98.0665)
+    lx, ly = load.fit_line.getData()
+    assert len(lx) == 2 and ly[1] == pytest.approx(3.0445e-5 * 3_221_000.0 - 0.0003)
     assert len(load.retake_button.menu().actions()) == 3
+    eng.set_state(result={"K": 3.0e-5, "B": -0.01, "residuals": (0.01, -0.02, 0.01), "status": "PASS"})
+    load.refresh()
+    assert load.plot.getPlotItem().getAxis("left").labelText == "residual [N]"
 
 
 @pytest.mark.req("SAF-SW-004", "SW-CAL-001")
-def test_c12_declined_cancels_an_engine_that_already_started(travel, connected_fake, qtbot) -> None:
-    """Verifies: SAF-SW-004 (GRQ-B-23, defensive) — if the engine already started although its start gate had
-    CONFIRM items, declining C-12 cancels it; confirming only continues (no second start)."""
+def test_c12_declined_starts_nothing(travel, connected_fake, qtbot) -> None:
+    """Verifies: SAF-SW-004 (B5-18) — a start gate with CONFIRM items starts nothing; declining C-12 sends no
+    second start (and no cancel), the start page stays; confirming repeats the start with confirmed=True."""
     eng = connected_fake.travel_cal
-    gate = confirm("NO_SPECIMEN_CONFIRM", "load unknown — no specimen mounted?")
-    eng.start_result = gate
-
-    def start_anyway(**config):
-        eng._rec("start", **config)                                   # noqa: SLF001
-        eng.set_state(phase="CHECK")
-        return gate
-    eng.start = start_anyway
+    eng.start_result = confirm("NO_SPECIMEN_MOUNTED", "load unknown — no specimen mounted?")
     qtbot.mouseClick(travel.start_button, Qt.MouseButton.LeftButton)
     dlg = travel.confirm_dialog
-    assert dlg.cid == "C-12"
+    assert dlg.cid == "C-12" and eng.state().phase == "IDLE"
     dlg.reject()
-    assert calls(connected_fake, "travel_cal.cancel")
-    n = len(calls(connected_fake, "travel_cal.start"))
-    travel.start()
-    dlg = travel.confirm_dialog
-    dlg.assertion_box.setChecked(True)
-    qtbot.mouseClick(dlg.confirm_button, Qt.MouseButton.LeftButton)
-    assert len(calls(connected_fake, "travel_cal.start")) == n + 1 and travel.started
+    assert len(calls(connected_fake, "travel_cal.start")) == 1 and not calls(connected_fake, "travel_cal.cancel")
+    travel.refresh()
+    assert travel.start_page.isVisibleTo(travel) and not travel.started

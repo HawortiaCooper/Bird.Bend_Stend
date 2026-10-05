@@ -12,6 +12,9 @@ SW-STOP-001, SW-STOP-003, SW-STOP-004, SAF-SW-005, NFR-001
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import threading
 
 import numpy as np
 import pytest
@@ -49,6 +52,48 @@ def sim_window(make_window, sim_backend, qtbot):
     qtbot.waitUntil(lambda: sim_backend.status().stream.on and sim_backend.status().board is not None,
                     timeout=T_CONNECT_MS)
     qtbot.waitUntil(lambda: tab.form.board_value("afe.rate_sps") is not None, timeout=T_CONNECT_MS)
+    return win
+
+
+@pytest.fixture
+def oop_sim_endpoint():
+    """MC3-4: the out-of-process simulator (``python -m bend_stand.io.sim.server``) on ephemeral loopback ports, so
+    a stall of the test process cannot starve the simulated board. Started and stopped by this fixture (own PID)."""
+    import os
+    from pathlib import Path
+
+    import bend_stand
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        [str(Path(bend_stand.__file__).resolve().parents[1])] + ([os.environ["PYTHONPATH"]]
+                                                                if os.environ.get("PYTHONPATH") else [])))
+    proc = subprocess.Popen([sys.executable, "-m", "bend_stand.io.sim.server", "--port", "0", "--ctl", "0"],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+    lines: list[str] = []
+    reader = threading.Thread(target=lambda: lines.append(proc.stdout.readline()), daemon=True)
+    reader.start()
+    reader.join(20.0)
+    try:
+        if not lines or "tcp://127.0.0.1:" not in lines[0]:
+            pytest.fail(f"out-of-process simulator did not start: {lines!r}")
+        port = lines[0].split("tcp://127.0.0.1:", 1)[1].split()[0]
+        yield f"tcp://127.0.0.1:{port}"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(10)
+
+
+@pytest.fixture
+def oop_sim_window(make_window, sim_backend, oop_sim_endpoint, qtbot):
+    win = make_window(sim_backend)
+    win.refresh.start()
+    win.connection_tab.connect_to(oop_sim_endpoint)
+    qtbot.waitUntil(lambda: str(sim_backend.status().link.state.value) == "CONNECTED", timeout=T_CONNECT_MS)
+    qtbot.waitUntil(lambda: sim_backend.status().stream.on and sim_backend.status().board is not None,
+                    timeout=T_CONNECT_MS)
     return win
 
 
@@ -202,11 +247,11 @@ def test_stop_pause_resume_clear_on_simulator(sim_window, sim_backend, qtbot) ->
 
 
 @pytest.mark.req("NFR-001", "SW-RT-006")
-def test_perf_smoke_on_simulator(sim_window, qtbot, capsys) -> None:
+def test_perf_smoke_on_simulator(oop_sim_window, qtbot, capsys) -> None:
     """Verifies: NFR-001, SW-RT-006 (smoke, informative; binding at M3 on the reference PC) — real timer, real backend,
-    4 time panes (raw, status bits, travel, rate) + an X-Y pane in 2 columns for 5 s offscreen; one snapshot per
+    out-of-process simulator (MC3-4: a stalled test process cannot starve the board), 4 time panes (raw, status bits, travel, rate) + an X-Y pane in 2 columns for 5 s offscreen; one snapshot per
     refresh; frame interval and stage times recorded."""
-    win = sim_window
+    win = sim_window = oop_sim_window
     plot = win.plot_dock
     for g in plot.tree.group_names():
         if g.startswith("status"):
@@ -222,12 +267,12 @@ def test_perf_smoke_on_simulator(sim_window, qtbot, capsys) -> None:
     qtbot.wait(5000)
     ps = win.perf_stats()
     with capsys.disabled():
-        print(f"\n[perf smoke sim, 4 time panes + X-Y, offscreen, 5 s] ticks {ps['ticks'] - start}, interval p50 "
+        print(f"\n[perf smoke sim out of process, 4 time panes + X-Y, offscreen, 5 s] ticks {ps['ticks'] - start}, interval p50 "
               f"{ps['interval_p50_ms']:.1f} ms p95 {ps['interval_p95_ms']:.1f} ms max {ps['interval_max_ms']:.1f} ms;"
               f" plots p95 {ps['plots_p95_ms']:.2f} ms; status p95 {ps['status_p95_ms']:.2f} ms")
     assert ps["ticks"] - start > 50 and ps["errors"] == {}
     assert win.snapshot_calls - n0 <= ps["ticks"] - start          # one snapshot per refresh for all panes
-    assert sim_window.backend.status().gates[GateId.STREAM_STOP].ok
+    assert sim_window.backend.status().gates[GateId.STREAM_STOP].ok, win.link_lost_diagnostics
 
 
 @pytest.mark.req("SW-STOP-002")

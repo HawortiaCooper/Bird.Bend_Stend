@@ -316,3 +316,90 @@ def test_trip_latch_refuses_motion_that_increases_the_violation() -> None:
         assert be.status().motion.position_mm <= 25.0
     finally:
         be.shutdown()
+
+
+# ============================================================================================ SWD-M3-01: one latch per class
+
+ALL = replace(LimitConfig(), pull_trip_n=100.0, push_trip_n=-100.0, fw_level_n=200.0, travel_min_mm=10.0,
+              travel_min_enabled=True, travel_max_mm=50.0, travel_max_enabled=True)
+FREE = SafetyInputs(load_valid=True, load_reason=None, k=K, spm=800.0, end_um=None)
+
+
+def _latch(r: Rig, cls: str) -> None:
+    """Drive the rig into a latch of ``cls`` (first trip)."""
+    n = len(r.stops)
+    if cls == "PULL":
+        r.sup.process(row(0, 30.0, 101.0, flags=int(DF.HOMED)))
+    elif cls == "PUSH":
+        r.sup.process(row(0, 30.0, -101.0, flags=int(DF.HOMED)))
+    elif cls == "TRAVEL_MAX":
+        r.sup.process(row(0, 49.99, 0.0))
+        r.sup.process(row(12.5, 50.10, 0.0))
+    else:
+        r.sup.process(row(0, 10.01, 0.0))
+        r.sup.process(row(12.5, 9.90, 0.0))
+    assert cls in r.sup.latches and len(r.stops) == n + 1, (cls, r.stops)
+
+
+def _violate(r: Rig, cls: str, t0: float, f: float = 0.0) -> None:
+    """A violation of ``cls``; travel violations keep the force ``f`` (so a force latch stays set)."""
+    if cls == "PULL":                                    # moving − (pull_dir +1: reduces tension) while F rises
+        r.sup.process(row(t0, 30.0, 50.0))
+        r.sup.process(row(t0 + 12.5, 29.99, 101.0))
+    elif cls == "PUSH":
+        r.sup.process(row(t0, 30.0, -50.0))
+        r.sup.process(row(t0 + 12.5, 30.01, -101.0))
+    elif cls == "TRAVEL_MAX":
+        r.sup.process(row(t0, 49.99, f))
+        r.sup.process(row(t0 + 12.5, 50.10, f))
+    else:
+        r.sup.process(row(t0, 10.01, f))
+        r.sup.process(row(t0 + 12.5, 9.90, f))
+
+
+HOLD = {"PULL": 101.0, "PUSH": -101.0, "TRAVEL_MIN": 0.0, "TRAVEL_MAX": 0.0}
+CLASSES = ("PULL", "PUSH", "TRAVEL_MIN", "TRAVEL_MAX")
+
+
+@pytest.mark.req("SAF-SW-001")
+@pytest.mark.parametrize("first, second", [(a, b) for a in CLASSES for b in CLASSES if a != b])
+def test_every_class_supervised_while_another_is_latched(first: str, second: str) -> None:
+    """SWD-M3-01: with a latch of ``first`` set, a violation of ``second`` still sends STOP and latches its own
+    class; both latches coexist, each refuses only its own increasing direction."""
+    r = Rig(ALL, FREE)
+    _latch(r, first)
+    n = len(r.stops)
+    _violate(r, second, 1000.0, HOLD[first])
+    assert f"SW_LIMIT:{second}" in r.stops[n:], (first, second, r.stops)
+    assert second in r.sup.latches
+    if {first, second} != {"PULL", "PUSH"}:                 # F cannot violate pull and push at once
+        assert {t.limit for t in r.sup.active_trips()} == {first, second}
+        assert r.sup.trip.limit == second                   # the most recent one
+
+
+@pytest.mark.req("SAF-SW-001")
+def test_each_latch_clears_by_its_own_rule() -> None:
+    r = Rig(ALL, FREE)
+    _latch(r, "TRAVEL_MIN")
+    _violate(r, "PULL", 1000.0)
+    r.sup.process(row(1050, 9.9, 101.0, flags=int(DF.HOMED)))          # standstill below the min, F still high
+    assert set(r.sup.latches) == {"TRAVEL_MIN", "PULL"}
+    r.sup.process(row(1100, 20.0, 97.0, flags=int(DF.HOMED)))          # standstill inside + force back inside
+    assert not r.sup.latches and r.topics("safety.trip")[-1] is None
+    r2 = Rig(ALL, FREE)
+    _latch(r2, "PULL")
+    _violate(r2, "TRAVEL_MAX", 1000.0, 101.0)
+    r2.sup.process(row(1100, 50.2, 97.0, flags=int(DF.HOMED)))         # force inside, still beyond travel max
+    assert set(r2.sup.latches) == {"TRAVEL_MAX"} and r2.topics("safety.trip")[-1].limit == "TRAVEL_MAX"
+    assert r2.sup.direction_refused(+1).limit == "TRAVEL_MAX" and r2.sup.direction_refused(-1) is None
+
+
+@pytest.mark.req("SAF-SW-001")
+def test_restop_per_class_and_direction_refusal_of_both() -> None:
+    r = Rig(ALL, FREE)
+    _latch(r, "PULL")                                                   # refuses + (tension up)
+    _violate(r, "TRAVEL_MIN", 1000.0, 101.0)                            # refuses −
+    assert r.sup.direction_refused(+1).limit == "PULL" and r.sup.direction_refused(-1).limit == "TRAVEL_MIN"
+    n = len(r.stops)
+    r.sup.process(row(1200, 9.8, 120.0))                                 # still moving − (outward of the min)
+    assert "SW_LIMIT:TRAVEL_MIN" in r.stops[n:]

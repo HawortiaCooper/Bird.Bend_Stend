@@ -2,9 +2,9 @@
 
 | Doc | HW_GATE_RUNBOOK |
 |---|---|
-| Version | 0.1 (2026-10-05) — prepared under D-06 (no hardware access yet); twin dry run done |
+| Version | 0.2 (2026-10-05, M3 verification) — D-45 (a)–(g), Integrator review R-HIL-01…03 applied, DEF-M3-01 / DEF-HG-01 closed, twin dry run re-run on 2d36eec (ICD v0.7.3 / dict 6). 0.1 — first version, prepared under D-06 |
 | Owner | Validator E (00_System/tools/hil, the Integrator reviews) |
-| Basis | FW_test_plan v0.4.1 §6 (HG-01…32, §6.7 order, §6.8 bench safety procedure), wiring.md v0.5 (C-xx, M-1…M-9), ICD v0.7.x Appendix C (DIAG_MEAS), D-06, D-35 G5, D-40 c, D-41, D-42, D-44 |
+| Basis | FW_test_plan v0.4.2 §6 (HG-01…32, §6.7 order, §6.8 bench safety procedure), wiring.md v0.5 (C-xx, M-1…M-9), ICD v0.7.x Appendix C (DIAG_MEAS), D-06, D-35 G5, D-40 c, D-41, D-42, D-44 |
 | Tools | `hil_session.py` (runner), `hil_procs.py` (HG procedures), `hil_link.py` (D-06 interlock, link, DIAG_MEAS), `hil_operator.py` (prompts), `hil_budget.py` (§6.1 rule 4), `hil_report.py` (markdown report), `tests/` (unit tests) |
 
 **Nothing in this runbook may be done before the PO approved the gate (D-06) and the bench safety procedure
@@ -16,10 +16,12 @@
 
 1. The PO approves (a) the gate session, (b) the bench safety procedure FW_test_plan §6.8 (F3) incl. the deltas of
    §9 below, (c) names the board (UID) and the COM port.
-2. The Orchestrator records the reference **`D-06-GATE-YYYYMMDD`** (date of the session, optional `-TAG`) in
-   `00_System/specs/DECISIONS.md` or `00_System/STATUS.md`.
+2. The Orchestrator records the reference **`D-06-GATE-YYYYMMDD`** (date of the session, optional `-TAG`) as a
+   **dedicated table row** in `00_System/specs/DECISIONS.md` (or `STATUS.md`), one cell = the reference, row marked
+   *approved*, e.g. `| D-06-GATE-20261012 | 2026-10-12 | PO approved HW gate: board UID …, COM7, §6.8 bench procedure | approved (PO) |`
+   (R-HIL-02: a mention in running text, a longer tag or a row marked pending / revoked does not count).
 3. The runner opens a serial port only if: `--approved` matches `D-06-GATE-YYYYMMDD[-TAG]`, is a real date, not in the
-   future, ≤ 7 days old, **and that exact string is recorded** in DECISIONS.md / STATUS.md; `--port` is given
+   future, ≤ 7 days old, **and is recorded as an approved row** in DECISIONS.md / STATUS.md (whole-token match); `--port` is given
    explicitly; the operator re-types the port name; with `--board-uid` the GET_INFO UID must match (else the session
    stops at S-00). `--twin` and `--port` are mutually exclusive; twin mode never imports pyserial.
 4. **Flashing is never done by the tool.** Every image change is an operator step: the session closes the COM port,
@@ -59,7 +61,7 @@ with the driver powered (§6.8 P-1).
 3. Twin dry run of the same commit, no ERROR item (see §8):
    `set BEND_TWIN_BUILD_DIR=<private dir>` then
    `.venv\Scripts\python 00_System\tools\hil\hil_session.py --twin --out <dir>`
-4. Unit tests: `.venv\Scripts\python -m pytest 00_System\tools\hil\tests -q` (30 passed).
+4. Unit tests: `.venv\Scripts\python -m pytest 00_System\tools\hil\tests -q` (39 passed).
 
 ### 2.4 Flashing (the PO performs it — D-06)
 STM32CubeProgrammer over the Nucleo's ST-LINK (SWD), **no full-chip erase** (the NVM log in sectors 1–2 keeps the
@@ -103,12 +105,14 @@ u = uncertainty added per §6.1 rule 4 (PASS if max + u ≤ budget, FAIL if max 
 | HG-31 | [M] A's statement: MH pins digital inputs without pull in every build | yes (confirmed again at HG-30) |
 | HG-29 | [A] INFO; [J] J-EVT ← PB8, J-AUX ← PB8: STIM 5 × 10 ms → EVT / AUX stamps, probe CNT vs stamps; [A] PSU-off pulse block (spm 5000, 2 mm/s un-homed = 10 kHz): MT-2 = Δpos_steps = Δstamps, PWM period 18 000 ± 1 ticks; [J] RC delay of START / END / PAUSE inputs (J-STIM at the connector, J-AUX at the pin node) → u_th; TC-SYS-009-02 report | probe 180 MHz, stamps 1 MHz, ring 2048, DMA ≤ 1000 ns, stim 10 MHz; intervals = hold + 0…1 ms; AUX width = hold ± 1 µs; counts exactly equal; RC delays recorded (limits ≤ 15 µs) |
 | HG-03 | [A] 10 min stream 80 Hz + 20 cmd/s | 0 frame_seq gaps, 0 CRC / length errors (PC and FW), every command answered |
-| HG-02 | [A] CLK_FALLBACK; MT-5 clock regression over the HG-03 soak; PSU-off block (spm 2500, 20 mm/s = 50 kHz) PWM input PSC 0 | no fallback; \|clock error\| + 100 ppm ≤ 1000 ppm; period 3600 ± 1 ticks |
+| HG-02 | [A] CLK_FALLBACK; MT-5 clock regression over the HG-03 soak; PSU-off block (spm 2500, 20 mm/s, **10 + 10 µs and 50 kHz set explicitly**, R-HIL-03) PWM input PSC 0 | no fallback; \|clock error\| + 100 ppm ≤ 1000 ppm; period 3600 ± 1 ticks |
 
-**PSU-off pulse block** (HG-29 d, HG-02 c, HG-08 a, HG-18 part A): the session asks to switch the 48 V PSU off, sets
-`motion.steps_per_mm` / `motion.v_unhomed_um_s` (and flips `drv.alm_active_level` if the unpowered driver reads ALM
-active) **in RAM only**, jogs un-homed, then sends REBOOT without SAVE and verifies that every parameter is back. Pulse
-trains above the physical speed envelope (50 kHz at 800 steps/mm = 62.5 mm/s) therefore never move the axis.
+**PSU-off pulse block** (D-45 c; HG-29 d, HG-02 c, HG-08 a, HG-18 part A): the session asks to switch the 48 V PSU off,
+sets `motion.steps_per_mm` / `motion.v_unhomed_um_s` (and flips `drv.alm_active_level` if the unpowered driver reads
+ALM active) and, for the 50 kHz trials, `motion.pulse_high_ns` / `motion.pulse_low_min_ns` 10 000 then
+`motion.max_step_rate_hz` 50 000 (R-HIL-03; widths first because of hard rule H3) **in RAM only**, jogs un-homed, then
+sends REBOOT without SAVE and verifies that every parameter is back. Pulse trains above the physical speed envelope
+therefore never move the axis.
 
 ### Phase 2 — driver powered, direct 3.3 V drive, no specimen
 | Step | What happens | Expected |
@@ -119,7 +123,7 @@ trains above the physical speed envelope (50 kHz at 800 steps/mm = 62.5 mm/s) th
 | HG-10cd | [M] **MCU held in reset** (B2 held / NRST to GND) + E-stop pressed → shaft free; M-1 across R_E; M-3 PA4; M-4 ENA+; release → holding (D-13); MCU running: press → FW ESTOP + ENA disabled; M-2a/c; release → still free; ESTOP_CLEAR + ENABLE → holding | M-1 ≈ 0.7 V (≥ 7 mA); M-3 ≤ 3.4 V always; M-4 4.0…4.6 V pressed; M-2a ≈ 0 mA, M-2c ≤ 13 mA; **must PASS before any bypass (§6.8 P-2)** |
 | HG-28 | [A] un-homed jog 1 mm/s × 3 s; [M] direction (+x away from START?), caliper travel; [A] HOME; [M] confirm, [A] HOME with `motion.dir_invert` inverted (runs to the END switch at ≤ 5 mm/s), restore, re-HOME; [M] SAVE if dir_invert changed | direction correct (else dir_invert flipped and repeated); scale ± 10 %; HOMED; inverted → HOME_WIRING / HOME_NOT_FOUND within `home.max_travel_um` |
 | HG-07 | [J] J-EVT ← PA3 (RX); [A] DISABLE ([M] shaft free) → probe on the ENABLE frame (PSC 1799) → JOG during settle refused (E_BUSY 2) → [M] holding → first PUL stamp | first PUL/DIR − ENA edge ≥ 500 ms (u ≈ 12 µs) |
-| HG-08 | [A] PSU-off 50 kHz block, PWM input PSC 1 over ≥ 10⁵ pulses; [J] J-EVT ← DIR; [A] 100 one-step reversals (MOVE_ABS ± 1 step): MT-3 trigger on DIR (PSC 17) + MT-4 stamps | high ≥ 10 µs, low ≥ 10 µs, period ≥ 20 µs (u 11 ns); DIR → next PUL ≥ 20 µs (≈ 20 µs + first ramp period ≈ 5 ms from rest) |
+| HG-08 | [A] PSU-off blocks, PWM input PSC 1 over ≥ 10⁵ pulses: **a1** dict-6 defaults (12.5 + 12.5 µs, 40 kHz, spm 2000), **a2** explicit 10 + 10 µs at 50 kHz (spm 2500); [J] J-EVT ← DIR; [A] 100 one-step reversals (MOVE_ABS ± 1 step): MT-3 trigger on DIR (PSC 17) + MT-4 stamps | a1: high ≥ 10 µs, low ≥ 10 µs, period ≥ 20 µs (driver minimum, u 11 ns) and = configured ± 1 TIM2 tick; a2: = configured ± 1 TIM2 tick; DIR → next PUL ≥ 20 µs (≈ 20 µs + first ramp period ≈ 5 ms from rest) |
 | HG-09 | [A] 100 random MOVE_ABS (10…150 mm, 1…30 mm/s), 10 jogs with 2 reversals (segments from PUL / DIR stamps), 100 random STOP 0 / STOP 1 / HALT; [M] caliper on 5 moves | MT-2 = \|Δpos_steps\| every time (± 1 only with POS_UNCERTAIN); caliper = commanded ± (0.02 mm + 1 step) |
 | BENCH-ENTRY | **§6.8 P-1…P-6** (below) | P-5: ESTOP_OPEN 0 idle, 1 during a STIM hold |
 | HG-10a | [A] 100 STIM trials: home → 7 mm → jog 30 mm/s 350…650 ms → STIM 20 ms on the E-stop sense; probe TRIGGER PSC 17 (CCR2 = last PUL, CCR3 = ENA) | last PUL ≤ 100 µs, ENA ≤ 1 ms (u 0.1 µs + u_th E-stop ≤ 1 µs); ESTOP latched, ENA disabled, HOMED cleared; MT-2 = Δpos (± 1 with POS_UNCERTAIN) |
@@ -177,8 +181,8 @@ The same steps without P-2 apply to the STIM trials on START / END (HG-11): the 
   step (bench entry failures skip HG-10a; BENCH-EXIT still runs).
 - `abort` / Ctrl+C → HALT, report written, exit code 3. Resume with `--from`.
 - A lost USB link (Nucleo power cycle in HG-15) is handled by the step itself (port closed / re-opened).
-- Stop-guard: the link waits 25 ms after STOP / HALT / PAUSE before sending a motion command — workaround for
-  **DEF-M3-01** (stale sniffed-stop hold, §9); remove when A's fix is verified (`Link.stop_guard_ms = 0` reproduces it).
+- Stop-guard (`Link.stop_guard_ms`, 25 ms wait after STOP / HALT / PAUSE before a motion command) was the workaround
+  for DEF-M3-01; **off (0) since A's fix in 2d36eec** (verified at M3: reproducer 3/3 pass, dry run without the guard).
 
 ## 7. What stays manual (no automation possible)
 Inspection and photos (HG-01, -19, -20, -23, -31), all DMM readings (HG-01, -06, -10 d M-1…M-4, -16, -20 M-5, -23,
@@ -194,19 +198,18 @@ spring, PAUSE), world-position readings stand in for caliper / dial, DMM / inspe
 *dry-run default* and stay MANUAL. Not in the twin model: J-AUX stamps, DWT (HW_MEAS_DWT), RC / threshold delays, the
 D-42 NO contact, ISR latencies (the twin reacts at the event instant). Latest dry-run report: `dryrun/` in this folder.
 
-## 9. Deviations from FW_test_plan v0.4.1 and open items (for the Orchestrator / PO before the gate)
-| ID | Item | Proposal / owner |
+## 9. Decisions, findings and their status (v0.2)
+| ID | Item | Status |
 |---|---|---|
-| OI-E-HG-01 | HG-10 c text: "release → holding again only after the MCU runs and ENABLE is sent" holds only with the MCU running; with the MCU still in reset the ENA pull-down re-enables the driver at release (D-13, wiring §2.1) | runbook expects: in reset → holding at release; running → free until ESTOP_CLEAR + ENABLE (E: plan v0.4.2) |
-| OI-E-HG-02 | §6.8 P-1 "50 mm window in mid-travel": every E-stop trial clears HOMED and un-homed motion is ≤ 2 mm/s (D-43 b), so each of the 100 trials re-homes; window **5…55 mm next to START** keeps that short (START switch connected as backstop) | PO, with the §6.8 approval |
-| OI-E-HG-03 | 50 kHz pulse trains (HG-02 c, HG-08 a, HG-18 A) and the 10 kHz train (HG-29 d) exceed the physical speed envelope (62.5 mm/s at 800 steps/mm) → run **with the 48 V PSU off**, un-homed, RAM parameters, REBOOT restore (the opto load on the nodes is unchanged) | PO / Orchestrator accept |
-| OI-E-HG-04 | HG-04 a "STIM into the E-stop sense during the erase" is not realisable: DIAG_MEAS received during a SAVE executes after the flash op (D-37 a) and the STIM delay is ≤ 1 ms when idle → **real press** on the predicted erase SAVE (32-slot log). Alternative: a STIM pre-delay op parameter (C + A) | Orchestrator |
-| OI-E-HG-05 | Limits equal to the design value (PUL high = 10.000 µs vs ≥ 10 µs, period = 20.000 µs vs ≥ 20 µs, HG-08) can never PASS under rule 4 (always INCONCLUSIVE) | decide the limit: driver datasheet minimum (e.g. 2.5 µs) or configured value − 1 TIM2 tick, or §6.6 acceptance (E plan v0.4.2 + Orchestrator) |
-| OI-E-HG-06 | HG-29 c "programmed 10.000 µs pulse" — STIM_RUN hold has 1 ms resolution; self-test uses hold 10 ms and stamp/probe consistency instead; MT-3 accuracy shown by HG-29 d / HG-02 c PWM periods | E plan v0.4.2 |
-| OI-E-HG-07 | HG-07 needs the ENA edge in the t_us domain: done via an RX-triggered probe + EVT stamp of the trigger; simpler on the board: allow **J-EVT ← ENA node** in the selector list (wiring §6.1) | A (wiring), optional |
-| DEF-HG-01 (A, Medium, measurement image only) | `02_FW/src/hal/f446/meas_f4.c` `TIM8_CC_IRQHandler` / `probe_arm`: the first CC2 capture after arming PWM_INPUT enters the statistics (CCR2 = time since arming, CCR1 stale) → `pwm_min_period` / `pwm_min_high` invalid → HG-02 c / HG-08 a / HG-29 d min values unusable (scripts detect it and report INCONCLUSIVE). Fix: discard the first capture after arming (skip flag), also in a re-arm | A before the gate |
-| OBS-E-HG-01 (C) | twin DIAG_MEAS model: RX probe trigger at the END of a received byte (board: start bit) | C (model), scripts already compensate |
-| OBS-E-HG-02 (C) | twin `_stim`: idle gap of `hold` after every pulse; board (`meas_f4.c`): next delay starts at the end of the hold | C (align the model) |
-| OBS-E-HG-03 (C) | twin: input → FW reaction at the same virtual instant, edges of the reaction (ENA) captured as 0 ticks (CCR3 = 0 = "no capture") | C (add a nominal ISR latency or document) |
-| OBS-E-HG-05 (C) | twin PWM_INPUT: `pwm_min_p` stays 0 (min initialised only while `pwm_n` = 0, but `pwm_n` counts falling edges) | C |
-| DEF-M3-01 (A, Medium, FW core) | stale sniffed-stop hold: a STOP / HALT / PAUSE frame dispatched by the main loop before the 1 kHz sniffer scanned it is sniffed afterwards → hold pending for an already dispatched frame → any MOVE_ABS / JOG / HOME accepted within 20 ms is discarded with STOPPED(old cause) (`02_FW/src/core/link.c` link_tick / dispatch, `02_FW/src/pure/stop_sniff.c` hold_set). Reproducer: `02_FW/test/twin/test_val_twin_m3_sniffhold.py` (strict xfail ×3). Fix: remember the last dispatched sniffed TYPE/SEQ and do not set a hold for it (or set the hold only for frames the parser has not consumed) | A |
+| OI-E-HG-01 … -07 | HG-10 c wording, §6.8 window, PSU-off pulse trains, HG-04 a real press, pulse-timing margin, HG-29 c 10 ms hold, J-EVT ← ENA | **decided by D-45 (a)–(g)**, applied to FW_test_plan v0.4.2 and this runbook; (g) deferred / optional |
+| DEF-M3-01 (A) | stale sniffed-stop hold discarded motion starts ≤ 20 ms after a stop frame | **closed** (2d36eec, dispatched-before-sniffed queue; `test_val_twin_m3_sniffhold.py` 3/3 pass; stop guard removed) |
+| DEF-HG-01 (A) | first PWM-input capture after arming entered the statistics | **closed by inspection** (`meas_f4.c` `s_pwm_first`); target confirmation at HG-29 d / HG-02 c |
+| OBS-E-HG-01/02/05 (C) | twin RX trigger point, STIM spacing, PWM min | **fixed** in ICD v0.7.3 twin model; scripts use the board conventions for both |
+| OBS-E-HG-03 (C) | twin has no ISR latency | documented (captures report 1 tick); latency budgets are target-only |
+| R-HIL-01 (C review) | stale hard-coded dict hash | **fixed**: expected hash from `gen_params.load().hash` |
+| R-HIL-02 (C review) | approval matched as a substring | **fixed**: dedicated *approved* table row, whole-token cell match |
+| R-HIL-03 (C review / Orchestrator) | 50 kHz trials assumed the old defaults | **fixed**: 10 + 10 µs and 50 kHz set explicitly in the PSU-off block; HG-08 a1 runs the dict-6 defaults |
+| R-HIL-04 (C review, low) | twin compensations obsolete after the v0.7.3 model fixes (stimulus spacing, RX reference point, CCR3 = 0 fallback) | **fixed**: removed, board conventions for twin and board |
+| R-HIL-05 (C review, low) | `Link.stop_guard_ms` DEF-M3-01 workaround | **fixed**: default 0 |
+| R-HIL-06 (C review, info) | docstrings cited ICD v0.7.1 | **fixed**: v0.7.3 |
+| OBS-M3-HIL-01 (A, low) | PWM_INPUT has no overflow flag: a period > 65 535 probe ticks wraps silently | scripts arm only during cruise (periods ≪ 65 535 ticks at the PSC used); optional flag for A |

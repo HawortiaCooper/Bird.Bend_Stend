@@ -587,6 +587,7 @@ class SafetyStatus:
     load_input_reason: str | None = "no calibration"
     no_specimen_mode: bool = False
     trip: SwTrip | None = None
+    trips: tuple[SwTrip, ...] = ()          # every latched class (PULL / PUSH / TRAVEL_MIN / TRAVEL_MAX, SWD-M3-01)
 
 
 @dataclass(frozen=True)

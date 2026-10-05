@@ -285,6 +285,49 @@ class GuiGcPolicy(QObject):
             raise RuntimeError("GuiGcPolicy must be used in the GUI thread")
 
 
+class GcTrace:
+    """Process-wide record of every cyclic-GC collection (any thread, policy or automatic) through
+    ``gc.callbacks``: the last one (generation, end time, duration, thread) and the longest one. Diagnostics only
+    (MC3-4 / OBS-M3-R1: is a false LINK LOST caused by a long whole-process GC stall?). Cost: two clock reads per
+    collection."""
+
+    def __init__(self) -> None:
+        self._t0: dict[int, float] = {}
+        self.count = 0
+        self.last: tuple[int, float, float, str] | None = None     # (gen, t_end monotonic, duration ms, thread)
+        self.longest: tuple[int, float, float, str] | None = None
+
+    def callback(self, phase: str, info: dict[str, Any]) -> None:
+        ident = threading.get_ident()
+        if phase == "start":
+            self._t0[ident] = time.perf_counter()
+            return
+        t0 = self._t0.pop(ident, None)
+        if t0 is None:
+            return
+        rec = (int(info.get("generation", -1)), time.monotonic(), (time.perf_counter() - t0) * 1e3,
+               threading.current_thread().name)
+        self.count += 1
+        self.last = rec
+        if self.longest is None or rec[2] > self.longest[2]:
+            self.longest = rec
+
+    def describe(self, now: float | None = None) -> str:
+        now = time.monotonic() if now is None else now
+
+        def one(r: tuple[int, float, float, str] | None) -> str:
+            if r is None:
+                return "none"
+            return f"gen {r[0]} {r[2]:.1f} ms, ended {now - r[1]:.1f} s ago, thread {r[3]}"
+        return (f"last GC: {one(self.last)}; longest GC: {one(self.longest)}; collections {self.count}; "
+                f"automatic GC {'on' if gc.isenabled() else 'off'}")
+
+
+GC_TRACE = GcTrace()
+if not any(getattr(cb, "__self__", None).__class__.__name__ == "GcTrace" for cb in gc.callbacks):
+    gc.callbacks.append(GC_TRACE.callback)
+
+
 _POLICY: GuiGcPolicy | None = None
 
 

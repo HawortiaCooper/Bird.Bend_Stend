@@ -7,10 +7,11 @@ Supervisor reacts: STOP if moving, event).
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/core/liveness.py @37c87471 (simplified: clock-based, fault list).
 
-Implements: SAF-SW-003 (liveness-gated heartbeat), NFR-004
+Implements: SAF-SW-003 (liveness-gated heartbeat, tick-gap diagnostics MC3-4), NFR-004
 """
 from __future__ import annotations
 
+import collections
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from bend_stand.core.clock import MONOTONIC, Clock
 
 #: thresholds of §4.6 (ms): fault when exceeded (while moving: STOP)
 FAULT_LIMITS_MS: dict[str, int] = {"reader": 100, "pipeline": 200, "runner": 300, "gui": 2000}
+GAP_RECORD_NS = 20_000_000
 #: heartbeat gate (ms)
 GATE_LIMITS_MS: dict[str, int] = {"reader": 200, "pipeline": 300}
 
@@ -35,6 +37,7 @@ class LivenessMonitor:
         self.clock = clock
         self._lock = threading.Lock()
         self._beats: dict[str, int] = {}
+        self._gaps: dict[str, collections.deque[tuple[int, int]]] = {}    # (t_ns, gap_ns) of gaps > 20 ms (MC3-4)
         self._faults: list[LivenessFault] = []
         self._prev_hook: Callable | None = None
         self.on_fault: Callable[[LivenessFault], None] | None = None
@@ -42,7 +45,20 @@ class LivenessMonitor:
     def beat(self, name: str, now_ns: int | None = None) -> None:
         t = self.clock.monotonic_ns() if now_ns is None else now_ns
         with self._lock:
+            prev = self._beats.get(name)
             self._beats[name] = t
+            if prev is not None and t - prev > GAP_RECORD_NS:
+                self._gaps.setdefault(name, collections.deque(maxlen=128)).append((t, t - prev))
+
+    def longest_gaps(self, window_ns: int, now_ns: int | None = None) -> dict[str, float]:
+        """MC3-4: longest beat gap (ms) per thread within the last ``window_ns`` incl. the current open gap."""
+        now = self.clock.monotonic_ns() if now_ns is None else now_ns
+        out: dict[str, float] = {}
+        with self._lock:
+            for name, t in self._beats.items():
+                g = max([gap for ts, gap in self._gaps.get(name, ()) if now - ts <= window_ns] + [now - t])
+                out[name] = round(g / 1e6, 1)
+        return out
 
     def forget(self, name: str) -> None:
         with self._lock:

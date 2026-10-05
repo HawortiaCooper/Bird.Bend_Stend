@@ -64,7 +64,7 @@ def s_start(ctx: P.Ctx) -> None:
     ctx.data("images_commit", c.value)
     inf = ctx.L.info()
     ctx.data("info", inf)
-    ctx.check(hb.check_eq("param dict hash", inf["param_dict_hash"], "0xB7B0263F"))
+    ctx.check(hb.check_eq("param dict hash", inf["param_dict_hash"], P.DICT_HASH, "gen_params (R-HIL-01)"))
     ctx.check(hb.check_eq("protocol 1.0 / payload 1", (inf["proto_major"], inf["proto_minor"], inf["payload_version"]),
                           (1, 0, 1)))
     want_uid = ctx.cfg.get("board_uid")

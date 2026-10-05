@@ -8,7 +8,7 @@
 * Presets: combo of ``marks.list_presets()`` (paths); [Load] → ``marks.load_preset(path)`` fills the form;
   [Save as…] → ``SafeFileDialog`` (STOP inside) → ``marks.save_preset(path)``.
 * 3-point bend (optional, off by default): span L, width b, thickness h → ``SessionSettings.bend3p``
-  (``Bend3pGeometry``, B5-11) via ``session.set``; issues shown verbatim. Enables the derived channels σ / ε.
+  (``Bend3pGeometry``, B5-11 / B5-19) via ``session.set``; issues shown verbatim. Enables the derived channels σ / ε.
 * Automatic snapshot (read-only, added by the backend to every recording and report): board configuration,
   calibration, tare, limits, versions — built from ``status()`` and ``limits.get()`` for display.
 * While recording: footer "edits are logged as MARK_EDIT rows; final marks written at stop"; ``marks.edited`` rows
@@ -46,8 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from bend_stand import __version__ as SW_VERSION
-from bend_stand.core import api
-from bend_stand.core.api import TestMarks
+from bend_stand.core.api import Bend3pGeometry, TestMarks
 from bend_stand.gui.dialogs.safe_dialog import get_save_file_name
 from bend_stand.gui.format import NA, fmt_hex, fmt_value, fmt_version
 
@@ -189,12 +188,7 @@ class MarksTab(QWidget):
         self.bend_issue.setObjectName("bend3pIssue")
         self.bend_issue.setStyleSheet("color: #a00000;")
         row.addWidget(self.bend_issue, 1)
-        self._geom_cls = getattr(api, "Bend3pGeometry", None)
-        box.setEnabled(self._geom_cls is not None)
-        if self._geom_cls is None:
-            box.setToolTip("3-point-bend geometry: backend support pending (B5-11)")
-        else:
-            self._show_bend3p()
+        self._show_bend3p()
         return box
 
     def _show_bend3p(self) -> None:
@@ -209,11 +203,9 @@ class MarksTab(QWidget):
 
     def apply_bend3p(self) -> bool:
         """``session.set(replace(s, bend3p=Bend3pGeometry(L, b, h) | None))``; ERROR issues shown, nothing applied."""
-        if self._geom_cls is None:
-            return False
         geom = None
         if self.bend_en.isChecked():
-            geom = self._geom_cls(**{k: float(sp.value()) for k, sp in self.bend_spins.items()})
+            geom = Bend3pGeometry(**{k: float(sp.value()) for k, sp in self.bend_spins.items()})
         try:
             s = self._backend.session.get()
             issues = list(self._backend.session.set(dataclasses.replace(s, bend3p=geom)) or [])

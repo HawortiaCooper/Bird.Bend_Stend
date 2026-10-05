@@ -405,3 +405,26 @@ def test_tc_sw_plt_001_01_runtime_and_requirements_inspection():
                       if "==" in ln and not ln.startswith("#")]:
         assert md.version(name.strip()) == ver.strip(), name
     _ = math
+
+
+_SEEN_DATA_DIRS: list[str] = []
+
+
+@pytest.mark.req("SW-PLT-001", "SW-CAL-004")
+@pytest.mark.parametrize("run", [1, 2])
+def test_tc_sw_plt_001_02_private_data_dir_per_test(run, tmp_path):
+    """OBS-D-M3-01 (B's root conftest): every test runs with its own ``BEND_STAND_DATA_DIR`` (never %APPDATA%), the
+    backend resolves its data folder there, and two tests never share it (calibration / session files cannot leak
+    between tests → order independence)."""
+    # Verifies: SW-PLT-001, SW-CAL-004
+    import os
+
+    from bend_stand.core.paths import app_data_dir
+
+    d = os.environ.get("BEND_STAND_DATA_DIR")
+    assert d, "BEND_STAND_DATA_DIR not set for this test"
+    appdata = os.environ.get("APPDATA", "")
+    assert not (appdata and os.path.normcase(os.path.abspath(d)).startswith(os.path.normcase(os.path.abspath(appdata))))
+    assert os.path.normcase(str(app_data_dir())) == os.path.normcase(os.path.abspath(d))
+    assert d not in _SEEN_DATA_DIRS
+    _SEEN_DATA_DIRS.append(d)

@@ -206,7 +206,7 @@ def test_speed_accel_caps_and_margin_warning(manual, window, connected_fake, qtb
     not applied (no move sent); the SAF-SW-006 WARN item of motion.check is shown verbatim."""
     tick(window, 3)
     caps = manual.caps_label.text()
-    assert "travel 30.000" in caps and "loaded 20.000" in caps and "step rate 62.500" in caps
+    assert "travel 30.000" in caps and "loaded 20.000" in caps and "step rate 50.000" in caps
     manual.speed_spin.setValue(50.0)
     assert "above the cap" in manual.param_msg.text() and "ffc8c8" in manual.speed_spin.styleSheet()
     qtbot.mouseClick(next(b for b in manual.step_buttons if b.text() == "+1"), Qt.MouseButton.LeftButton)

@@ -67,11 +67,15 @@ def result_parts(result: Any) -> tuple[list[tuple[str, str]], list[str], list[li
 
     A mapping (or dataclass) gives its scalar entries as the summary; its first list of mappings (e.g. the load
     points) becomes the table. A list of mappings is the table itself. Values are shown verbatim (formatted)."""
+    table = getattr(result, "point_table", None)          # LoadCalResult.point_table() (B5-20)
     r = _plain(result)
     summary: list[tuple[str, str]] = []
     rows: list[Mapping[str, Any]] = []
     if r is None:
         return [], [], []
+    if callable(table) and isinstance(r, Mapping):
+        rows = [dict(x) for x in table()]
+        r = {k: v for k, v in r.items() if k not in ("points", "residuals")}   # both are in the point table
     if isinstance(r, Mapping):
         for k, v in r.items():
             v = _plain(v)
@@ -116,28 +120,38 @@ FIT_K_KEYS = ("K", "k", "k_n_per_count")
 FIT_B_KEYS = ("B", "b", "b_n")
 
 
-def fit_points(result: Any) -> tuple[list[float], list[float], float | None, float | None]:
-    """(raw, force, K, B) for the fit mini plot when the result carries them (display only)."""
+def _point_rows(result: Any) -> list[Mapping[str, Any]]:
+    table = getattr(result, "point_table", None)
+    if callable(table):
+        return [dict(x) for x in table()]
     r = _plain(result)
-    if not isinstance(r, Mapping):
-        return [], [], None, None
-    _s, headers, _t = result_parts(r)
-    xs: list[float] = []
-    ys: list[float] = []
-    xk = next((k for k in FIT_X_KEYS if k in headers), None)
-    yk = next((k for k in FIT_Y_KEYS if k in headers), None)
-    if xk and yk:
+    if isinstance(r, Mapping):
         for v in r.values():
             v = _plain(v)
             if isinstance(v, (list, tuple)) and v and all(isinstance(_plain(x), Mapping) for x in v):
-                for p in v:
-                    p = _plain(p)
-                    try:
-                        xs.append(float(p[xk]))
-                        ys.append(float(p[yk]))
-                    except (KeyError, TypeError, ValueError):
-                        pass
-                break
+                return [_plain(x) for x in v]
+    return []
+
+
+def fit_points(result: Any) -> tuple[list[float], list[float], float | None, float | None]:
+    """(raw, force, K, B) for the fit mini plot when the result carries them (``LoadCalResult.points``, B5-20) —
+    display only."""
+    r = _plain(result)
+    if not isinstance(r, Mapping):
+        return [], [], None, None
+    rows = _point_rows(result)
+    xs: list[float] = []
+    ys: list[float] = []
+    if rows:
+        xk = next((k for k in FIT_X_KEYS if k in rows[0]), None)
+        yk = next((k for k in FIT_Y_KEYS if k in rows[0]), None)
+        if xk and yk:
+            for p in rows:
+                try:
+                    xs.append(float(p[xk]))
+                    ys.append(float(p[yk]))
+                except (KeyError, TypeError, ValueError):
+                    pass
     k = next((float(r[n]) for n in FIT_K_KEYS if isinstance(r.get(n), (int, float))), None)
     b = next((float(r[n]) for n in FIT_B_KEYS if isinstance(r.get(n), (int, float))), None)
     return xs, ys, k, b

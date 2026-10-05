@@ -15,13 +15,14 @@ TC: TC-SYS-009-02
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 FW = Path(__file__).resolve().parents[2]
-BUILD = FW / ".pio" / "build"
+BUILD = Path(os.environ.get("PLATFORMIO_BUILD_DIR", FW / ".pio" / "build"))   # private build dir of the run
 TOOL = Path.home() / ".platformio" / "packages" / "toolchain-gccarmnoneeabi" / "bin" / "arm-none-eabi-objdump.exe"
 ALLOWED = {"src/hal/f446/meas_f4.c.o", "src/core/build_id.c.o"}
 

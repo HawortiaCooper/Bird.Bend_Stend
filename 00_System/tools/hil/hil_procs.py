@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import hil_budget as hb
-from hil_link import PBYKEY, REPO, Link, LinkError, NOT_IN_BUILD  # (also puts 00_System/tools on sys.path)
+from hil_link import DICT_HASH, PBYKEY, REPO, Link, LinkError, NOT_IN_BUILD  # (also puts 00_System/tools on sys.path)
 from hil_operator import Answer, Operator
 
 import ref_codec as rc  # noqa: E402
@@ -369,7 +369,7 @@ def verify_image(ctx: Ctx, image: str) -> None:
     ctx.data("info", inf)
     feats = inf["features"]
     ctx.check(hb.info("build", inf["build"]))
-    ctx.check(hb.check_eq("param dict hash", inf["param_dict_hash"], "0xB7B0263F", "ICD v0.7.1 dict 5"))
+    ctx.check(hb.check_eq("param dict hash", inf["param_dict_hash"], DICT_HASH, "params.yaml via gen_params (R-HIL-01)"))
     if image == "release":
         ctx.check(hb.check_true("FEAT_HW_MEAS = 0", "HW_MEAS" not in feats, "release: no HW_MEAS", feats))
         r = L.meas.raw("INFO")
@@ -483,12 +483,10 @@ def hg29(ctx: Ctx) -> None:
         ctx.check(hb.check_true("c EVT stamps per pulse", False, f"{n_p} rising-edge stamps", ts))
     else:
         iv = [hb.sdiff32(b, a) for a, b in zip(ts, ts[1:])]
-        # board (meas_f4.c): the next pulse's random delay starts at the end of the hold (interval = hold + delay);
-        # twin model (twin.py _stim): an idle gap of `hold` follows every pulse (interval = 2·hold + delay) — OBS-E-HG-02
-        k = 2 if ctx.twin else 1
-        ctx.check(hb.check_range(f"c EVT interval = {k}·hold + random delay", iv, k * hold * 1000, k * hold * 1000 + 1000,
-                                 hb.u_stamp_pair_us(mi["dma_latency_ns"]), "µs",
-                                 "delay 0…1 ms (step timer stopped)" + (" — twin model spacing" if ctx.twin else "")))
+        # board (meas_f4.c) and twin model since ICD v0.7.3 (OBS-E-HG-02 fixed): the next pulse's random delay starts
+        # at the end of the hold -> interval = hold + delay
+        ctx.check(hb.check_range("c EVT interval = hold + random delay", iv, hold * 1000, hold * 1000 + 1000,
+                                 hb.u_stamp_pair_us(mi["dma_latency_ns"]), "µs", "delay 0…1 ms (step timer stopped)"))
         lo, hi = hb.sdiff32(t1, ts[0]), hb.sdiff32(t2, ts[0])
         cnt_us = pr["cnt"] * tick
         ok = (lo - tick - 2) <= cnt_us <= (hi + tick + 2) and "WINDOW_OVERFLOW" not in pr["flags"]
@@ -580,17 +578,24 @@ def rc_delay(ctx: Ctx, src: str) -> None:
 
 
 # ---------------------------------------------------------------------------------------- PSU-off pulse block
+EXPLICIT_50K = (10_000, 10_000, 50_000)    # R-HIL-03 (Orchestrator): 50 kHz trials set 10 + 10 µs and 50 kHz explicitly
+
+
 @contextmanager
-def psu_off_pulses(ctx: Ctx, spm_val: float, v_unhomed: int, psu_back_on: bool = False):
+def psu_off_pulses(ctx: Ctx, spm_val: float, v_unhomed: int, psu_back_on: bool = False,
+                   timing: tuple[int, int, int] | None = None):
     """Pulse trains above the physical speed envelope are run with the 48 V PSU OFF (OI-E-HG-03): the opto inputs
     are fed from the MCU side, so the electrical load on the PUL / DIR / ENA nodes is unchanged, nothing moves.
     Un-homed JOG (no homing possible without motion) with temporary RAM parameters; a REBOOT without SAVE restores
-    the stored parameters afterwards (verified)."""
+    the stored parameters afterwards (verified). `timing` = (pulse_high_ns, pulse_low_min_ns, max_step_rate_hz) set
+    explicitly for the block (widths first, then the rate: hard rule H3 is checked on every write); None = the
+    dictionary defaults (dict 6, D-45 e: 12.5 + 12.5 µs, 40 kHz)."""
     L, op = ctx.L, ctx.op
     op.instruct("PSU-OFF", "Switch the 48 V driver PSU OFF (mains switch). Driver signal cable stays connected. "
                 "Confirm the motor shaft turns freely (driver unpowered).", twin=lambda tw: tw.act("drv_power", on=False))
     clear_latches(ctx)
-    keys = ("motion.steps_per_mm", "motion.v_unhomed_um_s", "drv.alm_active_level")
+    keys = ("motion.steps_per_mm", "motion.v_unhomed_um_s", "drv.alm_active_level", "motion.pulse_high_ns",
+            "motion.pulse_low_min_ns", "motion.max_step_rate_hz")
     orig = {k: L.get(k) for k in keys}
     L.wait(100)
     st = L.status()
@@ -599,8 +604,15 @@ def psu_off_pulses(ctx: Ctx, spm_val: float, v_unhomed: int, psu_back_on: bool =
         L.wait(50)
         ctx.note("driver unpowered reads ALM active -> drv.alm_active_level flipped in RAM for the PSU-off block "
                  "(D-28 start-block would refuse the pulse trains); restored by the REBOOT")
+    if timing is not None:
+        L.set_ok("motion.pulse_high_ns", timing[0])
+        L.set_ok("motion.pulse_low_min_ns", timing[1])
+        L.set_ok("motion.max_step_rate_hz", timing[2])
     L.set_ok("motion.steps_per_mm", spm_val)
     L.set_ok("motion.v_unhomed_um_s", v_unhomed)
+    eff = (int(L.get("motion.pulse_high_ns")), int(L.get("motion.pulse_low_min_ns")), int(L.get("motion.max_step_rate_hz")))
+    ctx.note(f"PSU-off block: {spm_val:g} steps/mm, v_unhomed {v_unhomed} µm/s, pulse {eff[0]} + {eff[1]} ns, "
+             f"cap {eff[2]} Hz" + (" (explicit, R-HIL-03)" if timing else " (dictionary defaults)"))
     enable(ctx)
     try:
         yield orig
@@ -719,7 +731,7 @@ def hg02(ctx: Ctx) -> None:
             ctx.note(f"MT-5 span {span:.0f} s < 600 s (quick mode)")
     else:
         ctx.check(hb.not_measured("b device clock error vs PC (MT-5)", "≤ 0.1 % (u 0.01 %)", "no soak samples"))
-    with psu_off_pulses(ctx, spm_val=2500.0, v_unhomed=20000):
+    with psu_off_pulses(ctx, spm_val=2500.0, v_unhomed=20000, timing=EXPLICIT_50K):
         pr = pwm_measure(ctx, 20000, 500, 0)
         ctx.data("c_probe", pr)
         pwm_artifact_check(ctx, pr, "c")
@@ -963,23 +975,37 @@ def hg08(ctx: Ctx, label: str = "") -> None:
     L, M = ctx.L, ctx.L.meas
     pre = f"{label} " if label else ""
     ctx.jumpers("J-PUL-A, J-DIR fitted; J-EVT <- DIR node")
-    # (a) ≥ 1e5 pulses at 50 kHz, PWM input PSC 1 (11.1 ns), PSU off (OI-E-HG-03)
+    # (a) ≥ 1e5 pulses at the step-rate cap, PWM input PSC 1 (11.1 ns), PSU off (D-45 c). Two series:
+    #   a1 dictionary defaults (dict 6, D-45 e: 12.5 + 12.5 µs, 40 kHz) against the driver minimum (10 µs, ≤ 50 kHz);
+    #   a2 explicit 10 + 10 µs at 50 kHz (R-HIL-03): pulses as configured (exact to 1 TIM2 tick) — the driver
+    #      minimum itself, so only "as configured" can be decided there (rule 4 at an equal limit is inconclusive).
     psc = 1
     tick = hb.probe_tick_us(psc)
-    with psu_off_pulses(ctx, spm_val=2500.0, v_unhomed=20000, psu_back_on=True):
-        pr = pwm_measure(ctx, 20000, ctx.cfg["pwm_pulses"] / 50.0 + 100, psc)
-    ctx.data("a_probe", pr)
-    pwm_artifact_check(ctx, pr, f"{pre}a")
-    hi_max = pr["pwm_max_high"] * tick
-    p_min = (pr["pwm_max_period"] if pr["artifact_p"] else pr["pwm_min_period"]) * tick
-    ctx.check(hb.check_ge(f"{pre}a pulses measured", [pr["pwm_n"]], ctx.cfg["pwm_pulses"], 0, "pulses"))
-    if pr["artifact_h"]:
-        ctx.check(hb.Check(f"{pre}a PUL high", "min − u ≥ 10 µs", hb.INCONCL, hi_max, "µs", tick, 10.0, pr["pwm_n"],
-                           "min high corrupted by the first capture; value shown = max high (DEF-HG-01)"))
-    else:
-        ctx.check(hb.check_ge(f"{pre}a PUL high", [pr["pwm_min_high"] * tick], 10.0, tick, "µs"))
-    ctx.check(hb.check_ge(f"{pre}a PUL low (period_min − high_max)", [p_min - hi_max], 10.0, 2 * tick, "µs"))
-    ctx.check(hb.check_ge(f"{pre}a step rate ≤ 50 kHz (period)", [p_min], 20.0, tick, "µs"))
+    t2 = 1e6 / 90e6                                    # one TIM2 tick, µs (PUL generation resolution)
+    for tag, timing, spm_v in (("a1 defaults", None, 2000.0), ("a2 50 kHz explicit", EXPLICIT_50K, 2500.0)):
+        with psu_off_pulses(ctx, spm_val=spm_v, v_unhomed=20000, psu_back_on=tag.startswith("a2"),
+                            timing=timing) as orig:
+            hi_ns, lo_ns, rate = (int(L.get(k)) for k in ("motion.pulse_high_ns", "motion.pulse_low_min_ns",
+                                                          "motion.max_step_rate_hz"))
+            v_cap = min(20000, rate * 1000 // int(spm_v))
+            pr = pwm_measure(ctx, v_cap, ctx.cfg["pwm_pulses"] * 1000.0 / rate + 100, psc)
+        ctx.data(f"{tag}_probe", dict(pr, config={"pulse_high_ns": hi_ns, "pulse_low_min_ns": lo_ns, "rate_hz": rate}))
+        pwm_artifact_check(ctx, pr, f"{pre}{tag}")
+        p_min = (pr["pwm_max_period"] if pr["artifact_p"] else pr["pwm_min_period"]) * tick
+        hi_min = (pr["pwm_max_high"] if pr["artifact_h"] else pr["pwm_min_high"]) * tick
+        hi_max = pr["pwm_max_high"] * tick
+        ctx.check(hb.check_ge(f"{pre}{tag} pulses measured", [pr["pwm_n"]], ctx.cfg["pwm_pulses"], 0, "pulses"))
+        if timing is None:
+            ctx.check(hb.check_ge(f"{pre}{tag} PUL high ≥ driver min", [hi_min], 10.0, tick, "µs",
+                                  note=f"configured {hi_ns / 1000:g} µs"))
+            ctx.check(hb.check_ge(f"{pre}{tag} PUL low ≥ driver min (period_min − high_max)", [p_min - hi_max], 10.0,
+                                  2 * tick, "µs"))
+            ctx.check(hb.check_ge(f"{pre}{tag} step rate ≤ driver max 50 kHz (period)", [p_min], 20.0, tick, "µs",
+                                  note=f"cap {rate} Hz"))
+        ctx.check(hb.check_range(f"{pre}{tag} PUL high as configured", [hi_min, hi_max], hi_ns / 1000 - t2,
+                                 hi_ns / 1000 + t2, tick, "µs"))
+        ctx.check(hb.check_range(f"{pre}{tag} period at the cap as configured", [p_min], 1e6 / rate - t2,
+                                 1e6 / rate + t2, tick, "µs"))
     # (b) DIR setup on ≥ 100 reversals: 1-step MOVE_ABS back and forth, MT-3 trigger on DIR (fine) + MT-4 (coarse)
     ready(ctx, 20_000)
     x0 = L.status()["pos_um"]
@@ -1272,9 +1298,7 @@ def estop_trial(ctx: Ctx, real: bool, i: int) -> dict:
             phase = hb.sdiff32(t_evt, before[0]) / period_us
     after = any(hb.sdiff32(p, t_evt) > 0 for p in puls) if (t_evt is not None and puls) else None
     last_pul = pr["ccr2"] * tick if pr["ccr2"] else 0.0
-    ena = pr["ccr3"] * tick if pr["ccr3"] else None
-    if ena is None and ctx.twin and "ENA_DISABLED" in st["io"]:
-        ena = 0.0       # twin: the FW reaction runs at the event instant (zero-latency model, OBS-E-HG-03)
+    ena = pr["ccr3"] * tick if pr["ccr3"] else None     # CCR3 = 0 = no capture (twin captures report ≥ 1 tick, v0.7.3)
     tr = {"i": i, "real": real, "event": bool(ev), "flags": pr["flags"], "last_pul_us": last_pul, "ena_us": ena,
           "pul_after_event": after, "phase": phase, "counter": c, "dpos": abs(st["pos_steps"] - s0),
           "pos_uncertain": "POS_UNCERTAIN" in st["status"],
@@ -1296,7 +1320,7 @@ def eval_estop(ctx: Ctx, trials: list[dict], tag: str) -> None:
     if len(enas) < len(ok_tr):
         ctx.note(f"{tag}: {len(ok_tr) - len(enas)} trials without an ENA capture")
     ctx.check(hb.check_le(f"{tag} ENA disabled after the E-stop edge", enas, 1000.0, u, "µs",
-                          note="twin: zero-latency reaction model, CCR3 = 0 taken as 0 µs (OBS-E-HG-03)" if ctx.twin else ""))
+                          note="twin: zero-latency reaction model (captures report 1 tick, OBS-E-HG-03): order, not latency" if ctx.twin else ""))
     ctx.check(hb.check_true(f"{tag} CCR2 consistent with PUL stamps", all((t["last_pul_us"] > 0) == bool(t["pul_after_event"])
                                                                           for t in ok_tr if t["pul_after_event"] is not None),
                             "CCR2 = 0 <=> no PUL stamp after the event"))
@@ -1435,11 +1459,7 @@ def hg13(ctx: Ctx) -> None:
     v = ctx.cfg["trial_v_um_s"]
     res: dict[str, list[float]] = {"STOP": [], "HALT": []}
     bad = []
-    if ctx.twin:
-        baud = 921_600.0
-        byte_us = hb.uart_frame_us(1, baud)
-    else:
-        baud = ctx.cfg["baud_actual"]
+    baud = 921_600.0 if ctx.twin else ctx.cfg["baud_actual"]
     for kind in ("STOP", "HALT"):
         n_bytes = 9 if kind == "STOP" else 8
         for i in range(ctx.cfg["n_pc_stop"]):
@@ -1459,8 +1479,8 @@ def hg13(ctx: Ctx) -> None:
             if "TRIGGERED" not in pr["flags"] or "WINDOW_OVERFLOW" in pr["flags"]:
                 bad.append((kind, i, pr["flags"]))
                 continue
-            # target: the trigger is the start bit of byte 0; the twin model triggers at the END of byte 0
-            ref = (n_bytes - 1) * byte_us if ctx.twin else hb.uart_frame_us(n_bytes, baud)
+            # the trigger is the start bit of byte 0 (board; twin model since ICD v0.7.3, OBS-E-HG-01 fixed)
+            ref = hb.uart_frame_us(n_bytes, baud)
             res[kind].append(max(pr["ccr2"] * tick - ref, 0.0) if pr["ccr2"] else 0.0)
             if kind == "HALT":
                 L.cmd("HALT_CLEAR")
@@ -1470,9 +1490,6 @@ def hg13(ctx: Ctx) -> None:
                               note=f"MT-3 PSC 17 on RX, frame end computed at {baud:.0f} Bd"))
     ctx.check(hb.check_eq("trials with a valid RX trigger", sum(len(v) for v in res.values()), 2 * ctx.cfg["n_pc_stop"],
                           note=str(bad[:3])))
-    if ctx.twin:
-        ctx.note("twin DIAG_MEAS model triggers the RX probe at the end of each received byte (start bit on the board); "
-                 "the evaluation uses the matching reference point (OBS-E-HG-01)")
     ctx.check(hb.na("Pause/Break key -> last edge (NFR-003)", "≤ 100 ms p95", "M3 (SW hotkey on the reference PC)"))
 
 
@@ -1566,7 +1583,7 @@ def hg04(ctx: Ctx) -> None:
             hit = False
             if ev is not None and t_evt is not None:
                 hit = 0 <= hb.sdiff32(ev["t_us"], t_evt) <= st["nvm_save_ms"] * 1000
-            ena = pr["ccr3"] * tick if pr["ccr3"] else (0.0 if ctx.twin and "ENA_DISABLED" in L.status()["io"] else None)
+            ena = pr["ccr3"] * tick if pr["ccr3"] else None
             tr.update({"estop": es is not None, "ena_us": ena, "in_window": hit,
                        "flags": pr["flags"]})
             release_estop_input(ctx)
@@ -1864,7 +1881,7 @@ def hg18(ctx: Ctx) -> None:
     for s in range(23):
         M.dwt(s, reset=True)
     # part A: 50 kHz stepping (PSU off, OI-E-HG-03) + 80 Hz stream + 20 cmd/s
-    with psu_off_pulses(ctx, spm_val=2500.0, v_unhomed=20000, psu_back_on=True):
+    with psu_off_pulses(ctx, spm_val=2500.0, v_unhomed=20000, psu_back_on=True, timing=EXPLICIT_50K):
         L.ok("STREAM_START")
         jog(ctx, 20000)
         t_end = L.now_ns() + int(10e9 if not ctx.cfg.get("quick") else 2e9)
@@ -2094,6 +2111,47 @@ def hg12(ctx: Ctx) -> None:
     else:
         ctx.check(hb.not_measured("MT-3 (RESET mode) vs MT-4 agree", "≤ 2 µs",
                                   "the probe was never read before the next DOUT edge restarted it"))
+    hg12_mul(ctx, xc, slope)
+
+
+def hg12_mul(ctx: Ctx, xc: int, slope: float) -> None:
+    """FW-MOT-006 on silicon (M3-C4): MOVE_UNTIL_LOAD threshold stops use the load path of SAF-FW-002 —
+    deciding DOUT edge -> last PUL ≤ 200 µs (MT-4), MOVE_DONE LOAD_THRESHOLD, no STOPPED, first sample beyond decides."""
+    L, M = ctx.L, ctx.L.meas
+    if "MOVE_UNTIL_LOAD" not in L.info()["features"]:
+        ctx.check(hb.na("MOVE_UNTIL_LOAD threshold on silicon", "FW-MOT-006", "FEAT_MOVE_UNTIL_LOAD = 0 in this image"))
+        return
+    x_start = xc + 500
+    lat, first_ok, reasons = [], [], []
+    for i in range(max(2, ctx.cfg["n_load_trials"] // 10)):
+        clear_latches(ctx)
+        ready(ctx, x_start, 5_000)
+        raw_now, _ = last_raw(ctx, 4)
+        thr = int(raw_now + slope * ctx.rng.uniform(0.2, 0.8))
+        n_evt0 = M.stamp_count("EVT")
+        M.probe_arm("DOUT", "RESET", True, 17)
+        k0, n0 = len(L.frames), L.n_events()
+        r = L.cmd("MOVE_UNTIL_LOAD", {"bound_um": x_start + 5_000, "v_um_s": 500, "a_um_s2": 0, "raw_stop": thr, "cmp": 0})
+        if r["status"] != "OK":
+            raise LinkError(f"MOVE_UNTIL_LOAD: {r}")
+        md = wait_done(ctx, n0, 20_000)
+        reasons.append((md or {}).get("arg"))
+        stopped = L.events_since(n0, "STOPPED")
+        data = [d for d in L.data_since(k0) if d["afe_raw"] != rc.AFE_NO_DATA]
+        viol = [d for d in data if d["afe_raw"] >= thr]
+        first_ok.append(bool(viol) and not stopped and md is not None and md["arg"] == MD["LOAD_THRESHOLD"])
+        if viol:
+            n_evt1 = M.stamp_count("EVT")
+            evs = M.stamp_entries("EVT", max(n_evt0, n_evt1 - 30), n_evt1 - 1)
+            douts = [v for _, v in sorted(evs.items()) if v is not None and hb.sdiff32(viol[0]["t_us"], v) >= 0]
+            last_pul = M.newest("PUL", 1)
+            if douts and last_pul:
+                lat.append(max(hb.sdiff32(last_pul[0], douts[-1]), 0))
+    move_abs(ctx, xc - 2_000, 5_000)
+    ctx.check(hb.check_true("MUL: LOAD_THRESHOLD on the first sample ≥ raw_stop, no STOPPED", bool(first_ok) and all(first_ok),
+                            "FW-MOT-006, ICD §5.4 (d)", f"{sum(first_ok)}/{len(first_ok)} reasons {reasons}"))
+    ctx.check(hb.check_le("MUL: deciding DOUT edge -> last PUL (MT-4)", lat, 200.0, hb.u_stamp_pair_us(), "µs",
+                          note="load-path timing of SAF-FW-002 (M3-C4)"))
 
 
 def hg15(ctx: Ctx) -> None:

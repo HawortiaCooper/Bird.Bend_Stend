@@ -223,16 +223,37 @@ def test_event_toasts_sample_mode_trip(window, connected_fake, qtbot) -> None:
 
 @pytest.mark.req("SW-REP-004")
 def test_bend3p_geometry_to_session(window, connected_fake, qtbot) -> None:
-    """Verifies: SW-REP-004 — the Test-marks 3-point-bend group writes SessionSettings.bend3p (B5-11) when the
-    backend exports ``Bend3pGeometry``; otherwise the group is disabled."""
-    from bend_stand.core import api
+    """Verifies: SW-REP-004 — the Test-marks 3-point-bend group writes SessionSettings.bend3p (B5-11 / B5-19)."""
     tab = window.marks_tab
-    if getattr(api, "Bend3pGeometry", None) is None:
-        assert not tab.bend_apply.isEnabled() or not tab.bend_apply.parentWidget().isEnabled()
-        return
+    assert tab.bend_apply.isEnabled()
     tab.bend_en.setChecked(True)
     tab.bend_spins["span_mm"].setValue(80.0)
     assert tab.apply_bend3p()
     assert connected_fake.session.get().bend3p.span_mm == 80.0
     tab.bend_en.setChecked(False)
     assert tab.apply_bend3p() and connected_fake.session.get().bend3p is None
+
+
+@pytest.mark.req("SAF-SW-003")
+def test_link_lost_diagnostics_logged(window, connected_fake, caplog) -> None:
+    """Verifies: SAF-SW-003 (MC3-4 diagnostics) — every LINK LOST shown logs the longest GUI refresh-tick gap and the
+    last / longest GC collection (once per transition)."""
+    import gc
+    import logging
+
+    from bend_stand.core.api import LinkState, LinkStatus
+    gc.collect(0)                                                  # at least one traced collection
+    tick(window, 3)
+    caplog.set_level(logging.WARNING, logger="bend_stand.gui.main_window")
+    connected_fake.set_status(link=LinkStatus(LinkState.LOST, "no DATA for 600 ms", "sim"))
+    tick(window)
+    tick(window)
+    assert len(window.link_lost_diagnostics) == 1
+    text = window.link_lost_diagnostics[0]
+    assert "longest tick gap" in text and "last GC: gen" in text and "no DATA for 600 ms" in text
+    assert any("LINK LOST shown" in r.getMessage() for r in caplog.records)
+    connected_fake.set_status(link=LinkStatus(LinkState.CONNECTED, "", "sim"))
+    tick(window)
+    connected_fake.set_status(link=LinkStatus(LinkState.LOST, "again", "sim"))
+    tick(window)
+    assert len(window.link_lost_diagnostics) == 2

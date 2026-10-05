@@ -57,6 +57,7 @@ from bend_stand.core.api import GateId
 from bend_stand.gui import gating, indicator_map
 from bend_stand.gui.bridge import QtBridge
 from bend_stand.gui.dialogs.about import AboutDialog
+from bend_stand.gui.gc_policy import GC_TRACE
 from bend_stand.gui.dialogs.clear_stop_dialog import ClearStopDialog
 from bend_stand.gui.dialogs.confirm_dialog import make_confirm
 from bend_stand.gui.dialogs.hotkey_test import HotkeyTestDialog
@@ -165,6 +166,8 @@ class MainWindow(QMainWindow):
         self.wizards: dict[str, Any] = {}
         self._params: Any = None
         self._status_n = 0
+        self._prev_link_state = ""
+        self.link_lost_diagnostics: list[str] = []      # MC3-4: one line per LINK LOST shown
 
         self._build_toolbar()
         self._build_banner_bar()
@@ -425,6 +428,7 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 self._params = None
         self.indicator_bar.update_status(status, self._params)
+        self._check_link_lost(status)
         self.stop_banner.update_status(status)
         self.mode_banner.update_status(status)
         self.notice_strip.update_status(status)
@@ -438,6 +442,22 @@ class MainWindow(QMainWindow):
             tab.update_status(status)
         self._update_windows(status)
         self._update_banner_bar()
+
+    def _check_link_lost(self, status: Any) -> None:
+        """MC3-4 / OBS-M3-R1: with every LINK LOST the GUI shows, log the longest GUI refresh-tick gap and the last
+        / longest cyclic-GC collection, so a false LINK LOST under host load can be traced to a process stall."""
+        link = getattr(status, "link", None)
+        state = str(getattr(getattr(link, "state", None), "value", getattr(link, "state", "")))
+        if state == "LOST" and self._prev_link_state != "LOST":
+            gap, ago = self.refresh.max_gap(10.0)
+            ps = self.refresh.perf_stats()
+            text = (f"LINK LOST shown (why: {getattr(link, 'why', '') or '-'}); GUI refresh: longest tick gap in the "
+                    f"last 10 s {gap:.0f} ms (ended {ago:.1f} s ago), interval p95 {ps['interval_p95_ms']:.1f} ms, "
+                    f"max {ps['interval_max_ms']:.1f} ms; {GC_TRACE.describe()}")
+            self.link_lost_diagnostics.append(text)
+            log.warning("%s", text)
+            self.event_log.add_text("GUI", "LINK_LOST_DIAG", text, "warn")
+        self._prev_link_state = state
 
     def _update_windows(self, status: Any) -> None:
         """Open wizards, the tare popup and the hotkey test follow the engines every tick (§6.1)."""

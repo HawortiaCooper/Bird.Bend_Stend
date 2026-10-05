@@ -496,7 +496,9 @@ def test_steps_per_mm_rules(v):
     m.wait_until(v, lambda: m.state(v) == "IDLE", 500)
     m.set_ok(v, "motion.steps_per_mm", 10_000.0)
     s = v.status()
-    assert s["v_limit_um_s"] == 5000 and "HOMED" in s["flags"]
+    rate = int(v.get("motion.max_step_rate_hz"))            # dict 6 (D-45 e): default 40 000 Hz
+    assert rate == PBYKEY["motion.max_step_rate_hz"].default
+    assert s["v_limit_um_s"] == rate * 1000 // 10_000 and "HOMED" in s["flags"]
     r = v.cmd("MOVE_ABS", {"target_um": 30_000, "v_um_s": 10_000, "a_um_s2": 0})
     assert (r["status"], r["detail"]) == ("E_RANGE", 4), r
     assert v.get("motion.v_max_travel_um_s") == 30_000

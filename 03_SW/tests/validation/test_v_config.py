@@ -159,13 +159,16 @@ def test_tc_sw_cfg_003_01_hard_rule_write_order(vbe, pdict, case):
     """Edits that need an order (ICD §11.4) are written so that every single SET keeps H1–H5 true: no E_CONFIG
     on the wire, every item OK, read-back equals the target."""
     # Verifies: SW-CFG-003, IF-005
-    pre = {"H3_down": {"motion.max_step_rate_hz": 40000, "motion.pulse_high_ns": 12500},
-           "H5": {"afe.timeout_ms": 100}}.get(case)
+    # v0.3.3 (OI-B-M3-02, D-45 e: dict 6 defaults rate 40 000 Hz, pulses 12 500 / 12 500 ns = H3 boundary):
+    # H3_up = shorter pulses then a higher rate; H3_down = back to the defaults (lower rate first, then longer pulses)
+    fast = {"motion.max_step_rate_hz": 50000, "motion.pulse_high_ns": 10000, "motion.pulse_low_min_ns": 10000}
+    pre = {"H3_down": fast, "H5": {"afe.timeout_ms": 100}}.get(case)
     if pre:
         assert H.result(vbe, H.write_verify(vbe, pre)).ok
     edits = {"H1": {"limits.soft_min_um": 300000, "limits.soft_max_um": 399999},
-             "H3_up": {"motion.max_step_rate_hz": 40000, "motion.pulse_high_ns": 12500},
-             "H3_down": {"motion.max_step_rate_hz": 50000, "motion.pulse_high_ns": 10000},
+             "H3_up": fast,
+             "H3_down": {"motion.max_step_rate_hz": 40000, "motion.pulse_high_ns": 12500,
+                         "motion.pulse_low_min_ns": 12500},
              "H4": {"motion.v_max_load_um_s": 40000, "motion.v_max_travel_um_s": 50000},
              "H5": {"afe.rate_sps": 0, "afe.timeout_ms": 300}}[case]
     before = H.config_values(vbe)
@@ -184,7 +187,7 @@ def test_tc_sw_cfg_003_01_hard_rule_write_order(vbe, pdict, case):
 @pytest.mark.req("SW-CFG-003")
 @pytest.mark.parametrize("edits, code", [
     ({"limits.soft_min_um": 300000}, "RULE_H1"),                       # 300000 ≥ soft_max 290000
-    ({"motion.pulse_high_ns": 60000}, "RULE_H3"),                      # 50000 · 70000 > 1e9
+    ({"motion.pulse_high_ns": 60000}, "RULE_H3"),                      # 40000 · 72500 > 1e9 (dict 6)
     ({"io.release_ms": 201}, "RANGE"),                                 # max 200
     ({"afe.rate_sps": 7}, "RANGE"),                                    # undefined enum code
     ({"safety.zero_raw": 5}, "LOCKED"),                                # session value (SAF-SW-002 owner)

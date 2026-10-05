@@ -275,19 +275,13 @@ class SafeWizard(SafeDialog):
         self.refresh()
 
     def _confirm_start(self, gate: Any, config: dict[str, Any]) -> None:
-        """C-12. B §15.4 rule 6: the start is repeated with ``confirmed=True``. Defensive (GRQ-B-23): an engine that
-        already started despite its CONFIRM items is cancelled when the operator does not confirm."""
+        """C-12. B §15.4 rule 6 / B5-18: a start gate with CONFIRM items starts nothing; the start is repeated with
+        ``confirmed=True`` only after a mouse confirmation (declining = nothing happens)."""
         items = gate.confirm_items
         text = "\n".join(i.text for i in items)
         assertion = "No specimen is mounted" if any("specimen" in i.text.lower() for i in items) else None
-        try:
-            already = str(self.engine.state().phase or "") not in pv.IDLE_PHASES | pv.TERMINAL_PHASES
-        except Exception:  # noqa: BLE001
-            already = False
         dlg = make_confirm(self, "C-12", text=text, assertion=assertion)
-        dlg.confirmed.connect(lambda: self._started() if already else self._start_confirmed(config))
-        if already:
-            dlg.closedUnconfirmed.connect(lambda _o: self.on_cancel())
+        dlg.confirmed.connect(lambda: self._start_confirmed(config))
         self.confirm_dialog = dlg
         dlg.open()
 

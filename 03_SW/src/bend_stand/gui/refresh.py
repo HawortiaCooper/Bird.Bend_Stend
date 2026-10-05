@@ -38,6 +38,7 @@ class RefreshScheduler(QObject):
         self._n = 0
         self._last_t: float | None = None
         self._intervals: deque[float] = deque(maxlen=RING)
+        self._tick_times: deque[float] = deque(maxlen=RING)       # perf_counter of each tick (gap diagnostics)
         self._durations: dict[str, deque[float]] = {}
         self.last_status: Any = None
         self._errors: dict[str, int] = {}
@@ -68,6 +69,7 @@ class RefreshScheduler(QObject):
         if self._last_t is not None:
             self._intervals.append((now - self._last_t) * 1e3)
         self._last_t = now
+        self._tick_times.append(now)
         self._n += 1
         try:
             self._backend.gui_beat()
@@ -91,6 +93,19 @@ class RefreshScheduler(QObject):
                 if n <= 3:
                     log.exception("refresh stage %s failed", name)
             self._durations[name].append((time.perf_counter() - t0) * 1e3)
+
+    def max_gap(self, window_s: float = 10.0, now: float | None = None) -> tuple[float, float]:
+        """(longest refresh-tick gap in ms within the last ``window_s``, seconds since that gap ended); the gap
+        still open since the last tick counts too (MC3-4 diagnostics)."""
+        now = time.perf_counter() if now is None else now
+        ts = list(self._tick_times)
+        best, ago = 0.0, 0.0
+        for a, b in zip(ts, ts[1:], strict=False):
+            if now - b <= window_s and (b - a) * 1e3 > best:
+                best, ago = (b - a) * 1e3, now - b
+        if self._tick_times and (now - self._tick_times[-1]) * 1e3 > best:
+            best, ago = (now - self._tick_times[-1]) * 1e3, 0.0
+        return best, ago
 
     def perf_stats(self) -> dict[str, Any]:
         def pct(d: deque[float]) -> tuple[float, float, float]:

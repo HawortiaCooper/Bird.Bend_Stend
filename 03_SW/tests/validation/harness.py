@@ -396,9 +396,24 @@ def forced_device(be):
     return be.device
 
 
+def no_specimen(be) -> None:
+    """M3 (OI-B-M3-01, SAF-SW-001 / SW-LIM-004): motion without a calibration + tare needs the no-specimen mode —
+    otherwise the SafetySupervisor stops any motion (load input invalid). Used before every M1/M2 motion stimulus."""
+    g = be.limits.set_no_specimen_mode(True, confirmed=True)
+    assert g.ok, g
+
+
+def ensure_motion_allowed(be) -> None:
+    """Forced motion stimuli (M1/M2 tests) run in the no-specimen mode when the load input is not valid (M3)."""
+    sf = be.status().safety
+    if not sf.no_specimen_mode and not sf.load_input_valid:
+        no_specimen(be)
+
+
 def forced_enable_home(be) -> None:
     from bend_stand.core import protocol_gen as pg  # noqa: PLC0415
 
+    no_specimen(be)
     d = forced_device(be)
     result(be, d.request(pg.Cmd.ENABLE))
     advance(be, 700)
@@ -410,6 +425,7 @@ def forced_enable_home(be) -> None:
 def forced_move_abs(be, target_um: int, v_um_s: int = 10_000):
     from bend_stand.core import protocol_gen as pg  # noqa: PLC0415
 
+    ensure_motion_allowed(be)
     d = forced_device(be)
     return d.request(pg.Cmd.MOVE_ABS, rc.encode_request("MOVE_ABS", {"target_um": target_um, "v_um_s": v_um_s,
                                                                       "a_um_s2": 0}), epoch=d.channel.motion_epoch)
@@ -419,6 +435,8 @@ def forced_request(be, name: str, fields: dict | None = None, *, motion: bool = 
     """Any ICD request on the forced path (payload built by the oracle ``ref_codec``). Stimulus only."""
     from bend_stand.core import protocol_gen as pg  # noqa: PLC0415
 
+    if motion:
+        ensure_motion_allowed(be)
     d = forced_device(be)
     kw = {"epoch": d.channel.motion_epoch} if motion else {}
     return d.request(pg.Cmd[name], rc.encode_request(name, fields or {}), **kw)
@@ -507,7 +525,8 @@ def hotkey_press(be) -> None:
 
 def m2_ready(be, *, home_first: bool = True) -> None:
     """Public-API preparation for the M2 motion tests: ENABLE (wait for ENABLED), then HOME (load not known → the
-    confirmed flag), wait for HOMED and standstill."""
+    confirmed flag), wait for HOMED and standstill. M3: in the no-specimen mode (OI-B-M3-01)."""
+    no_specimen(be)
     enable(be)
     assert run_until(be, lambda: motion(be).enabled, 2000), "ENABLE"
     if home_first:
@@ -540,3 +559,101 @@ def rss_bytes() -> int:
 
 def u16(b: bytes, off: int) -> int:
     return struct.unpack_from("<H", b, off)[0]
+
+
+# =============================================================================================== M3 verbs
+# Only this block names the M3 API (SW_design §15.5e B5-01…24).
+
+def wait_engine(be, eng, pred, timeout_ms: float = 120_000.0, chunk_ms: float = 50.0):
+    t = 0.0
+    while t < timeout_ms and not pred(eng.state()):
+        advance(be, chunk_ms)
+        t += chunk_ms
+    return eng.state()
+
+
+def weight(be, kg: float) -> None:
+    """Vocabulary v2 (ICD v0.7.2) ``weight``: known masses hung on the cell (+ = tension)."""
+    act(be, "weight", kg=float(kg))
+
+
+def tare(be, window_s: float | None = None):
+    """Backend.tare + wait for the end state; returns the final EngineState."""
+    g = be.tare(window_s)
+    if not g.ok:
+        return g
+    return wait_engine(be, be.tare_engine, lambda s: s.phase in ("DONE", "REFUSED", "ABORTED"))
+
+
+def load_calibration(be, masses_kg=(1.0, 10.0), settle_ms: float = 3000.0, accept: bool = True):
+    """Load-calibration wizard with weights (zero point + one point per mass); returns (fit state, final state)."""
+    lc = be.load_cal
+    g = lc.start(n_points=len(masses_kg) + 1, confirmed=True)
+    assert g.ok, g
+    weight(be, 0.0)
+    advance(be, settle_ms)
+    lc.continue_()
+    for i, m in enumerate(masses_kg, start=1):
+        wait_engine(be, lc, lambda s, i=i: (s.phase == "AWAIT_OPERATOR" and s.step_index == i) or
+                    s.phase in ("FIT", "ABORTED") or bool(s.errors))
+        weight(be, m)
+        advance(be, settle_ms)
+        lc.continue_({"mass_kg": float(m)})
+    fit = wait_engine(be, lc, lambda s: s.phase in ("FIT", "ABORTED"))
+    if not accept or fit.phase != "FIT":
+        return fit, fit
+    lc.continue_(confirmed=True)
+    done = wait_engine(be, lc, lambda s: s.phase in ("DONE", "ABORTED"))
+    weight(be, 0.0)
+    advance(be, settle_ms)
+    return fit, done
+
+
+def calibrate_and_tare(be, masses_kg=(1.0, 10.0)):
+    fit, done = load_calibration(be, masses_kg)
+    assert done.phase == "DONE", done
+    t = tare(be)
+    assert getattr(t, "phase", None) == "DONE", t
+    advance(be, 1500)                                   # threshold rewrite + read-back (Supervisor job)
+    return fit, t
+
+
+def wait_idle(be, timeout_ms: float = 30_000.0) -> bool:
+    """Standstill: MOVING 0 in DATA and the FW motion state IDLE in STATUS (homing's move-to-zero included)."""
+    def idle() -> bool:
+        st = be.status()
+        b = be.device.board
+        return not st.motion.moving and b is not None and b.motion == "IDLE"
+    return run_until(be, idle, timeout_ms)
+
+
+def safety(be):
+    return be.status().safety
+
+
+def set_limits(be, **changes):
+    from dataclasses import replace  # noqa: PLC0415
+
+    return be.limits.set(replace(be.limits.get(), **changes))
+
+
+def recording_folder(be) -> str:
+    return be.status().recording.folder
+
+
+def data_rows(folder: str) -> tuple[list[str], list[list[str]]]:
+    """``data.csv`` → (header, rows) (comment lines skipped)."""
+    import csv  # noqa: PLC0415
+    import os  # noqa: PLC0415
+
+    with open(os.path.join(folder, "data.csv"), encoding="utf-8", newline="") as fh:
+        rows = [r for r in csv.reader(ln for ln in fh if not ln.startswith("#"))]
+    return rows[0], rows[1:]
+
+
+def meta(folder: str) -> dict:
+    import json  # noqa: PLC0415
+    import os  # noqa: PLC0415
+
+    with open(os.path.join(folder, "meta.json"), encoding="utf-8") as fh:
+        return json.load(fh)

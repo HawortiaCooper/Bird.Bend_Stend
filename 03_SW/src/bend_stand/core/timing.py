@@ -120,3 +120,53 @@ class Ticker:
         if delay > 0 and stop.wait(delay):
             return False
         return not stop.is_set()
+
+
+# ============================================================================================ GC timing (MC3-4)
+
+class GcWatch:
+    """``gc.callbacks`` timing of every collection (MC3-4 / OBS-M3-R1: diagnose a false LINK LOST under host load).
+    Keeps the last ``maxlen`` collections ``(t_end_ns, generation, duration_ms, collected)`` on the real clock."""
+
+    def __init__(self, maxlen: int = 256) -> None:
+        import collections  # noqa: PLC0415
+
+        self.events: collections.deque[tuple[int, int, float, int]] = collections.deque(maxlen=maxlen)
+        self._t0: int | None = None
+        self._installed = False
+
+    def _cb(self, phase: str, info: dict[str, Any]) -> None:
+        t = time.perf_counter_ns()
+        if phase == "start":
+            self._t0 = t
+        elif self._t0 is not None:
+            self.events.append((time.monotonic_ns(), int(info.get("generation", -1)), (t - self._t0) / 1e6,
+                                int(info.get("collected", 0))))
+            self._t0 = None
+
+    def install(self) -> None:
+        import gc  # noqa: PLC0415
+
+        if not self._installed:
+            gc.callbacks.append(self._cb)
+            self._installed = True
+
+    def uninstall(self) -> None:
+        import gc  # noqa: PLC0415
+
+        if self._installed:
+            try:
+                gc.callbacks.remove(self._cb)
+            except ValueError:  # pragma: no cover
+                pass
+            self._installed = False
+
+    def summary(self, window_ns: int, now_ns: int | None = None) -> dict[str, Any]:
+        """Collections in the last ``window_ns`` (monotonic): count, total and longest pause (generation, age)."""
+        now = time.monotonic_ns() if now_ns is None else now_ns
+        ev = [e for e in list(self.events) if now - e[0] <= window_ns]
+        if not ev:
+            return {"gc_count": 0, "gc_total_ms": 0.0, "gc_max_ms": 0.0}
+        m = max(ev, key=lambda e: e[2])
+        return {"gc_count": len(ev), "gc_total_ms": round(sum(e[2] for e in ev), 3), "gc_max_ms": round(m[2], 3),
+                "gc_max_gen": m[1], "gc_max_age_ms": round((now - m[0]) / 1e6, 1)}

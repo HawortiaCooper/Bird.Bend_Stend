@@ -5,17 +5,17 @@
 | Field | Value |
 |---|---|
 | mode | twin |
-| date | 2026-10-05 02:06 |
+| date | 2026-10-05 03:29 |
 | approval | — (twin, D-06) |
 | port | — (twin) |
 | board_uid | – |
 | fw_build | host |
-| icd | 0.7.2 |
+| icd | 0.7.3 |
 | python | 3.14.7 |
 | host | EXmachina007 |
 | seed | 20261005 |
 | quick | False |
-| twin_exe | private per-run copy of A's FW twin (BEND_TWIN_BUILD_DIR in the validator scratchpad) |
+| twin_exe | private per-run copy of A's FW twin @ 2d36eec (BEND_TWIN_BUILD_DIR in the validator scratchpad) |
 
 ## Summary
 
@@ -27,16 +27,16 @@
 | HG-19 | Driver DIP sheet (C-19) | **OPEN (MANUAL)** | 0 | 0 | 0 | 2 | SYS-005 |
 | HG-20 | E-stop circuit D-41 / D-42 (C-20) | **OPEN (MANUAL)** | 0 | 0 | 0 | 8 | SYS-006, SYS-001 |
 | HG-31 | Loopback hygiene (C-24) | **OPEN (MANUAL)** | 0 | 0 | 0 | 2 | SYS-009 |
-| HG-29 | Measurement-chain self-test (C-24) | **INCONCLUSIVE** | 15 | 0 | 1 | 3 | SYS-009 |
+| HG-29 | Measurement-chain self-test (C-24) | **PARTIAL (MANUAL, TARGET-ONLY open)** | 15 | 0 | 0 | 3 | SYS-009 |
 | HG-03 | VCP 921 600 Bd soak (C-03) | **PASS** | 6 | 0 | 0 | 0 | IF-002, SYS-009 |
-| HG-02 | Clock source and PUL frequency (C-02) | **INCONCLUSIVE** | 4 | 0 | 1 | 0 | FW-PLT-002 |
+| HG-02 | Clock source and PUL frequency (C-02) | **PASS** | 4 | 0 | 0 | 0 | FW-PLT-002 |
 | P2-ENTRY | Phase 2 entry: driver PSU on | **N/A** | 0 | 0 | 0 | 0 |  |
 | HG-32 | D-41 / CR-03 configuration (C-26) | **PASS** | 5 | 0 | 0 | 0 | SYS-009, D-41 |
 | HG-06 | Opto drive margin (C-06) | **PARTIAL (MANUAL open)** | 4 | 0 | 0 | 6 | SYS-009, SYS-011 |
 | HG-10cd | D-42 hardwired ENA cut: MCU in reset, DMM M-1…M-4 (C-25) — before any bypass | **PARTIAL (MANUAL open)** | 3 | 0 | 0 | 8 | SAF-FW-005, SYS-006, D-42 |
 | HG-28 | First motion, direction, homing smoke (SYS-009) | **PASS** | 7 | 0 | 0 | 0 | SYS-009, FW-HOM-001/002 |
 | HG-07 | ENA enable / disable and settle (C-07) | **PASS** | 4 | 0 | 0 | 0 | FW-MOT-008 |
-| HG-08 | PUL / DIR timing (C-08) | **INCONCLUSIVE** | 6 | 0 | 4 | 0 | FW-MOT-001 |
+| HG-08 | PUL / DIR timing (C-08) | **PASS** | 15 | 0 | 0 | 0 | FW-MOT-001 |
 | HG-09 | Step count integrity (C-09) | **PASS** | 9 | 0 | 0 | 0 | SAF-FW-004 |
 | BENCH-ENTRY | §6.8 P-1…P-6: E-stop sense bypass (J-STIM), HG-29 e E-stop input | **PARTIAL (MANUAL, TARGET-ONLY open)** | 1 | 0 | 0 | 3 | SYS-009 |
 | HG-10a | E-stop reaction, 100 STIM trials (C-10 a) | **PASS** | 6 | 0 | 0 | 0 | SAF-FW-005, SYS-006 |
@@ -56,16 +56,16 @@
 | IMG-MEAS2 | PO flashes HW_MEAS again; image verified | **PASS** | 3 | 0 | 0 | 0 |  |
 | HG-21 | DRV_PWR sense (optional, D-41) | **N/A** | 0 | 0 | 0 | 0 | (SAF-FW-024, FW-SW-005) |
 | HG-22 | K1_WELDED (N/A, D-41) | **N/A** | 0 | 0 | 0 | 0 | (SAF-FW-025) |
-| HG-23 | Buffer board SN74ACT244 (C-22) | **INCONCLUSIVE** | 14 | 0 | 4 | 4 | SYS-011, SYS-009 |
+| HG-23 | Buffer board SN74ACT244 (C-22) | **PARTIAL (MANUAL open)** | 23 | 0 | 0 | 4 | SYS-011, SYS-009 |
 | GATE-LOAD | SYS-009 gate: prerequisites before the first load | **N/A** | 0 | 0 | 0 | 0 | SYS-009 |
-| HG-12 | FW load-limit reaction (C-12) | **PASS** | 3 | 0 | 0 | 0 | SAF-FW-002/008 |
+| HG-12 | FW load-limit reaction (C-12) | **PASS** | 5 | 0 | 0 | 0 | SAF-FW-002/008 |
 | HG-15 | Reset under load (C-15, D-33 e) | **PASS** | 13 | 0 | 0 | 0 | SAF-FW-018 |
 | HG-25 | Speed envelope (SYS-004) | **PASS** | 7 | 0 | 0 | 0 | SYS-004 |
 | HG-26 | Home repeatability (FW-HOM-003) | **PASS** | 1 | 0 | 0 | 0 | FW-HOM-003 |
 | IMG-REL | PO flashes the release image | **PASS** | 3 | 0 | 0 | 0 | SYS-009 |
 | HG-30 | Release-image confirmation (+ HG-32 repeat, HG-31) | **PARTIAL (MANUAL open)** | 19 | 0 | 0 | 1 | SYS-009 (R-4) |
 
-Verdict counts: INCONCLUSIVE 4, N/A 4, OPEN 5, PARTIAL 11, PASS 19
+Verdict counts: N/A 4, OPEN 5, PARTIAL 13, PASS 21
 
 ## What stays open after this run
 
@@ -147,11 +147,11 @@ Verdict counts: INCONCLUSIVE 4, N/A 4, OPEN 5, PARTIAL 11, PASS 19
 
 ### S-00 — Session start: persons, image commit, board identity, DIP applied
 
-Verdict: **PARTIAL (MANUAL open)** · requirements: SYS-009, D-06 · 2026-10-05 02:06:08 → 2026-10-05 02:06:08
+Verdict: **PARTIAL (MANUAL open)** · requirements: SYS-009, D-06 · 2026-10-05 03:29:16 → 2026-10-05 03:29:16
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
-| param dict hash | == 0xB7B0263F | 0xB7B0263F | 0 | – | **PASS** |  |
+| param dict hash | == 0xF8BCDCB8 | 0xF8BCDCB8 | 0 | – | **PASS** | gen_params (R-HIL-01) |
 | protocol 1.0 / payload 1 | == (1, 0, 1) | [1, 0, 1] | 0 | – | **PASS** |  |
 | DIP applied before the first motion | D-27 | True | – | – | **MANUAL** | operator input: dry-run default (not evidence) |
 | TC-SYS-009-02 / check_meas_build | recorded | see HG-29 f | – | – | **INFO** |  |
@@ -168,12 +168,12 @@ Verdict: **PARTIAL (MANUAL open)** · requirements: SYS-009, D-06 · 2026-10-05 
 
 ### IMG-MEAS — PO flashes HW_MEAS; image verified
 
-Verdict: **PASS** · requirements: TC-SYS-009-02 · 2026-10-05 02:06:08 → 2026-10-05 02:06:08
+Verdict: **PASS** · requirements: TC-SYS-009-02 · 2026-10-05 03:29:16 → 2026-10-05 03:29:16
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | build | recorded | host | – | – | **INFO** |  |
-| param dict hash | == 0xB7B0263F | 0xB7B0263F | 0 | – | **PASS** | ICD v0.7.1 dict 5 |
+| param dict hash | == 0xF8BCDCB8 | 0xF8BCDCB8 | 0 | – | **PASS** | params.yaml via gen_params (R-HIL-01) |
 | FEAT_HW_MEAS = 1 | measurement image | ['AFE', 'MOTION', 'HOMING', 'MOVE_UNTIL_LOAD', 'NVM', 'TWIN', 'BUTTONS', 'DRV_SIGNALS', 'HW_MEAS'] | – | – | **PASS** |  |
 | variant | twin: MEAS \| TWIN_MODEL | ['MEAS', 'TWIN_MODEL'] | – | – | **PASS** |  |
 
@@ -183,7 +183,7 @@ Notes:
 
 ### HG-01 — Board identity, solder bridges, MH header continuity (C-01)
 
-Verdict: **OPEN (MANUAL)** · requirements: SYS-007, FW-PLT-002 · 2026-10-05 02:06:08 → 2026-10-05 02:06:08
+Verdict: **OPEN (MANUAL)** · requirements: SYS-007, FW-PLT-002 · 2026-10-05 03:29:16 → 2026-10-05 03:29:16
 
 Method: visual + photo; DMM continuity incl. the 1 kΩ / 220 Ω
 
@@ -216,7 +216,7 @@ Method: visual + photo; DMM continuity incl. the 1 kΩ / 220 Ω
 
 ### HG-19 — Driver DIP sheet (C-19)
 
-Verdict: **OPEN (MANUAL)** · requirements: SYS-005 · 2026-10-05 02:06:08 → 2026-10-05 02:06:08
+Verdict: **OPEN (MANUAL)** · requirements: SYS-005 · 2026-10-05 03:29:16 → 2026-10-05 03:29:16
 
 Method: inspection of SW1…SW8
 
@@ -235,7 +235,7 @@ Method: inspection of SW1…SW8
 
 ### HG-20 — E-stop circuit D-41 / D-42 (C-20)
 
-Verdict: **OPEN (MANUAL)** · requirements: SYS-006, SYS-001 · 2026-10-05 02:06:08 → 2026-10-05 02:06:08
+Verdict: **OPEN (MANUAL)** · requirements: SYS-006, SYS-001 · 2026-10-05 03:29:16 → 2026-10-05 03:29:16
 
 Method: inspection + DMM M-5
 
@@ -267,7 +267,7 @@ Method: inspection + DMM M-5
 
 ### HG-31 — Loopback hygiene (C-24)
 
-Verdict: **OPEN (MANUAL)** · requirements: SYS-009 · 2026-10-05 02:06:08 → 2026-10-05 02:06:08
+Verdict: **OPEN (MANUAL)** · requirements: SYS-009 · 2026-10-05 03:29:16 → 2026-10-05 03:29:16
 
 Method: init-code statement; release image at HG-30
 
@@ -286,7 +286,7 @@ Method: init-code statement; release image at HG-30
 
 ### HG-29 — Measurement-chain self-test (C-24)
 
-Verdict: **INCONCLUSIVE** · requirements: SYS-009 · 2026-10-05 02:06:08 → 2026-10-05 02:06:09
+Verdict: **PARTIAL (MANUAL, TARGET-ONLY open)** · requirements: SYS-009 · 2026-10-05 03:29:16 → 2026-10-05 03:29:16
 
 Method: INFO; STIM -> MT-3 / MT-4; 10 kHz pulse train (PSU off): MT-2 = Δpos = stamps, PWM period; RC delays
 
@@ -301,15 +301,14 @@ Method: INFO; STIM -> MT-3 / MT-4; 10 kHz pulse train (PSU off): MT-2 = Δpos = 
 | b stimulus clock | == 10000000 | 10000000 | 0 | – | **PASS** |  |
 | c STIM_RUN accepted | == OK | OK | 0 | – | **PASS** |  |
 | c probe TRIGGERED by STIM | MT-3 trigger on J-EVT | ['ARMED', 'TRIGGERED'] | – | – | **PASS** |  |
-| c EVT interval = 2·hold + random delay | 20000 <= value ± u <= 21000 µs | 2.03e+04 … 2.095e+04 | 1 | 4 | **PASS** | delay 0…1 ms (step timer stopped) — twin model spacing |
+| c EVT interval = hold + random delay | 10000 <= value ± u <= 11000 µs | 1.03e+04 … 1.095e+04 | 1 | 4 | **PASS** | delay 0…1 ms (step timer stopped) |
 | c MT-3 CNT vs MT-4 stamps | probe CNT·tick within [t_read1, t_read2] − first stamp | cnt 136920.0 µs in [135923, 137923] µs | – | – | **PASS** |  |
 | c J-AUX stamps (pulse width = hold) | hold ± 1 µs | – | – | – | **TARGET-ONLY** | J-AUX not modelled in the twin |
 | d MT-2 = \|Δpos_steps\| | == 9916 | 9916 | 0 | – | **PASS** |  |
 | d MT-4 stamps = MT-2 | == 9916 | 9916 | 0 | – | **PASS** |  |
 | d pulses in the move | recorded | 9916 | – | – | **INFO** | ≈ 10 000 (2 mm/s at 5000 steps/mm for ~1 s + ramps) |
-| d PWM statistics free of the first-capture artifact | min ≈ max during cruise | {'pwm_min_period': 0, 'pwm_max_period': 18000, 'pwm_min_high': 1800, 'pwm_max_high': 1800} | – | – | **INCONCLUSIVE** | min values corrupted by the first capture after arming (DEF-HG-01 board HAL / OBS-E-HG-05 twin model); periods evalua… |
-| d PWM-input period at 10 kHz | 17999 <= value ± u <= 18001 ticks | 1.8e+04 … 1.8e+04 | 0 | 1 | **PASS** | PSC 0, 6010 periods during cruise |
-| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0]} | – | – | **PASS** |  |
+| d PWM-input period at 10 kHz | 17999 <= value ± u <= 18001 ticks | 1.8e+04 … 1.8e+04 | 0 | 2 | **PASS** | PSC 0, 6009 periods during cruise |
+| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0], 'motio… | – | – | **PASS** |  |
 | e RC + threshold delay per input | recorded (basis of u_th, R-3) | – | – | – | **TARGET-ONLY** | needs J-AUX on the pin node; not modelled in the twin (E-stop part in the bench block) |
 | f TC-SYS-009-02 report | FW_test_report_M2 lists TC-SYS-009-02 PASS | 02_FW\docs\FW_test_report_M2.md | – | – | **PASS** |  |
 
@@ -325,10 +324,11 @@ Method: INFO; STIM -> MT-3 / MT-4; 10 kHz pulse train (PSU off): MT-2 = Δpos = 
 Notes:
 
 - driver unpowered reads ALM active -> drv.alm_active_level flipped in RAM for the PSU-off block (D-28 start-block would refuse the pulse trains); restored by the REBOOT
+- PSU-off block: 5000 steps/mm, v_unhomed 2000 µm/s, pulse 12500 + 12500 ns, cap 40000 Hz (dictionary defaults)
 
 ### HG-03 — VCP 921 600 Bd soak (C-03)
 
-Verdict: **PASS** · requirements: IF-002, SYS-009 · 2026-10-05 02:06:09 → 2026-10-05 02:06:12
+Verdict: **PASS** · requirements: IF-002, SYS-009 · 2026-10-05 03:29:16 → 2026-10-05 03:29:19
 
 Method: 80 Hz stream + 20 cmd/s, counters
 
@@ -343,17 +343,16 @@ Method: 80 Hz stream + 20 cmd/s, counters
 
 ### HG-02 — Clock source and PUL frequency (C-02)
 
-Verdict: **INCONCLUSIVE** · requirements: FW-PLT-002 · 2026-10-05 02:06:12 → 2026-10-05 02:06:13
+Verdict: **PASS** · requirements: FW-PLT-002 · 2026-10-05 03:29:19 → 2026-10-05 03:29:20
 
 Method: CLK_FALLBACK; MT-5 regression; MT-3 PWM input at 50 kHz (PSU off)
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | a no CLK_FALLBACK | sys_flags + EVENTs | ['CFG_DIRTY', 'STREAM_ON', 'NVM_DEFAULTED'] | – | – | **PASS** |  |
-| b device clock error vs PC (MT-5) | max \|x\| + u <= 1000 ppm | 0 ppm | 100 | 1 | **PASS** | 600 samples over 599 s (twin: virtual clock = PC clock) |
-| c PWM statistics free of the first-capture artifact | min ≈ max during cruise | {'pwm_min_period': 0, 'pwm_max_period': 3600, 'pwm_min_high': 1800, 'pwm_max_high': 1800} | – | – | **INCONCLUSIVE** | min values corrupted by the first capture after arming (DEF-HG-01 board HAL / OBS-E-HG-05 twin model); periods evalua… |
-| c PUL period at 50 kHz (PSC 0) | 3599 <= value ± u <= 3601 ticks | 3600 … 3600 | 0 | 1 | **PASS** | 25049 periods during cruise; 1800 TIM2 ticks exact |
-| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0]} | – | – | **PASS** |  |
+| b device clock error vs PC (MT-5) | max \|x\| + u <= 1000 ppm | 2.22e-10 ppm | 100 | 1 | **PASS** | 600 samples over 599 s (twin: virtual clock = PC clock) |
+| c PUL period at 50 kHz (PSC 0) | 3599 <= value ± u <= 3601 ticks | 3600 … 3600 | 0 | 2 | **PASS** | 25049 periods during cruise; 1800 TIM2 ticks exact |
+| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0], 'motio… | – | – | **PASS** |  |
 
 <details><summary>Operator steps / answers (1)</summary>
 
@@ -367,10 +366,11 @@ Notes:
 
 - MT-5 span 599 s < 600 s (quick mode)
 - driver unpowered reads ALM active -> drv.alm_active_level flipped in RAM for the PSU-off block (D-28 start-block would refuse the pulse trains); restored by the REBOOT
+- PSU-off block: 2500 steps/mm, v_unhomed 20000 µm/s, pulse 10000 + 10000 ns, cap 50000 Hz (explicit, R-HIL-03)
 
 ### P2-ENTRY — Phase 2 entry: driver PSU on
 
-Verdict: **N/A** · requirements: – · 2026-10-05 02:06:13 → 2026-10-05 02:06:13
+Verdict: **N/A** · requirements: – · 2026-10-05 03:29:20 → 2026-10-05 03:29:20
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
@@ -386,7 +386,7 @@ Verdict: **N/A** · requirements: – · 2026-10-05 02:06:13 → 2026-10-05 02:0
 
 ### HG-32 — D-41 / CR-03 configuration (C-26)
 
-Verdict: **PASS** · requirements: SYS-009, D-41 · 2026-10-05 02:06:13 → 2026-10-05 02:06:13
+Verdict: **PASS** · requirements: SYS-009, D-41 · 2026-10-05 03:29:20 → 2026-10-05 03:29:20
 
 Method: GET_PARAM defaults; E-stop held > 1 s
 
@@ -395,7 +395,7 @@ Method: GET_PARAM defaults; E-stop held > 1 s
 | drv.pwr_sense_enable default | == 0 | 0 | 0 | – | **PASS** | CR-03 |
 | drv.k1_check_enable default | == 0 | 0 | 0 | – | **PASS** | D-43 e |
 | E-stop held > 1 s: only ESTOP | ESTOP latched, no K1_WELDED / fault | {'flags': ['ESTOP'], 'faults': []} | – | – | **PASS** |  |
-| ENABLE refused by ESTOP only | E_STATE BLOCK = ESTOP (no DRV_UNPOWERED) | {'status': 'E_STATE', 'detail': 1, '_rtt_ms': 0.25, '_pc_ns': 608332357642} | – | – | **PASS** |  |
+| ENABLE refused by ESTOP only | E_STATE BLOCK = ESTOP (no DRV_UNPOWERED) | {'status': 'E_STATE', 'detail': 1, '_rtt_ms': 0.25, '_pc_ns': 608342705732} | – | – | **PASS** |  |
 | ESTOP_CLEAR after release | == OK | OK | 0 | – | **PASS** |  |
 
 <details><summary>Operator steps / answers (2)</summary>
@@ -409,18 +409,18 @@ Method: GET_PARAM defaults; E-stop held > 1 s
 
 ### HG-06 — Opto drive margin (C-06)
 
-Verdict: **PARTIAL (MANUAL open)** · requirements: SYS-009, SYS-011 · 2026-10-05 02:06:13 → 2026-10-05 02:06:13
+Verdict: **PARTIAL (MANUAL open)** · requirements: SYS-009, SYS-011 · 2026-10-05 03:29:20 → 2026-10-05 03:29:20
 
 Method: STATIC_LEVEL + DMM (VOH, 100 Ω shunt)
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | PUL STATIC_LEVEL accepted | == OK | OK | 0 | – | **PASS** |  |
-| PUL driven high (twin edge log) | pin level 1 while STATIC_LEVEL | {'t_us': 608485781.254, 'pin': 'PUL', 'level': 1} | – | – | **PASS** |  |
+| PUL driven high (twin edge log) | pin level 1 while STATIC_LEVEL | {'t_us': 608496129.344, 'pin': 'PUL', 'level': 1} | – | – | **PASS** |  |
 | PUL VOH | min - u >= 3 V | 3.1 V | 0.02 | 1 | **MANUAL** | operator input: dry-run default (not evidence) |
 | PUL I_LED | min - u >= 6 mA | 6.8 mA | 0.1 | 1 | **MANUAL** | bring-up ≥ 6 mA; operator input: dry-run default (not evidence) |
 | DIR STATIC_LEVEL accepted | == OK | OK | 0 | – | **PASS** |  |
-| DIR driven high (twin edge log) | pin level 1 while STATIC_LEVEL | {'t_us': 608488031.254, 'pin': 'DIR', 'level': 1} | – | – | **PASS** |  |
+| DIR driven high (twin edge log) | pin level 1 while STATIC_LEVEL | {'t_us': 608498379.344, 'pin': 'DIR', 'level': 1} | – | – | **PASS** |  |
 | DIR VOH | min - u >= 3 V | 3.1 V | 0.02 | 1 | **MANUAL** | operator input: dry-run default (not evidence) |
 | DIR I_LED | min - u >= 6 mA | 6.8 mA | 0.1 | 1 | **MANUAL** | bring-up ≥ 6 mA; operator input: dry-run default (not evidence) |
 | ENA VOH | min - u >= 3 V | 3.1 V | 0.02 | 1 | **MANUAL** | operator input: dry-run default (not evidence) |
@@ -441,7 +441,7 @@ Method: STATIC_LEVEL + DMM (VOH, 100 Ω shunt)
 
 ### HG-10cd — D-42 hardwired ENA cut: MCU in reset, DMM M-1…M-4 (C-25) — before any bypass
 
-Verdict: **PARTIAL (MANUAL open)** · requirements: SAF-FW-005, SYS-006, D-42 · 2026-10-05 02:06:13 → 2026-10-05 02:06:13
+Verdict: **PARTIAL (MANUAL open)** · requirements: SAF-FW-005, SYS-006, D-42 · 2026-10-05 03:29:20 → 2026-10-05 03:29:20
 
 Method: functional by hand + DMM; FW restart sequence
 
@@ -481,7 +481,7 @@ Method: functional by hand + DMM; FW restart sequence
 
 ### HG-28 — First motion, direction, homing smoke (SYS-009)
 
-Verdict: **PASS** · requirements: SYS-009, FW-HOM-001/002 · 2026-10-05 02:06:13 → 2026-10-05 02:06:18
+Verdict: **PASS** · requirements: SYS-009, FW-HOM-001/002 · 2026-10-05 03:29:20 → 2026-10-05 03:29:25
 
 Method: un-homed 1 mm/s jog, caliper; HOME; HOME with inverted DIR
 
@@ -490,10 +490,10 @@ Method: un-homed 1 mm/s jog, caliper; HOME; HOME with inverted DIR
 | MT-2 = \|Δpos_steps\| (first jog) | == 2397 | 2397 | 0 | – | **PASS** |  |
 | direction +x away from START | SYS-009 first motion | True | – | – | **PASS** | twin-observed (world model, not HW evidence) |
 | scale (caliper vs commanded) | max + u <= 10 % | 0 % | 0.6675 | 1 | **PASS** | commanded 2.996 mm at 800 steps/mm; twin-observed (world model, not HW evidence) |
-| HOME at START | HOMED, MOVE_DONE TARGET | {'t_us': 29219000, 'code': 'MOVE_DONE', 'arg': 0, 'value': 0, 'value2': 0, '_pc_ns': 638252107642} | – | – | **PASS** |  |
+| HOME at START | HOMED, MOVE_DONE TARGET | {'t_us': 29219000, 'code': 'MOVE_DONE', 'arg': 0, 'value': 0, 'value2': 0, '_pc_ns': 638262455732} | – | – | **PASS** |  |
 | inverted DIR -> HOME_WIRING / HOME_NOT_FOUND | fault latched, HOME_FAILED | {'faults': ['HOME_WIRING'], 'home_failed': [{'t_us': 89574000, 'code': 'HOME_FAILED', 'arg': 2, 'value': -301500, 'va… | – | – | **PASS** |  |
 | inverted DIR travel | max + u <= 360 mm | 301.5 mm | 0.1 | 1 | **PASS** | twin: world travel |
-| re-HOME after the inverted test | HOMED | {'t_us': 160654000, 'code': 'MOVE_DONE', 'arg': 0, 'value': 0, 'value2': 0, '_pc_ns': 769686357642} | – | – | **PASS** |  |
+| re-HOME after the inverted test | HOMED | {'t_us': 160654000, 'code': 'MOVE_DONE', 'arg': 0, 'value': 0, 'value2': 0, '_pc_ns': 769696705732} | – | – | **PASS** |  |
 
 <details><summary>Operator steps / answers (4)</summary>
 
@@ -508,16 +508,16 @@ Method: un-homed 1 mm/s jog, caliper; HOME; HOME with inverted DIR
 
 ### HG-07 — ENA enable / disable and settle (C-07)
 
-Verdict: **PASS** · requirements: FW-MOT-008 · 2026-10-05 02:06:18 → 2026-10-05 02:06:18
+Verdict: **PASS** · requirements: FW-MOT-008 · 2026-10-05 03:29:25 → 2026-10-05 03:29:25
 
 Method: MT-3 trigger on the ENABLE frame (RX), CCR3 = ENA edge, MT-4 first PUL
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | disabled = shaft free | ENA LED current = driver disabled | True | – | – | **PASS** | twin-observed (world model, not HW evidence) |
-| JOG during ENA settle refused | E_BUSY ENABLING | {'status': 'E_BUSY', 'detail': 2, '_rtt_ms': 0.5, '_pc_ns': 769698857642} | – | – | **PASS** |  |
+| JOG during ENA settle refused | E_BUSY ENABLING | {'status': 'E_BUSY', 'detail': 2, '_rtt_ms': 0.5, '_pc_ns': 769709205732} | – | – | **PASS** |  |
 | enabled = holding | no ENA current = enabled | True | – | – | **PASS** | twin-observed (world model, not HW evidence) |
-| first PUL/DIR edge − ENA enable edge | min - u >= 500000 µs | 5.569e+05 µs | 11 | 1 | **PASS** | motion.ena_settle_ms = 500; ENA edge 70 µs after the ENABLE frame |
+| first PUL/DIR edge − ENA enable edge | min - u >= 500000 µs | 5.569e+05 µs | 11 | 1 | **PASS** | motion.ena_settle_ms = 500; ENA edge 80 µs after the ENABLE frame |
 
 <details><summary>Operator steps / answers (3)</summary>
 
@@ -531,28 +531,34 @@ Method: MT-3 trigger on the ENABLE frame (RX), CCR3 = ENA edge, MT-4 first PUL
 
 ### HG-08 — PUL / DIR timing (C-08)
 
-Verdict: **INCONCLUSIVE** · requirements: FW-MOT-001 · 2026-10-05 02:06:18 → 2026-10-05 02:06:20
+Verdict: **PASS** · requirements: FW-MOT-001 · 2026-10-05 03:29:25 → 2026-10-05 03:29:29
 
 Method: PWM input ≥ 1e5 pulses at 50 kHz (PSU off); 1-step reversals: MT-3 on DIR + MT-4
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
-| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0]} | – | – | **PASS** |  |
-| a PWM statistics free of the first-capture artifact | min ≈ max during cruise | {'pwm_min_period': 0, 'pwm_max_period': 1800, 'pwm_min_high': 900, 'pwm_max_high': 900} | – | – | **INCONCLUSIVE** | min values corrupted by the first capture after arming (DEF-HG-01 board HAL / OBS-E-HG-05 twin model); periods evalua… |
-| a pulses measured | min - u >= 100000 pulses | 1.05e+05 pulses | 0 | 1 | **PASS** |  |
-| a PUL high | min - u >= 10 µs | 10 µs | 0.01111 | 1 | **INCONCLUSIVE** |  |
-| a PUL low (period_min − high_max) | min - u >= 10 µs | 10 µs | 0.02222 | 1 | **INCONCLUSIVE** |  |
-| a step rate ≤ 50 kHz (period) | min - u >= 20 µs | 20 µs | 0.01111 | 1 | **INCONCLUSIVE** |  |
-| b DIR setup (MT-3, 1 PUL per reversal) | min - u >= 20 µs | 4990 µs | 0.1 | 100 | **PASS** | 100 reversals, 0 invalid |
-| b DIR setup (MT-4 stamps, cross-check) | min - u >= 20 µs | 4990 µs | 2 | 100 | **PASS** |  |
-| b MT-3 vs MT-4 agree | max + u <= 2.1 µs | 0 µs | 0 | 100 | **PASS** |  |
+| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0], 'motio… | – | – | **PASS** |  |
+| a1 defaults pulses measured | min - u >= 100000 pulses | 1.04e+05 pulses | 0 | 1 | **PASS** |  |
+| a1 defaults PUL high ≥ driver min | min - u >= 10 µs | 12.5 µs | 0.01111 | 1 | **PASS** | configured 12.5 µs |
+| a1 defaults PUL low ≥ driver min (period_min − high_max) | min - u >= 10 µs | 12.5 µs | 0.02222 | 1 | **PASS** |  |
+| a1 defaults step rate ≤ driver max 50 kHz (period) | min - u >= 20 µs | 25 µs | 0.01111 | 1 | **PASS** | cap 40000 Hz |
+| a1 defaults PUL high as configured | 12.49 <= value ± u <= 12.51 µs | 12.5 … 12.5 | 0.01111 | 2 | **PASS** |  |
+| a1 defaults period at the cap as configured | 24.99 <= value ± u <= 25.01 µs | 25 … 25 | 0.01111 | 1 | **PASS** |  |
+| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0], 'motio… | – | – | **PASS** |  |
+| a2 50 kHz explicit pulses measured | min - u >= 100000 pulses | 1.05e+05 pulses | 0 | 1 | **PASS** |  |
+| a2 50 kHz explicit PUL high as configured | 9.989 <= value ± u <= 10.01 µs | 10 … 10 | 0.01111 | 2 | **PASS** |  |
+| a2 50 kHz explicit period at the cap as configured | 19.99 <= value ± u <= 20.01 µs | 20 … 20 | 0.01111 | 1 | **PASS** |  |
+| b DIR setup (MT-3, 1 PUL per reversal) | min - u >= 20 µs | 4988 µs | 0.1 | 100 | **PASS** | 100 reversals, 0 invalid |
+| b DIR setup (MT-4 stamps, cross-check) | min - u >= 20 µs | 4987 µs | 2 | 100 | **PASS** |  |
+| b MT-3 vs MT-4 agree | max + u <= 2.1 µs | 0.5 µs | 0 | 100 | **PASS** |  |
 | b reversals | min - u >= 100 trials | 100 trials | 0 | 1 | **PASS** |  |
 
-<details><summary>Operator steps / answers (3)</summary>
+<details><summary>Operator steps / answers (4)</summary>
 
 | Key | Prompt | Answer | Source |
 |---|---|---|---|
 | JUMPERS | Measurement header MH: J-PUL-A, J-DIR fitted; J-EVT <- DIR node | MH (twin: selector = probe source) | twin-emulated |
+| PSU-OFF | Switch the 48 V driver PSU OFF (mains switch). Driver signal cable stays connected. Confirm the motor shaft turns fre… | done | twin-emulated |
 | PSU-OFF | Switch the 48 V driver PSU OFF (mains switch). Driver signal cable stays connected. Confirm the motor shaft turns fre… | done | twin-emulated |
 | PSU-ON | Switch the 48 V driver PSU back ON; wait 2 s | done | twin-emulated |
 
@@ -561,10 +567,13 @@ Method: PWM input ≥ 1e5 pulses at 50 kHz (PSU off); 1-step reversals: MT-3 on 
 Notes:
 
 - driver unpowered reads ALM active -> drv.alm_active_level flipped in RAM for the PSU-off block (D-28 start-block would refuse the pulse trains); restored by the REBOOT
+- PSU-off block: 2000 steps/mm, v_unhomed 20000 µm/s, pulse 12500 + 12500 ns, cap 40000 Hz (dictionary defaults)
+- driver unpowered reads ALM active -> drv.alm_active_level flipped in RAM for the PSU-off block (D-28 start-block would refuse the pulse trains); restored by the REBOOT
+- PSU-off block: 2500 steps/mm, v_unhomed 20000 µm/s, pulse 10000 + 10000 ns, cap 50000 Hz (explicit, R-HIL-03)
 
 ### HG-09 — Step count integrity (C-09)
 
-Verdict: **PASS** · requirements: SAF-FW-004 · 2026-10-05 02:06:20 → 2026-10-05 02:06:47
+Verdict: **PASS** · requirements: SAF-FW-004 · 2026-10-05 03:29:29 → 2026-10-05 03:30:01
 
 Method: MT-2 vs Δpos_steps: random moves, jogs with reversals (stamp segments), random STOP / HALT; caliper
 
@@ -595,7 +604,7 @@ Method: MT-2 vs Δpos_steps: random moves, jogs with reversals (stamp segments),
 
 ### BENCH-ENTRY — §6.8 P-1…P-6: E-stop sense bypass (J-STIM), HG-29 e E-stop input
 
-Verdict: **PARTIAL (MANUAL, TARGET-ONLY open)** · requirements: SYS-009 · 2026-10-05 02:06:47 → 2026-10-05 02:06:47
+Verdict: **PARTIAL (MANUAL, TARGET-ONLY open)** · requirements: SYS-009 · 2026-10-05 03:30:01 → 2026-10-05 03:30:01
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
@@ -624,7 +633,7 @@ Notes:
 
 ### HG-10a — E-stop reaction, 100 STIM trials (C-10 a)
 
-Verdict: **PASS** · requirements: SAF-FW-005, SYS-006 · 2026-10-05 02:06:47 → 2026-10-05 02:07:24
+Verdict: **PASS** · requirements: SAF-FW-005, SYS-006 · 2026-10-05 03:30:01 → 2026-10-05 03:30:42
 
 Method: MT-3 trigger PSC 17 on the E-stop node, CCR2 last PUL, CCR3 ENA; 30 mm/s jog; re-home per trial
 
@@ -632,15 +641,15 @@ Method: MT-3 trigger PSC 17 on the E-stop node, CCR2 last PUL, CCR3 ENA; 30 mm/s
 |---|---|---|---|---|---|---|
 | a STIM trials with E-stop event + probe trigger | == 100 | 100 | 0 | – | **PASS** |  |
 | a STIM last PUL after the E-stop edge | max + u <= 100 µs | 0 µs | 1.1 | 100 | **PASS** | MT-3 PSC 17 (0.1 µs) + u_th 1.0 µs (R-3) |
-| a STIM ENA disabled after the E-stop edge | max + u <= 1000 µs | 0 µs | 1.1 | 100 | **PASS** | twin: zero-latency reaction model, CCR3 = 0 taken as 0 µs (OBS-E-HG-03) |
+| a STIM ENA disabled after the E-stop edge | max + u <= 1000 µs | 0.1 µs | 1.1 | 100 | **PASS** | twin: zero-latency reaction model (captures report 1 tick, OBS-E-HG-03): order, not latency |
 | a STIM CCR2 consistent with PUL stamps | CCR2 = 0 <=> no PUL stamp after the event | True | – | – | **PASS** |  |
 | a STIM MT-2 = \|Δpos_steps\| (HG-09 E-stop part) | all equal | 100/100 equal | – | 100 | **PASS** | ± 1 accepted only with POS_UNCERTAIN (truncated pulse, ICD §6.2 v0.7.2); 100 trials with POS_UNCERTAIN |
 | a STIM latched, ENA disabled, HOMED cleared | SAF-FW-005 state after every trial | True | – | – | **PASS** |  |
-| a STIM event phase vs step period (10 bins) | recorded | [16, 8, 7, 10, 9, 14, 7, 9, 7, 13] | – | – | **INFO** | §6.1 rule 3 phase coverage |
+| a STIM event phase vs step period (10 bins) | recorded | [16, 11, 7, 10, 8, 11, 15, 5, 10, 7] | – | – | **INFO** | §6.1 rule 3 phase coverage |
 
 ### BENCH-EXIT — §6.8 P-8: sense restored — before any further motion
 
-Verdict: **PASS** · requirements: SYS-009 · 2026-10-05 02:07:24 → 2026-10-05 02:07:25
+Verdict: **PASS** · requirements: SYS-009 · 2026-10-05 03:30:42 → 2026-10-05 03:30:42
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
@@ -661,7 +670,7 @@ Verdict: **PASS** · requirements: SYS-009 · 2026-10-05 02:07:24 → 2026-10-05
 
 ### HG-10b — E-stop real presses + slow press, FW with forced ENA (C-10 b/e)
 
-Verdict: **PASS** · requirements: SAF-FW-005, SYS-006, D-42 · 2026-10-05 02:07:25 → 2026-10-05 02:07:29
+Verdict: **PASS** · requirements: SAF-FW-005, SYS-006, D-42 · 2026-10-05 03:30:42 → 2026-10-05 03:30:47
 
 Method: 10 real presses during a jog; 2 slow presses
 
@@ -669,17 +678,17 @@ Method: 10 real presses during a jog; 2 slow presses
 |---|---|---|---|---|---|---|
 | b real press trials with E-stop event + probe trigger | == 10 | 10 | 0 | – | **PASS** |  |
 | b real press last PUL after the E-stop edge | max + u <= 100 µs | 0 µs | 1.1 | 10 | **PASS** | MT-3 PSC 17 (0.1 µs) + u_th 1.0 µs (R-3) |
-| b real press ENA disabled after the E-stop edge | max + u <= 1000 µs | 0 µs | 1.1 | 10 | **PASS** | twin: zero-latency reaction model, CCR3 = 0 taken as 0 µs (OBS-E-HG-03) |
+| b real press ENA disabled after the E-stop edge | max + u <= 1000 µs | 0.1 µs | 1.1 | 10 | **PASS** | twin: zero-latency reaction model (captures report 1 tick, OBS-E-HG-03): order, not latency |
 | b real press CCR2 consistent with PUL stamps | CCR2 = 0 <=> no PUL stamp after the event | True | – | – | **PASS** |  |
 | b real press MT-2 = \|Δpos_steps\| (HG-09 E-stop part) | all equal | 10/10 equal | – | 10 | **PASS** | ± 1 accepted only with POS_UNCERTAIN (truncated pulse, ICD §6.2 v0.7.2); 10 trials with POS_UNCERTAIN |
 | b real press latched, ENA disabled, HOMED cleared | SAF-FW-005 state after every trial | True | – | – | **PASS** |  |
-| b real press event phase vs step period (10 bins) | recorded | [2, 0, 0, 5, 1, 1, 1, 0, 0, 0] | – | – | **INFO** | §6.1 rule 3 phase coverage |
+| b real press event phase vs step period (10 bins) | recorded | [1, 1, 0, 2, 3, 1, 1, 1, 0, 0] | – | – | **INFO** | §6.1 rule 3 phase coverage |
 | e0 no unexpected FW state | only ESTOP latched, no fault / extra latch | ['ESTOP_SET', 'DRIVER_DISABLED'] | – | – | **PASS** |  |
 | e0 release never causes motion | counter 0, ESTOP latched, NOT_ENABLED | {'counter': 0, 'state': 'NOT_ENABLED'} | – | – | **PASS** |  |
-| e0 HOME required | MOVE_ABS refused NOT_HOMED | {'status': 'E_STATE', 'detail': 16, '_rtt_ms': 0.5, '_pc_ns': 2974274219952} | – | – | **PASS** |  |
+| e0 HOME required | MOVE_ABS refused NOT_HOMED | {'status': 'E_STATE', 'detail': 16, '_rtt_ms': 0.5, '_pc_ns': 3006522795908} | – | – | **PASS** |  |
 | e1 no unexpected FW state | only ESTOP latched, no fault / extra latch | ['ESTOP_SET', 'DRIVER_DISABLED'] | – | – | **PASS** |  |
 | e1 release never causes motion | counter 0, ESTOP latched, NOT_ENABLED | {'counter': 0, 'state': 'NOT_ENABLED'} | – | – | **PASS** |  |
-| e1 HOME required | MOVE_ABS refused NOT_HOMED | {'status': 'E_STATE', 'detail': 16, '_rtt_ms': 0.5, '_pc_ns': 2975748969952} | – | – | **PASS** |  |
+| e1 HOME required | MOVE_ABS refused NOT_HOMED | {'status': 'E_STATE', 'detail': 16, '_rtt_ms': 0.5, '_pc_ns': 3007997545908} | – | – | **PASS** |  |
 
 <details><summary>Operator steps / answers (25)</summary>
 
@@ -719,7 +728,7 @@ Notes:
 
 ### HG-11 — Limit reaction (C-11)
 
-Verdict: **PASS** · requirements: SAF-FW-002 · 2026-10-05 02:07:29 → 2026-10-05 02:07:58
+Verdict: **PASS** · requirements: SAF-FW-002 · 2026-10-05 03:30:47 → 2026-10-05 03:31:16
 
 Method: 100 STIM trials START / END (switch unplugged) MT-3 PSC 1; 10 real actuations at 1 mm/s
 
@@ -728,13 +737,13 @@ Method: 100 STIM trials START / END (switch unplugged) MT-3 PSC 1; 10 real actua
 | START STIM trials with LIMIT_SET + trigger | == 100 | 100 | 0 | – | **PASS** |  |
 | START STIM: last PUL after the limit edge | max + u <= 200 µs | 0 µs | 15.01 | 100 | **PASS** | MT-3 PSC 1 + u_th 15.0 µs (R-3) |
 | START STIM: MT-2 = \|Δpos_steps\| | all equal | 100/100 equal | – | 100 | **PASS** |  |
-| START latch refuses motion toward the switch | E_STATE LIMIT | {'status': 'E_STATE', 'detail': 32, '_rtt_ms': 0.5, '_pc_ns': 3123100060059} | – | – | **PASS** |  |
+| START latch refuses motion toward the switch | E_STATE LIMIT | {'status': 'E_STATE', 'detail': 32, '_rtt_ms': 0.5, '_pc_ns': 3155348636015} | – | – | **PASS** |  |
 | START real actuations detected | == 10 | 10 | 0 | – | **PASS** |  |
 | START real: last PUL after the switch edge | max + u <= 200 µs | 0 µs | 15.1 | 10 | **PASS** | 1 mm/s, real contact incl. bounce |
 | END STIM trials with LIMIT_SET + trigger | == 100 | 100 | 0 | – | **PASS** |  |
 | END STIM: last PUL after the limit edge | max + u <= 200 µs | 0 µs | 15.01 | 100 | **PASS** | MT-3 PSC 1 + u_th 15.0 µs (R-3) |
 | END STIM: MT-2 = \|Δpos_steps\| | all equal | 100/100 equal | – | 100 | **PASS** |  |
-| END latch refuses motion toward the switch | E_STATE LIMIT | {'status': 'E_STATE', 'detail': 32, '_rtt_ms': 0.5, '_pc_ns': 3328173328969} | – | – | **PASS** |  |
+| END latch refuses motion toward the switch | E_STATE LIMIT | {'status': 'E_STATE', 'detail': 32, '_rtt_ms': 0.5, '_pc_ns': 3360421904925} | – | – | **PASS** |  |
 | END real actuations detected | == 10 | 10 | 0 | – | **PASS** |  |
 | END real: last PUL after the switch edge | max + u <= 200 µs | 0 µs | 15.1 | 10 | **PASS** | 1 mm/s, real contact incl. bounce |
 
@@ -751,7 +760,7 @@ Method: 100 STIM trials START / END (switch unplugged) MT-3 PSC 1; 10 real actua
 
 ### HG-13 — PC STOP / HALT (C-13)
 
-Verdict: **PASS** · requirements: SAF-FW-002, NFR-003 · 2026-10-05 02:07:58 → 2026-10-05 02:08:16
+Verdict: **PASS** · requirements: SAF-FW-002, NFR-003 · 2026-10-05 03:31:16 → 2026-10-05 03:31:34
 
 Method: 100 STOP 0 + 100 HALT after ≥ 5 ms silence; MT-3 trigger on RX, last byte end -> last PUL
 
@@ -770,21 +779,17 @@ Method: 100 STOP 0 + 100 HALT after ≥ 5 ms silence; MT-3 trigger on RX, last b
 
 </details>
 
-Notes:
-
-- twin DIAG_MEAS model triggers the RX probe at the end of each received byte (start bit on the board); the evaluation uses the matching reference point (OBS-E-HG-01)
-
 ### HG-17 — Input wire break (C-17)
 
-Verdict: **PARTIAL (MANUAL open)** · requirements: SAF-FW-007 · 2026-10-05 02:08:16 → 2026-10-05 02:08:19
+Verdict: **PARTIAL (MANUAL open)** · requirements: SAF-FW-007 · 2026-10-05 03:31:34 → 2026-10-05 03:31:35
 
 Method: unplug E-stop / START / END while jogging; D-42 NO
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
-| E-stop NC sense wire break -> stop + flag | STOPPED(ESTOP) and ESTOP reported | {'stopped': {'t_us': 2958936000, 'code': 'STOPPED', 'arg': 7, 'value': 50514, 'value2': 40411, '_pc_ns': 373203594543… | – | – | **PASS** |  |
-| START switch wire break -> stop + flag | STOPPED(LIMIT_START) and LIMIT_START reported | {'stopped': {'t_us': 2981630000, 'code': 'STOPPED', 'arg': 8, 'value': 49443, 'value2': 39554, '_pc_ns': 375472994543… | – | – | **PASS** |  |
-| END switch wire break -> stop + flag | STOPPED(LIMIT_END) and LIMIT_END reported | {'stopped': {'t_us': 2991921000, 'code': 'STOPPED', 'arg': 9, 'value': 240456, 'value2': 192365, '_pc_ns': 3765021445… | – | – | **PASS** |  |
+| E-stop NC sense wire break -> stop + flag | STOPPED(ESTOP) and ESTOP reported | {'stopped': {'t_us': 2986757000, 'code': 'STOPPED', 'arg': 7, 'value': 50514, 'value2': 40411, '_pc_ns': 376390252138… | – | – | **PASS** |  |
+| START switch wire break -> stop + flag | STOPPED(LIMIT_START) and LIMIT_START reported | {'stopped': {'t_us': 3009451000, 'code': 'STOPPED', 'arg': 8, 'value': 49443, 'value2': 39554, '_pc_ns': 378659652138… | – | – | **PASS** |  |
+| END switch wire break -> stop + flag | STOPPED(LIMIT_END) and LIMIT_END reported | {'stopped': {'t_us': 3019742000, 'code': 'STOPPED', 'arg': 9, 'value': 240456, 'value2': 192365, '_pc_ns': 3796888021… | – | – | **PASS** |  |
 | D-42 NO wire break recorded as undetectable | R-10, mitigated by HG-10 c periodic | True | – | – | **MANUAL** | operator input: dry-run default (not evidence) |
 
 <details><summary>Operator steps / answers (8)</summary>
@@ -804,7 +809,7 @@ Method: unplug E-stop / START / END while jogging; D-42 NO
 
 ### HG-04 — Flash erase vs IWDG, E-stop during SAVE, TX integrity (C-04)
 
-Verdict: **PARTIAL (TARGET-ONLY open)** · requirements: FW-NVM-002/003, SAF-FW-005/019 · 2026-10-05 02:08:19 → 2026-10-05 02:08:24
+Verdict: **PARTIAL (TARGET-ONLY open)** · requirements: FW-NVM-002/003, SAF-FW-005/019 · 2026-10-05 03:31:35 → 2026-10-05 03:31:36
 
 Method: 20 SAVEs, E-stop pressed inside the erase window (OI-E-HG-04)
 
@@ -812,10 +817,10 @@ Method: 20 SAVEs, E-stop pressed inside the erase window (OI-E-HG-04)
 |---|---|---|---|---|---|---|
 | no IWDG reset during the SAVEs | no BOOT event, uptime continuous | 0 | – | – | **PASS** |  |
 | SAVE duration (nvm_save_ms) | max + u <= 2500 ms | 502 ms | 1 | 161 | **PASS** | 162 SAVEs |
-| SAVE response (PC, upper bound) | max + u <= 2550 ms | 503.6 ms | 0 | 161 | **PASS** |  |
+| SAVE response (PC, upper bound) | max + u <= 2550 ms | 503.3 ms | 0 | 161 | **PASS** |  |
 | SAVEs that included a sector erase | min - u >= 1 SAVEs | 4 SAVEs | 0 | 1 | **PASS** | twin flash log |
-| a ENA disabled ≤ 1 ms with the E-stop during a SAVE (program) | max + u <= 1000 µs | 0 µs | 1.1 | 2 | **PASS** |  |
-| a ENA disabled ≤ 1 ms with the E-stop inside an erase | max + u <= 1000 µs | 0 µs | 1.1 | 3 | **PASS** | 3 presses inside an erase window |
+| a ENA disabled ≤ 1 ms with the E-stop during a SAVE (program) | max + u <= 1000 µs | 0.1 µs | 1.1 | 2 | **PASS** |  |
+| a ENA disabled ≤ 1 ms with the E-stop inside an erase | max + u <= 1000 µs | 0.1 µs | 1.1 | 3 | **PASS** | 3 presses inside an erase window |
 | b DRV_PWR change during the erase | erase time + 25 ms | – | – | – | **N/A** | optional: no presence sense (D-41) |
 | c no gap > 22 µs inside a TX frame (J-AUX = TX) | MT-4 stamps of every TX edge | – | – | – | **TARGET-ONLY** | J-AUX not modelled in the twin |
 | valid record after reboot | stream.fallback_hz == last saved, no NVM_DEFAULTED | {'read': 10, 'sys': []} | – | – | **PASS** |  |
@@ -840,7 +845,7 @@ Method: 20 SAVEs, E-stop pressed inside the erase window (OI-E-HG-04)
 
 ### HG-14 — Hang -> IWDG (C-14)
 
-Verdict: **PASS** · requirements: SAF-FW-019 · 2026-10-05 02:08:24 → 2026-10-05 02:08:39
+Verdict: **PASS** · requirements: SAF-FW-019 · 2026-10-05 03:31:36 → 2026-10-05 03:31:51
 
 Method: HANG main / tick / ISR1 while jogging; .noinit record
 
@@ -853,14 +858,14 @@ Method: HANG main / tick / ISR1 while jogging; .noinit record
 
 ### HG-16 — ALM / PEND levels and start-block (C-16)
 
-Verdict: **PARTIAL (MANUAL open)** · requirements: FW-SW-004, SAF-FW-026 · 2026-10-05 02:08:39 → 2026-10-05 02:08:41
+Verdict: **PARTIAL (MANUAL open)** · requirements: FW-SW-004, SAF-FW-026 · 2026-10-05 03:31:51 → 2026-10-05 03:31:52
 
 Method: PSU off -> ALM, start refused; levels by DMM
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | ALM active with the driver unpowered | fail-safe reading (wiring §3) | {'on': ['PEND', 'DRV_PWR', 'RATE_80'], 'off': ['ALM', 'PEND', 'RATE_80']} | – | – | **PASS** |  |
-| new motion refused while ALM active (DRV_PWR assumed present) | E_STATE BLOCK DRIVER_ALARM (SAF-FW-026) | {'status': 'E_STATE', 'detail': 512, '_rtt_ms': 0.5, '_pc_ns': 4295262221374} | – | – | **PASS** |  |
+| new motion refused while ALM active (DRV_PWR assumed present) | E_STATE BLOCK DRIVER_ALARM (SAF-FW-026) | {'status': 'E_STATE', 'detail': 512, '_rtt_ms': 0.5, '_pc_ns': 4327123547330} | – | – | **PASS** |  |
 | ALM-V-off | recorded | 3.3 | – | – | **MANUAL** | dry-run default (not evidence) |
 | PEND-V-off | recorded | 3.3 | – | – | **MANUAL** | dry-run default (not evidence) |
 | ALM inactive when powered | ALM low impedance = OK | ['PEND', 'DRV_PWR', 'RATE_80'] | – | – | **PASS** |  |
@@ -868,7 +873,7 @@ Method: PSU off -> ALM, start refused; levels by DMM
 | ALM-V-on | recorded | 0.1 | – | – | **MANUAL** | dry-run default (not evidence) |
 | PEND-V-on | recorded | 3.3 | – | – | **MANUAL** | dry-run default (not evidence) |
 | PEND moving / in position | recorded | False / True | – | – | **INFO** | levels recorded; drv.pend_active_level set accordingly (closed loop) |
-| running move unaffected by ALM | MOVE_DONE TARGET | {'t_us': 28727000, 'code': 'MOVE_DONE', 'arg': 0, 'value': 50000, 'value2': 40000, '_pc_ns': 4322695971374} | – | – | **PASS** |  |
+| running move unaffected by ALM | MOVE_DONE TARGET | {'t_us': 28727000, 'code': 'MOVE_DONE', 'arg': 0, 'value': 50000, 'value2': 40000, '_pc_ns': 4354557297330} | – | – | **PASS** |  |
 | drv.*_active_level set | recorded | keep | – | – | **MANUAL** | dry-run default (not evidence) |
 
 <details><summary>Operator steps / answers (7)</summary>
@@ -887,7 +892,7 @@ Method: PSU off -> ALM, start refused; levels by DMM
 
 ### HG-24 — ALM reset (C-16, D-41)
 
-Verdict: **OPEN (MANUAL)** · requirements: SYS-009, D-28 · 2026-10-05 02:08:41 → 2026-10-05 02:08:41
+Verdict: **OPEN (MANUAL)** · requirements: SYS-009, D-28 · 2026-10-05 03:31:52 → 2026-10-05 03:31:52
 
 Method: PSU power cycle; ENA toggle
 
@@ -910,12 +915,12 @@ Method: PSU power cycle; ENA toggle
 
 ### IMG-DWT — PO flashes HW_MEAS_DWT; image verified
 
-Verdict: **PARTIAL (NOT MEASURED open)** · requirements: NFR-007 · 2026-10-05 02:08:41 → 2026-10-05 02:08:41
+Verdict: **PARTIAL (NOT MEASURED open)** · requirements: NFR-007 · 2026-10-05 03:31:52 → 2026-10-05 03:31:53
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | build | recorded | host | – | – | **INFO** |  |
-| param dict hash | == 0xB7B0263F | 0xB7B0263F | 0 | – | **PASS** | ICD v0.7.1 dict 5 |
+| param dict hash | == 0xF8BCDCB8 | 0xF8BCDCB8 | 0 | – | **PASS** | params.yaml via gen_params (R-HIL-01) |
 | FEAT_HW_MEAS = 1 | measurement image | ['AFE', 'MOTION', 'HOMING', 'MOVE_UNTIL_LOAD', 'NVM', 'TWIN', 'BUTTONS', 'DRV_SIGNALS', 'HW_MEAS'] | – | – | **PASS** |  |
 | variant | twin: MEAS \| TWIN_MODEL | ['MEAS', 'TWIN_MODEL'] | – | – | **PASS** |  |
 | DWT variant | INFO w0 has DWT | – | – | – | **NOT MEASURED** | the twin model has no DWT image (DWT not modelled) |
@@ -926,7 +931,7 @@ Notes:
 
 ### HG-05 — HX711 on silicon (C-05)
 
-Verdict: **PARTIAL (NOT MEASURED, TARGET-ONLY open)** · requirements: FW-AFE-001/004, FW-TIM-001 · 2026-10-05 02:08:41 → 2026-10-05 02:08:46
+Verdict: **PARTIAL (NOT MEASURED, TARGET-ONLY open)** · requirements: FW-AFE-001/004, FW-TIM-001 · 2026-10-05 03:31:53 → 2026-10-05 03:31:57
 
 Method: DOUT stamps vs DATA t_us, rate, reinit; DWT 19/20; SCK edges (J-AUX)
 
@@ -949,13 +954,13 @@ Method: DOUT stamps vs DATA t_us, rate, reinit; DWT 19/20; SCK edges (J-AUX)
 
 ### HG-18 — Main-loop and ISR budgets — F2 (C-18)
 
-Verdict: **PARTIAL (NOT MEASURED open)** · requirements: NFR-005/006/007, FW-SW-002 · 2026-10-05 02:08:46 → 2026-10-05 02:08:55
+Verdict: **PARTIAL (NOT MEASURED open)** · requirements: NFR-005/006/007, FW-SW-002 · 2026-10-05 03:31:57 → 2026-10-05 03:32:05
 
 Method: DWT sections 0…22 under 50 kHz + 80 Hz + 20 cmd/s and real E-stop / limit / PAUSE events
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
-| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0]} | – | – | **PASS** |  |
+| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0], 'motio… | – | – | **PASS** |  |
 | main-loop pass (section 0) | ≤ 1000.0 µs | – | – | – | **NOT MEASURED** | DWT not modelled in the twin (w0 = 0) |
 | TIM2 step ISR (F2) (section 1) | ≤ 2.0 µs | – | – | – | **NOT MEASURED** | DWT not modelled in the twin (w0 = 0) |
 | E-stop handler EXTI15_10 (F2) (section 2) | ≤ 1.0 µs | – | – | – | **NOT MEASURED** | DWT not modelled in the twin (w0 = 0) |
@@ -1005,10 +1010,11 @@ Method: DWT sections 0…22 under 50 kHz + 80 Hz + 20 cmd/s and real E-stop / li
 Notes:
 
 - driver unpowered reads ALM active -> drv.alm_active_level flipped in RAM for the PSU-off block (D-28 start-block would refuse the pulse trains); restored by the REBOOT
+- PSU-off block: 2500 steps/mm, v_unhomed 20000 µm/s, pulse 10000 + 10000 ns, cap 50000 Hz (explicit, R-HIL-03)
 
 ### HG-27 — Command response sample (NFR-008)
 
-Verdict: **PASS** · requirements: NFR-008 · 2026-10-05 02:08:55 → 2026-10-05 02:08:56
+Verdict: **PASS** · requirements: NFR-008 · 2026-10-05 03:32:05 → 2026-10-05 03:32:07
 
 Method: 1000 commands under streaming; NVM ops
 
@@ -1021,12 +1027,12 @@ Method: 1000 commands under streaming; NVM ops
 
 ### IMG-MEAS2 — PO flashes HW_MEAS again; image verified
 
-Verdict: **PASS** · requirements: – · 2026-10-05 02:08:56 → 2026-10-05 02:08:56
+Verdict: **PASS** · requirements: – · 2026-10-05 03:32:07 → 2026-10-05 03:32:07
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | build | recorded | host | – | – | **INFO** |  |
-| param dict hash | == 0xB7B0263F | 0xB7B0263F | 0 | – | **PASS** | ICD v0.7.1 dict 5 |
+| param dict hash | == 0xF8BCDCB8 | 0xF8BCDCB8 | 0 | – | **PASS** | params.yaml via gen_params (R-HIL-01) |
 | FEAT_HW_MEAS = 1 | measurement image | ['AFE', 'MOTION', 'HOMING', 'MOVE_UNTIL_LOAD', 'NVM', 'TWIN', 'BUTTONS', 'DRV_SIGNALS', 'HW_MEAS'] | – | – | **PASS** |  |
 | variant | twin: MEAS \| TWIN_MODEL | ['MEAS', 'TWIN_MODEL'] | – | – | **PASS** |  |
 
@@ -1036,7 +1042,7 @@ Notes:
 
 ### HG-21 — DRV_PWR sense (optional, D-41)
 
-Verdict: **N/A** · requirements: (SAF-FW-024, FW-SW-005) · 2026-10-05 02:08:56 → 2026-10-05 02:08:56
+Verdict: **N/A** · requirements: (SAF-FW-024, FW-SW-005) · 2026-10-05 03:32:07 → 2026-10-05 03:32:07
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
@@ -1052,7 +1058,7 @@ Verdict: **N/A** · requirements: (SAF-FW-024, FW-SW-005) · 2026-10-05 02:08:56
 
 ### HG-22 — K1_WELDED (N/A, D-41)
 
-Verdict: **N/A** · requirements: (SAF-FW-025) · 2026-10-05 02:08:56 → 2026-10-05 02:08:56
+Verdict: **N/A** · requirements: (SAF-FW-025) · 2026-10-05 03:32:07 → 2026-10-05 03:32:07
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
@@ -1060,7 +1066,7 @@ Verdict: **N/A** · requirements: (SAF-FW-025) · 2026-10-05 02:08:56 → 2026-1
 
 ### HG-23 — Buffer board SN74ACT244 (C-22)
 
-Verdict: **INCONCLUSIVE** · requirements: SYS-011, SYS-009 · 2026-10-05 02:08:56 → 2026-10-05 02:08:58
+Verdict: **PARTIAL (MANUAL open)** · requirements: SYS-011, SYS-009 · 2026-10-05 03:32:07 → 2026-10-05 03:32:11
 
 Method: inspection, I_LED, HG-07 / HG-08 repeat
 
@@ -1075,21 +1081,26 @@ Method: inspection, I_LED, HG-07 / HG-08 repeat
 | DIR I_LED (buffer) | 10 <= value ± u <= 13 mA | 11.5 … 11.5 | 0.1 | 1 | **MANUAL** | operator input: dry-run default (not evidence) |
 | ENA I_LED (buffer) | 10 <= value ± u <= 13 mA | 11.5 … 11.5 | 0.1 | 1 | **MANUAL** | operator input: dry-run default (not evidence) |
 | buffer disabled = shaft free | ENA LED current = driver disabled | True | – | – | **PASS** | twin-observed (world model, not HW evidence) |
-| buffer JOG during ENA settle refused | E_BUSY ENABLING | {'status': 'E_BUSY', 'detail': 2, '_rtt_ms': 25.5, '_pc_ns': 447500000} | – | – | **PASS** |  |
+| buffer JOG during ENA settle refused | E_BUSY ENABLING | {'status': 'E_BUSY', 'detail': 2, '_rtt_ms': 0.5, '_pc_ns': 422500000} | – | – | **PASS** |  |
 | buffer enabled = holding | no ENA current = enabled | True | – | – | **PASS** | twin-observed (world model, not HW evidence) |
-| buffer first PUL/DIR edge − ENA enable edge | min - u >= 500000 µs | 6.019e+05 µs | 11 | 2 | **PASS** | motion.ena_settle_ms = 500; ENA edge 70 µs after the ENABLE frame |
-| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0]} | – | – | **PASS** |  |
-| buffer a PWM statistics free of the first-capture artifact | min ≈ max during cruise | {'pwm_min_period': 0, 'pwm_max_period': 1800, 'pwm_min_high': 900, 'pwm_max_high': 900} | – | – | **INCONCLUSIVE** | min values corrupted by the first capture after arming (DEF-HG-01 board HAL / OBS-E-HG-05 twin model); periods evalua… |
-| buffer a pulses measured | min - u >= 100000 pulses | 1.05e+05 pulses | 0 | 1 | **PASS** |  |
-| buffer a PUL high | min - u >= 10 µs | 10 µs | 0.01111 | 1 | **INCONCLUSIVE** |  |
-| buffer a PUL low (period_min − high_max) | min - u >= 10 µs | 10 µs | 0.02222 | 1 | **INCONCLUSIVE** |  |
-| buffer a step rate ≤ 50 kHz (period) | min - u >= 20 µs | 20 µs | 0.01111 | 1 | **INCONCLUSIVE** |  |
-| buffer b DIR setup (MT-3, 1 PUL per reversal) | min - u >= 20 µs | 4990 µs | 0.1 | 100 | **PASS** | 100 reversals, 0 invalid |
-| buffer b DIR setup (MT-4 stamps, cross-check) | min - u >= 20 µs | 4990 µs | 2 | 100 | **PASS** |  |
-| buffer b MT-3 vs MT-4 agree | max + u <= 2.1 µs | 0 µs | 0 | 100 | **PASS** |  |
+| buffer first PUL/DIR edge − ENA enable edge | min - u >= 500000 µs | 5.519e+05 µs | 11 | 2 | **PASS** | motion.ena_settle_ms = 500; ENA edge 80 µs after the ENABLE frame |
+| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0], 'motio… | – | – | **PASS** |  |
+| buffer a1 defaults pulses measured | min - u >= 100000 pulses | 1.04e+05 pulses | 0 | 1 | **PASS** |  |
+| buffer a1 defaults PUL high ≥ driver min | min - u >= 10 µs | 12.5 µs | 0.01111 | 1 | **PASS** | configured 12.5 µs |
+| buffer a1 defaults PUL low ≥ driver min (period_min − high_max) | min - u >= 10 µs | 12.5 µs | 0.02222 | 1 | **PASS** |  |
+| buffer a1 defaults step rate ≤ driver max 50 kHz (period) | min - u >= 20 µs | 25 µs | 0.01111 | 1 | **PASS** | cap 40000 Hz |
+| buffer a1 defaults PUL high as configured | 12.49 <= value ± u <= 12.51 µs | 12.5 … 12.5 | 0.01111 | 2 | **PASS** |  |
+| buffer a1 defaults period at the cap as configured | 24.99 <= value ± u <= 25.01 µs | 25 … 25 | 0.01111 | 1 | **PASS** |  |
+| PSU-off block: parameters restored by REBOOT | GET_PARAM == originals | {'motion.steps_per_mm': [800.0, 800.0], 'motion.v_unhomed_um_s': [2000, 2000], 'drv.alm_active_level': [0, 0], 'motio… | – | – | **PASS** |  |
+| buffer a2 50 kHz explicit pulses measured | min - u >= 100000 pulses | 1.05e+05 pulses | 0 | 1 | **PASS** |  |
+| buffer a2 50 kHz explicit PUL high as configured | 9.989 <= value ± u <= 10.01 µs | 10 … 10 | 0.01111 | 2 | **PASS** |  |
+| buffer a2 50 kHz explicit period at the cap as configured | 19.99 <= value ± u <= 20.01 µs | 20 … 20 | 0.01111 | 1 | **PASS** |  |
+| buffer b DIR setup (MT-3, 1 PUL per reversal) | min - u >= 20 µs | 4988 µs | 0.1 | 100 | **PASS** | 100 reversals, 0 invalid |
+| buffer b DIR setup (MT-4 stamps, cross-check) | min - u >= 20 µs | 4987 µs | 2 | 100 | **PASS** |  |
+| buffer b MT-3 vs MT-4 agree | max + u <= 2.1 µs | 0.5 µs | 0 | 100 | **PASS** |  |
 | buffer b reversals | min - u >= 100 trials | 100 trials | 0 | 1 | **PASS** |  |
 
-<details><summary>Operator steps / answers (14)</summary>
+<details><summary>Operator steps / answers (15)</summary>
 
 | Key | Prompt | Answer | Source |
 |---|---|---|---|
@@ -1106,6 +1117,7 @@ Method: inspection, I_LED, HG-07 / HG-08 repeat
 | HOLD | After ENABLE + settle: shaft HOLDING? | True | twin-observed |
 | JUMPERS | Measurement header MH: J-PUL-A, J-DIR fitted; J-EVT <- DIR node | MH (twin: selector = probe source) | twin-emulated |
 | PSU-OFF | Switch the 48 V driver PSU OFF (mains switch). Driver signal cable stays connected. Confirm the motor shaft turns fre… | done | twin-emulated |
+| PSU-OFF | Switch the 48 V driver PSU OFF (mains switch). Driver signal cable stays connected. Confirm the motor shaft turns fre… | done | twin-emulated |
 | PSU-ON | Switch the 48 V driver PSU back ON; wait 2 s | done | twin-emulated |
 
 </details>
@@ -1113,14 +1125,17 @@ Method: inspection, I_LED, HG-07 / HG-08 repeat
 Notes:
 
 - driver unpowered reads ALM active -> drv.alm_active_level flipped in RAM for the PSU-off block (D-28 start-block would refuse the pulse trains); restored by the REBOOT
+- PSU-off block: 2000 steps/mm, v_unhomed 20000 µm/s, pulse 12500 + 12500 ns, cap 40000 Hz (dictionary defaults)
+- driver unpowered reads ALM active -> drv.alm_active_level flipped in RAM for the PSU-off block (D-28 start-block would refuse the pulse trains); restored by the REBOOT
+- PSU-off block: 2500 steps/mm, v_unhomed 20000 µm/s, pulse 10000 + 10000 ns, cap 50000 Hz (explicit, R-HIL-03)
 
 ### GATE-LOAD — SYS-009 gate: prerequisites before the first load
 
-Verdict: **N/A** · requirements: SYS-009 · 2026-10-05 02:08:58 → 2026-10-05 02:08:59
+Verdict: **N/A** · requirements: SYS-009 · 2026-10-05 03:32:11 → 2026-10-05 03:32:11
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
-| SYS-009 prerequisites for load (twin: reported, not enforced) | recorded | 15 open | – | – | **INFO** | HG-01: OPEN (MANUAL); HG-02: INCONCLUSIVE; HG-04: PARTIAL (TARGET-ONLY open); HG-05: PARTIAL (NOT MEASURED, TARGET-ON… |
+| SYS-009 prerequisites for load (twin: reported, not enforced) | recorded | 13 open | – | – | **INFO** | HG-01: OPEN (MANUAL); HG-04: PARTIAL (TARGET-ONLY open); HG-05: PARTIAL (NOT MEASURED, TARGET-ONLY open); HG-06: PART… |
 
 Notes:
 
@@ -1128,7 +1143,7 @@ Notes:
 
 ### HG-12 — FW load-limit reaction (C-12)
 
-Verdict: **PASS** · requirements: SAF-FW-002/008 · 2026-10-05 02:08:59 → 2026-10-05 02:09:07
+Verdict: **PASS** · requirements: SAF-FW-002/008 · 2026-10-05 03:32:11 → 2026-10-05 03:32:20
 
 Method: spring; threshold above the present raw; MT-4 deciding DOUT -> last PUL; MT-3 RESET mode
 
@@ -1136,7 +1151,9 @@ Method: spring; threshold above the present raw; MT-4 deciding DOUT -> last PUL;
 |---|---|---|---|---|---|---|
 | trip on the first violating sample | FAULT_SET(LOAD_LIMIT).value == first DATA raw > threshold | 100/100 | – | – | **PASS** |  |
 | deciding DOUT edge -> last PUL (MT-4) | max + u <= 200 µs | 0 µs | 2 | 100 | **PASS** |  |
-| MT-3 (RESET mode) vs MT-4 agree | max + u <= 2 µs | 0 µs | 0 | 89 | **PASS** | 89 trials read before the next DOUT edge |
+| MT-3 (RESET mode) vs MT-4 agree | max + u <= 2 µs | 0 µs | 0 | 100 | **PASS** | 100 trials read before the next DOUT edge |
+| MUL: LOAD_THRESHOLD on the first sample ≥ raw_stop, no STOPPED | FW-MOT-006, ICD §5.4 (d) | 10/10 reasons [1, 1, 1, 1, 1, 1, 1, 1, 1, 1] | – | – | **PASS** |  |
+| MUL: deciding DOUT edge -> last PUL (MT-4) | max + u <= 200 µs | 0 µs | 2 | 10 | **PASS** | load-path timing of SAF-FW-002 (M3-C4) |
 
 <details><summary>Operator steps / answers (2)</summary>
 
@@ -1149,7 +1166,7 @@ Method: spring; threshold above the present raw; MT-4 deciding DOUT -> last PUL;
 
 ### HG-15 — Reset under load (C-15, D-33 e)
 
-Verdict: **PASS** · requirements: SAF-FW-018 · 2026-10-05 02:09:07 → 2026-10-05 02:09:09
+Verdict: **PASS** · requirements: SAF-FW-018 · 2026-10-05 03:32:20 → 2026-10-05 03:32:22
 
 Method: ≥ 98 N preload; NRST / Nucleo power / IWDG; dial; MT-2 = 0
 
@@ -1189,7 +1206,7 @@ Notes:
 
 ### HG-25 — Speed envelope (SYS-004)
 
-Verdict: **PASS** · requirements: SYS-004 · 2026-10-05 02:09:09 → 2026-10-05 02:09:17
+Verdict: **PASS** · requirements: SYS-004 · 2026-10-05 03:32:22 → 2026-10-05 03:32:30
 
 Method: 0.01 mm/s dial, 10 mm/s caliper, 30 mm/s, re-home, travel
 
@@ -1219,7 +1236,7 @@ Method: 0.01 mm/s dial, 10 mm/s caliper, 30 mm/s, re-home, travel
 
 ### HG-26 — Home repeatability (FW-HOM-003)
 
-Verdict: **PASS** · requirements: FW-HOM-003 · 2026-10-05 02:09:17 → 2026-10-05 02:09:22
+Verdict: **PASS** · requirements: FW-HOM-003 · 2026-10-05 03:32:30 → 2026-10-05 03:32:34
 
 Method: 10 homing cycles, dial
 
@@ -1248,12 +1265,12 @@ Method: 10 homing cycles, dial
 
 ### IMG-REL — PO flashes the release image
 
-Verdict: **PASS** · requirements: SYS-009 · 2026-10-05 02:09:22 → 2026-10-05 02:09:22
+Verdict: **PASS** · requirements: SYS-009 · 2026-10-05 03:32:34 → 2026-10-05 03:32:34
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | build | recorded | host | – | – | **INFO** |  |
-| param dict hash | == 0xB7B0263F | 0xB7B0263F | 0 | – | **PASS** | ICD v0.7.1 dict 5 |
+| param dict hash | == 0xF8BCDCB8 | 0xF8BCDCB8 | 0 | – | **PASS** | params.yaml via gen_params (R-HIL-01) |
 | FEAT_HW_MEAS = 0 | release: no HW_MEAS | ['AFE', 'MOTION', 'HOMING', 'MOVE_UNTIL_LOAD', 'NVM', 'TWIN', 'BUTTONS', 'DRV_SIGNALS'] | – | – | **PASS** |  |
 | DIAG_MEAS -> NOT_IN_BUILD | E_INTERNAL detail 1, nothing executed | {'status': 'E_INTERNAL', 'detail': 1, '_rtt_ms': 0.5, '_pc_ns': 401500000} | – | – | **PASS** |  |
 
@@ -1263,14 +1280,14 @@ Notes:
 
 ### HG-30 — Release-image confirmation (+ HG-32 repeat, HG-31)
 
-Verdict: **PARTIAL (MANUAL open)** · requirements: SYS-009 (R-4) · 2026-10-05 02:09:22 → 2026-10-05 02:09:26
+Verdict: **PARTIAL (MANUAL open)** · requirements: SYS-009 (R-4) · 2026-10-05 03:32:34 → 2026-10-05 03:32:38
 
 Method: GET_INFO / NOT_IN_BUILD; E-stop, limit, load limit, STOP / HALT / PAUSE, HOME, soak, loop_max_us
 
 | Check | Criterion | Value | u | n | Decision | Note |
 |---|---|---|---|---|---|---|
 | build | recorded | host | – | – | **INFO** |  |
-| param dict hash | == 0xB7B0263F | 0xB7B0263F | 0 | – | **PASS** | ICD v0.7.1 dict 5 |
+| param dict hash | == 0xF8BCDCB8 | 0xF8BCDCB8 | 0 | – | **PASS** | params.yaml via gen_params (R-HIL-01) |
 | FEAT_HW_MEAS = 0 | release: no HW_MEAS | ['AFE', 'MOTION', 'HOMING', 'MOVE_UNTIL_LOAD', 'NVM', 'TWIN', 'BUTTONS', 'DRV_SIGNALS'] | – | – | **PASS** |  |
 | DIAG_MEAS -> NOT_IN_BUILD | E_INTERNAL detail 1, nothing executed | {'status': 'E_INTERNAL', 'detail': 1, '_rtt_ms': 0.5, '_pc_ns': 402750000} | – | – | **PASS** |  |
 | drv.pwr_sense_enable default | == 0 | 0 | 0 | – | **PASS** | CR-03 |
@@ -1280,13 +1297,13 @@ Method: GET_INFO / NOT_IN_BUILD; E-stop, limit, load limit, STOP / HALT / PAUSE,
 | ESTOP_CLEAR after release | == OK | OK | 0 | – | **PASS** |  |
 | E-stop: latch + ENA disabled + EVENTs | ESTOP_SET, STOPPED(ESTOP), MOVE_DONE | ['ESTOP_SET', 'STOPPED', 'DRIVER_DISABLED', 'MOVE_DONE'] | – | – | **PASS** |  |
 | E-stop: shaft free | driver disabled | True | – | – | **PASS** | twin-observed (world model, not HW evidence) |
-| limit stop + latch | LIMIT_SET, STOPPED(LIMIT_START), JOG toward refused | {'stopped': [{'t_us': 31861000, 'code': 'STOPPED', 'arg': 8, 'value': -1000, 'value2': -800, '_pc_ns': 31861750000}],… | – | – | **PASS** |  |
-| load-limit trip | FAULT_SET(LOAD_LIMIT) | {'t_us': 44338000, 'code': 'FAULT_SET', 'arg': 0, 'value': 168671, 'value2': 97845, '_pc_ns': 44347500000} | – | – | **PASS** |  |
-| STOP during a jog | STOPPED(PC_STOP) | [{'t_us': 49111097, 'code': 'STOPPED', 'arg': 1, 'value': 52504, 'value2': 42003, '_pc_ns': 49113250000}] | – | – | **PASS** |  |
-| HALT during a jog | STOPPED(PC_HALT) | [{'t_us': 49756336, 'code': 'STOPPED', 'arg': 3, 'value': 52503, 'value2': 42002, '_pc_ns': 49758500000}] | – | – | **PASS** |  |
-| PAUSE during a jog | STOPPED(PC_PAUSE) | [{'t_us': 50401586, 'code': 'STOPPED', 'arg': 6, 'value': 52503, 'value2': 42002, '_pc_ns': 50403750000}] | – | – | **PASS** |  |
+| limit stop + latch | LIMIT_SET, STOPPED(LIMIT_START), JOG toward refused | {'stopped': [{'t_us': 31711000, 'code': 'STOPPED', 'arg': 8, 'value': -1000, 'value2': -800, '_pc_ns': 31711750000}],… | – | – | **PASS** |  |
+| load-limit trip | FAULT_SET(LOAD_LIMIT) | {'t_us': 43913000, 'code': 'FAULT_SET', 'arg': 0, 'value': 168671, 'value2': 97845, '_pc_ns': 43913500000} | – | – | **PASS** |  |
+| STOP during a jog | STOPPED(PC_STOP) | [{'t_us': 48603347, 'code': 'STOPPED', 'arg': 1, 'value': 52504, 'value2': 42003, '_pc_ns': 48605500000}] | – | – | **PASS** |  |
+| HALT during a jog | STOPPED(PC_HALT) | [{'t_us': 49240836, 'code': 'STOPPED', 'arg': 3, 'value': 52503, 'value2': 42002, '_pc_ns': 49243000000}] | – | – | **PASS** |  |
+| PAUSE during a jog | STOPPED(PC_PAUSE) | [{'t_us': 49878586, 'code': 'STOPPED', 'arg': 6, 'value': 52503, 'value2': 42002, '_pc_ns': 49880750000}] | – | – | **PASS** |  |
 | RESUME clears PAUSED | == OK | OK | 0 | – | **PASS** |  |
-| HOME | MOVE_DONE TARGET, HOMED | {'t_us': 69549000, 'code': 'MOVE_DONE', 'arg': 0, 'value': 0, 'value2': 0, '_pc_ns': 69550750000} | – | – | **PASS** |  |
+| HOME | MOVE_DONE TARGET, HOMED | {'t_us': 69013000, 'code': 'MOVE_DONE', 'arg': 0, 'value': 0, 'value2': 0, '_pc_ns': 69015500000} | – | – | **PASS** |  |
 | 2-min soak: seq gaps / CRC / FW errors | == 0 | 0 | 0 | – | **PASS** | 9616 DATA frames in 120 s |
 | loop_max_us (release image) | max + u <= 1000 µs | 0 µs | 1 | 1 | **PASS** | twin: not modelled |
 | HG-31 release image with jumpers fitted | no loopback pin analog | True | – | – | **MANUAL** | operator input: dry-run default (not evidence) |

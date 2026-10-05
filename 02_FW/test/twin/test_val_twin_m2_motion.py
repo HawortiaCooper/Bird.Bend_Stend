@@ -106,8 +106,12 @@ def test_save_while_moving_busy(v):
 
 
 # --------------------------------------------------------------------------- FW-MOT-001
-def test_pulse_timing_at_cap_and_dir_setup(twin_exe, tmp_path):
-    """TC-FW-MOT-001-02: 50 kHz cap (spm 2000 -> v_limit 25 mm/s), widths and DIR setup on reversals."""
+@pytest.mark.parametrize("high_ns, low_ns, rate_hz", [
+    (None, None, None),                 # dict 6 defaults (D-45 e): 12.5 + 12.5 µs, 40 kHz
+    (10_000, 10_000, 50_000),           # explicit old setting, still legal under H3 (vector rule_h3_old_rate_ok)
+])
+def test_pulse_timing_at_cap_and_dir_setup(twin_exe, tmp_path, high_ns, low_ns, rate_hz):
+    """TC-FW-MOT-001-02: step-rate cap (spm 2000 -> v_limit = rate / 2), widths and DIR setup on reversals."""
     from twin import Twin
     from vhelp import V
     t = Twin("lockstep", exe=twin_exe, run_dir=tmp_path / "r",
@@ -115,17 +119,24 @@ def test_pulse_timing_at_cap_and_dir_setup(twin_exe, tmp_path):
     try:
         v = V(t)
         m.need(v, "MOTION", "HOMING")
+        if rate_hz is not None:                         # widths first, then the rate (hard rule H3 on every write)
+            m.set_ok(v, "motion.pulse_high_ns", high_ns)
+            m.set_ok(v, "motion.pulse_low_min_ns", low_ns)
+            m.set_ok(v, "motion.max_step_rate_hz", rate_hz)
+        high_ns, low_ns, rate_hz = (int(v.get(k)) for k in ("motion.pulse_high_ns", "motion.pulse_low_min_ns",
+                                                             "motion.max_step_rate_hz"))
         m.set_ok(v, "motion.steps_per_mm", 2000.0)
         m.ready(v, x_um=20_000, v_um_s=5_000)
-        assert v.status()["v_limit_um_s"] == 25_000
+        v_cap = rate_hz * 1000 // 2000
+        assert v.status()["v_limit_um_s"] == min(v_cap, 30_000)
         t0 = v.tw.now_us
-        m.move_abs(v, 40_000, 25_000)
-        m.move_abs(v, 20_000, 25_000)                  # reversal
+        m.move_abs(v, 40_000, v_cap)
+        m.move_abs(v, 20_000, v_cap)                    # reversal
         pul = m.edges(v, "PUL", t0)
         hi, lo = m.pulse_widths(pul)
-        pt = rr.pulse_timing(10_000, 10_000, 50_000, 20)
+        pt = rr.pulse_timing(high_ns, low_ns, rate_hz, int(v.get("motion.dir_setup_us")))
         assert min(hi) >= pt.pw_ticks - 1 and max(hi) <= pt.pw_ticks + 1, (min(hi), max(hi))
-        assert min(lo) >= 900 - 1, min(lo)                         # pulse_low_min_ns 10 µs
+        assert min(lo) >= m.ticks(low_ns / 1000) - 1, min(lo)
         assert min(m.periods_from_edges(pul, t0)[1:]) >= pt.c_min_ticks - 1
         dirs = m.edges(v, "DIR", t0)
         assert dirs, "reversal must toggle DIR"

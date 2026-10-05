@@ -2,11 +2,12 @@
 
 | Doc | SW_test_plan |
 |---|---|
-| Version | **0.3.2 — M2 close-out re-test (ICD v0.7 / CR-03, D-43)** · 0.3.1 — M2 gate execution (armed §3.14, D-41/D-42) · 0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
+| Version | **0.4 — M3 gate execution (SW application, D-44)** · 0.3.2 — M2 close-out re-test (ICD v0.7 / CR-03, D-43) · 0.3.1 — M2 gate execution (armed §3.14, D-41/D-42) · 0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
 | Date | 2026-10-04 |
 | Owner | Validator F — SW (`03_SW/docs/SW_test_plan.md`, `03_SW/docs/SW_test_report*.md`, `03_SW/tests/validation/**`) |
 | Verifies | SRS **v0.5.1**: SW-* (61, incl. new SW-RT-006), SAF-SW-* (6), NFR-001…004, the SW side of IF-001…012, SYS-003, SYS-008, SYS-010 (**86 requirements**; v0.2: 85 of SRS v0.3) |
 | Binding inputs | `DECISIONS.md` D-01…**D-39** (v0.3: D-36 one red button = E-stop, CR-01; D-37 M1-gate interface decisions a–d; D-38 plot panes; D-39 M2 start). Earlier: D-30: PAUSED blocks motion. **D-31: dedicated RESUME command 0x3C**, clears only PAUSED, refused while HALT/ESTOP/fault latched; HALT_CLEAR clears HALT and PAUSED. **D-32 (PO Q26)**: a load step that does not reach its target travels to the soft limit in the step direction and stops there, the step is NOT_REACHED and the sequence stops; the approach bound is that soft limit; the timeout must not abort earlier; BREAK_DETECTED still aborts. PO accepted the GUI defaults GQ-01…20 and KL-01. |
+| M3 gate (v0.4) | commit **2d36eec** + the Integrator's OI-B-M3-03 fix + D's GUI follow-ups; SW_design **v0.5** (§22b, §15.5e B5-01…24), SW_design_GUI **v0.5**; ICD v0.7.3 / dict **6** (D-45 e: pulse 12 500 / 12 500 ns, 40 kHz); D-44, D-45 |
 | M2 close-out (v0.3.2) | ICD **v0.7** (dict 5, **48** params, PARAM_DICT_HASH **0xB7B0263F**, state_schema 3; `drv.pwr_sense_enable` default **false**, new `drv.k1_check_enable` 0x0706 default false, both reboot-required = boot-latched); D-43 (b un-homed travel window from a latched origin, e K1 check parameter); simulator NVM flash stall (SAVE 500 ms default), world `ena_hardwired_cut` (D-42) |
 | M2 gate (v0.3.1) | commit **099af88** (M2 implementation, ICD v0.6 incl. DIAG_MEAS 0x3D, `loadlim_vectors.json`) + D's GUI alignment B4-01…11 (SW_design_GUI v0.4.1); SW_design **v0.4** (§22a, §15.5d); DECISIONS **D-41** (no power-removal contactor: E-stop MCU/FW only; `drv.pwr_sense_enable` default 0 with CR-03 / ICD v0.7) and **D-42** (hardwired ENA-disable NO contact on the E-stop) |
 | M2 baseline (v0.3) | SRS **v0.5.1** (CR-01: SAF-FW-022 withdrawn, KL-07; D-37 in SW-CFG-004, SAF-SW-005, IF-011, SW-STOP-001/002; new SW-RT-006), ICD **v0.5** (PROTO 1.0, PAYLOAD 1; `params.yaml` dict_version **4**, **47** parameters, PARAM_DICT_HASH **0xFCC54C90**; STOP_BTN / STOP_BUTTON retired; `*_FEATURE` validity; units vectors with int32 saturation; new `motion_vectors.json` + `ref_motion.py`), DECISIONS D-36…**D-40** (D-40 a: LIMIT_WIRING FAULT_CLEAR once the inputs are no longer both active; b: ramp sum tolerance ±ceil(N/1000) ticks — FW only, the SW simulator reproduces `motion_vectors.json` exactly; d: regrow reference until back inside the thresholds or the next FAULT_CLEAR), SW_design v0.3.3 + B's M2 work in progress (WP-B12 simulator rewritten: exact ramps, homing back-off, K1 timer, idle disable, regrow), SW_design_GUI **v0.4** §4.7 (plot panes, G-45…G-52) |
@@ -739,11 +740,27 @@ CR-01 texts), `test_v_link.py` (D-34 race with the Pause/Break key). `oracle/f_r
 `oracle/fboard.py`: selectable feature mask and STATUS `io`; `harness.py`: forced request / outcome from the wire,
 M2 verbs, `until()`; `conftest.py`: `--arm`, `pending` marker, TC id in `trace.json`.
 
+## 10c. M3 execution corrections (v0.4)
+
+| # | TC | Correction | Reason |
+|---|---|---|---|
+| M3-C1 | every M1 / M2 motion stimulus (`harness.forced_*`, `m2_ready`) | the no-specimen mode is entered first when the load input is not valid (`harness.no_specimen`, `ensure_motion_allowed`) | OI-B-M3-01: since M3 the SafetySupervisor stops any motion with load limits on and no valid input (SAF-SW-001 rule 2, SW-LIM-004) |
+| M3-C2 | TC-SW-CFG-003-01 H3 | H3_up = (50 kHz, 10 000 / 10 000 ns) from the dict 6 defaults (40 kHz, 12 500 / 12 500 ns = H3 boundary), H3_down = back | OI-B-M3-02, D-45 e |
+| M3-C3 | TC-SW-TARE-003-01 [saturated], TC-SW-CAL-006-02 [saturated] | a rail sample also trips the FW load limit → the operation is aborted by FAULT_SET (reason) before the SW saturation rule; accepted outcome = aborted with the reason, active calibration unchanged; the SW rejection rule is exercised with **outliers** (`afe raw_script`, 2.5 % spikes) | FW load limit on rails (D-12) + terminate rule |
+| M3-C4 | TC-SAF-SW-001-01 | lock-step part in the gate suite (STOP ≤ 50 ms after the first violating frame, latch direction); the 100-trial rt statistic stays PR-5 on the REF PC | REF PC open (MC-2 / G6) |
+| M3-C6 | new (re-test) | TC-SAF-SW-001-04 (2) un-xfailed + per-class latch / direction checks (B5-25); TC-SAF-SW-005-06 (G): no 'trip – STOP sent' message at a latch clear (found SWD-M3-02) | SWD-M3-01 re-test |
+| M3-C5 | new | TC-SAF-SW-001-04 (2): force limits supervised while a TRAVEL latch is set (found SWD-M3-01); TC-SW-PLT-001-02 private data folder per test (OBS-D-M3-01) | review |
+
+Validation suite (v0.4): `test_v_m3.py` (C: tare, load / travel wizards, PC limits, thresholds, no-specimen mode, session,
+marks, recording, sample, SAF-SW-006, test zero, channel availability), `test_v_m3_calc.py` (U: VV-LC / TC / LIM / M / D,
+mass and plausibility rules), `test_v_gui_m3.py` (G: slider, hold-to-jog, TARE popup); harness M3 verbs.
+
 ## 11. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 0.1 | 2026-10-03 | Validator F | First plan for the P1 gate: strategy and levels, 167 TCs for 85 requirements, R4 + VV vectors (R4 §12 independently verified 22/22 × 3 runs), 29 fault-injection scenarios, REF runs PR-1…5, demonstrations DM-01…10, milestone criteria, findings SWD-P1-01…18, P1 verdict YES WITH CONDITIONS (C1…C7). Includes D-30, D-31 (RESUME 0x3C) and D-32 (load step travels to the soft limit, NOT_REACHED) per Orchestrator messages. |
+| 0.4 | 2026-10-05 | Validator F | M3 gate execution: baseline 2d36eec / SW_design v0.5 / GUI v0.5 / dict 6; corrections M3-C1…C5; M3 validation modules (U / C / G). Results: `SW_test_report_M3.md`. |
 | 0.3.2 | 2026-10-04 | Validator F | M2 close-out re-test: ICD v0.7 / CR-03 defaults (sense and K1 check off; sense cases via scenario params), D-43 b/e, MC2-4 real SAVE stall, SWD-M2-01/02 regression; correction M2-C10. |
 | 0.3.1 | 2026-10-04 | Validator F | M2 gate execution: §3.14 armed; new TC-SYS-008-06 (loadlim vectors) / -07 (D-41), TC-SAF-SW-002-01 early / -05, TC-SW-STOP-001-05 (F-MC-4), -002-05 (hotkey); D-41 / D-42 effects (FI-14, C-03 text); DM-11 (SW-RT-006 on REF, D's request). Results: `SW_test_report_M2.md`. |
 | 0.3 | 2026-10-04 | Validator F | M2 plan: baseline SRS v0.5.1 / ICD v0.5 (dict 4, 47 params, 0xFCC54C90) / D-36…D-40 / GUI design v0.4; CR-01 (physical STOP-button cases removed, HALT source PC only), D-37 a–d TCs incl. OBS-M1-R1, SW-RT-006 TCs (14 + NFR-001 4-pane smoke), §3.14 M2 SW early acceptance (simulator fidelity incl. WP-B12, MotionController, gates, hotkey), pre-written tests with `pending` / `--arm` (§2.4a), FI-30…32, D-40 (LIMIT_WIRING clear rule, TC-SYS-008-04 (i)), §8a M2-entry review (OI-F-M2-01…06), §10b corrections M2-C1…C8; 86 requirements → 193 TCs. |

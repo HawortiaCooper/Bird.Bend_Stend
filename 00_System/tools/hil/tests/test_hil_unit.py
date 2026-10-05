@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -29,8 +30,10 @@ TODAY = dt.date(2026, 10, 12)
 @pytest.fixture
 def repo(tmp_path):
     (tmp_path / "00_System" / "specs").mkdir(parents=True)
-    (tmp_path / "00_System" / "specs" / "DECISIONS.md").write_text("| D-45 | PO approved HW gate D-06-GATE-20261012 |",
-                                                                    encoding="utf-8")
+    (tmp_path / "00_System" / "specs" / "DECISIONS.md").write_text(
+        "| D-45 | 2026-10-05 | mentions D-06-GATE-20261011 in text only | accepted |\n"
+        "| `D-06-GATE-20261012` | 2026-10-12 | PO approved HW gate: board UID …, COM7, §6.8 | approved (PO) |\n"
+        "| D-06-GATE-20261010 | 2026-10-10 | proposed gate session | pending |\n", encoding="utf-8")
     (tmp_path / "00_System" / "STATUS.md").write_text("status", encoding="utf-8")
     return tmp_path
 
@@ -46,6 +49,7 @@ class Opener:
 
 @pytest.mark.parametrize("ref, why", [
     (None, "no PO approval"), ("", "no PO approval"), ("D06-GATE-20261012", "does not match"),
+    ("D-06-GATE-20261010", "not recorded"),
     ("D-06-GATE-20261312", "no valid date"), ("D-06-GATE-20261013", "future"), ("D-06-GATE-20260901", "older than"),
     ("D-06-GATE-20261011", "not recorded"),
 ])
@@ -94,9 +98,31 @@ def test_session_cli_refuses_port_without_approval(monkeypatch, capsys, tmp_path
 
 
 def test_real_repo_has_no_recorded_approval_today():
-    """D-06 is in force: no D-06-GATE reference is recorded yet, so a board session cannot start."""
-    txt = "".join((hl.REPO / f).read_text(encoding="utf-8") for f in hl.APPROVAL_FILES)
-    assert "D-06-GATE-" not in txt
+    """D-06 is in force: no approved D-06-GATE row is recorded yet, so a board session cannot start."""
+    for f in hl.APPROVAL_FILES:
+        txt = (hl.REPO / f).read_text(encoding="utf-8")
+        for ref in set(re.findall(r"D-06-GATE-\d{8}(?:-[A-Z0-9]+)?", txt)):
+            assert hl.approval_row(txt, ref) is None, ref
+
+
+@pytest.mark.parametrize("text, ok", [
+    ("| D-06-GATE-20261012 | x | approved (PO) |", True),
+    ("| **D-06-GATE-20261012** | x | Approved |", True),
+    ("the PO approved D-06-GATE-20261012 yesterday", False),                 # not a table row (R-HIL-02)
+    ("| D-45 | approved D-06-GATE-20261012 by mail | approved |", False),      # not its own cell
+    ("| D-06-GATE-20261012-HG1 | x | approved |", False),                     # longer token
+    ("| D-06-GATE-20261012 | x | approved, then revoked |", False),
+    ("| D-06-GATE-20261012 | x | pending |", False),
+])
+def test_approval_row_whole_token(text, ok):
+    assert (hl.approval_row(text, "D-06-GATE-20261012") is not None) == ok
+
+
+def test_dict_hash_from_params_yaml():
+    """R-HIL-01: the expected hash comes from gen_params, equal to the generated FW header."""
+    h = (hl.REPO / "02_FW" / "src" / "gen" / "params_gen.h").read_text(encoding="utf-8")
+    m = re.search(r"#define\s+PARAM_DICT_HASH\s+(0x[0-9A-Fa-f]+)", h)
+    assert m and int(m.group(1), 16) == int(hl.DICT_HASH, 16)
 
 
 # ------------------------------------------------------------------------------------------- rule 4

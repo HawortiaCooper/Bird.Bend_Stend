@@ -189,3 +189,35 @@ def test_session_file_round_trip_validation_and_start_loading(tmp_path) -> None:
         assert be.session.get() == SessionSettings() and be.session.load_issues
     finally:
         be.shutdown()
+
+
+@pytest.mark.req("SAF-SW-003")
+def test_link_lost_logs_tick_gaps_and_gc_diagnostics(tmp_path) -> None:
+    """MC3-4 (OBS-M3-R1): every LINK LOST is logged with the longest reader / pipeline / supervisor tick gap, the
+    receive age and the GC pauses; the same text goes into a running recording as a LINK_LOST row."""
+    import gc  # noqa: PLC0415
+
+    from bend_stand.core.timing import GcWatch  # noqa: PLC0415
+
+    be = lockstep_backend(recordings_root=str(tmp_path))
+    try:
+        h = be.test_hooks
+        be._gc_watch = GcWatch()                                     # noqa: SLF001 (real-clock only otherwise)
+        be._gc_watch.install()                                       # noqa: SLF001
+        gc.collect()
+        assert be.record_start().ok
+        h.stall_thread("pipeline", 1500)
+        be.sim.act("inject", fault="hang", duration_ms=1500)
+        assert h.run_until(lambda: be.status().link.state.value == "LOST", 3000)
+        rec = [e for e in be.events.history("log") if e.payload.get("text") == "LINK LOST"][-1]
+        diag = rec.payload["diagnostics"]
+        assert diag["tick_gap_ms"]["pipeline"] >= 900 and "reader" in diag["tick_gap_ms"]
+        assert diag["rx_age_ms"] >= 900 and "gc_count" in diag and diag["gc_count"] >= 1
+        h.advance(3000)
+        be.record_stop()
+        text = (next(tmp_path.iterdir()) / "data.csv").read_text(encoding="utf-8")
+        assert "LINK_LOST:" in text and "tick_gap_ms=" in text
+        be._gc_watch.uninstall()                                     # noqa: SLF001
+        assert GcWatch().summary(10**9) == {"gc_count": 0, "gc_total_ms": 0.0, "gc_max_ms": 0.0}
+    finally:
+        be.shutdown()

@@ -14,9 +14,11 @@ load-threshold manager (§6.3, SAF-SW-002) and the inputs of the no-specimen mod
    than one step (a planned deceleration onto a bound equal to the limit is not a trip, D-33 d); for motion without
    such an end point (unbounded JOG, homing, commands of other clients) the predicted position ``x + v·75 ms``
    crossing a limit in the direction of motion trips.
-4. *Direction-aware latch* (``SwTrip``): after a trip, motion that increases the violation is refused by the gates and
-   stopped again if it happens anyway (≤ every 100 ms); the latch clears when the value is back inside the trip
-   level by the hysteresis band (load) / inside the limit (travel), or when the limit is disabled.
+4. *Direction-aware latches* (``SwTrip``), **one per limit class** — PULL, PUSH, TRAVEL_MIN, TRAVEL_MAX (SWD-M3-01):
+   every class is evaluated on every frame independently of the others, so a new trip of any class sends STOP even
+   while another class is latched. Motion that increases the violation of a latched class is refused by the gates
+   and stopped again if it happens anyway (≤ every 100 ms per class); each latch clears by its own rule: back inside
+   the trip level by the hysteresis band (load) / at standstill inside the limit (travel), or the limit disabled.
 
 Trip order (§6.2): (1) priority STOP (immediate), (2) terminate every running operation, (3) latch + indicator,
 (4) event ``safety.trip`` + recording event row + log.
@@ -253,21 +255,32 @@ class SafetySupervisor:
 
     def reset(self) -> None:
         """Disconnect / new link: no latch, no warnings, no motion history."""
-        self.trip: SwTrip | None = None
+        self.latches: dict[str, SwTrip] = {}           # one latch per limit class (SWD-M3-01)
         self.warnings: set[str] = set()
         self._prev: tuple[int, float, int] | None = None
         self._invalid_stop_sent = False
-        self._last_restop_us: int | None = None
+        self._last_restop_us: dict[str, int] = {}
         self.trips = 0
         self.last_f: float = float("nan")
 
     # ---- queries (any thread) -------------------------------------------------------------------------
+    @property
+    def trip(self) -> SwTrip | None:
+        """The most recent latched trip (``SafetyStatus.trip``, indicator); all latches: ``active_trips()``."""
+        lat = self.latches
+        return max(lat.values(), key=lambda s: s.t_us or 0) if lat else None
+
+    def active_trips(self) -> tuple[SwTrip, ...]:
+        return tuple(sorted(self.latches.values(), key=lambda s: s.t_us or 0))
+
     def direction_refused(self, direction: int, pull_dir: int = 1) -> SwTrip | None:
-        """The latched trip if motion in ``direction`` (+1 / −1, travel sign) would increase its violation."""
-        t = self.trip
-        if t is None or direction == 0:
+        """A latched trip whose violation motion in ``direction`` (+1 / −1, travel sign) would increase."""
+        if direction == 0:
             return None
-        return t if _increasing(t, float(direction), pull_dir) else None
+        for t in self.active_trips():
+            if _increasing(t, float(direction), pull_dir):
+                return t
+        return None
 
     def active_warnings(self) -> tuple[str, ...]:
         return tuple(sorted(self.warnings))
@@ -288,20 +301,24 @@ class SafetySupervisor:
         f = self._force(row, inp)
         self.last_f = f
         self._release(cfg, f, x, moving)
-        if self.trip is not None and moving and _increasing(self.trip, v, inp.pull_dir):
-            last = self._last_restop_us
-            if last is None or t - last >= RESTOP_US:
-                self._last_restop_us = t
-                self._stop(f"SW_LIMIT:{self.trip.limit}")
-                self._terminate(f"SW_LIMIT:{self.trip.limit}")
+        if moving:                                      # re-stop motion that increases a latched violation
+            for lt in self.active_trips():
+                if _increasing(lt, v, inp.pull_dir):
+                    last = self._last_restop_us.get(lt.limit)
+                    if last is None or t - last >= RESTOP_US:
+                        self._last_restop_us[lt.limit] = t
+                        self._stop(f"SW_LIMIT:{lt.limit}")
+                        self._terminate(f"SW_LIMIT:{lt.limit}")
         load_on = (cfg.pull_enabled or cfg.push_enabled) and not inp.no_specimen
         if load_on:
-            if not math.isnan(f):
-                side = L.evaluate_force_limit(f, cfg.pull_trip_n, cfg.pull_enabled, cfg.push_trip_n, cfg.push_enabled)
-                if side is not None and self.trip is None:
-                    thr = cfg.pull_trip_n if side == "PULL" else cfg.push_trip_n
-                    self._trip(SwTrip(side, 1 if side == "PULL" else -1, f, thr, "N", t,
-                                      f"{side.lower()} limit {thr:.1f} N exceeded: F = {f:.1f} N"))
+            if not math.isnan(f):                       # each force class independently of every other latch
+                for side, thr, en in (("PULL", cfg.pull_trip_n, cfg.pull_enabled),
+                                      ("PUSH", cfg.push_trip_n, cfg.push_enabled)):
+                    if side in self.latches or not en:
+                        continue
+                    if L.evaluate_force_limit(f, thr, side == "PULL", thr, side == "PUSH") == side:
+                        self._trip(SwTrip(side, 1 if side == "PULL" else -1, f, thr, "N", t,
+                                          f"{side.lower()} limit {thr:.1f} N exceeded: F = {f:.1f} N"))
             elif moving and not self._invalid_stop_sent:
                 self._invalid_stop_sent = True
                 reason = self._invalid_reason(row, inp)
@@ -312,7 +329,7 @@ class SafetySupervisor:
                                                     f"load limit without valid input ({reason}) — STOP"))
                 log.warning("SAF-SW-001: moving with an enabled load limit and no valid input (%s) — STOP", reason)
         self._warn(cfg, f if load_on else float("nan"))
-        if moving and row.flags & HOMED and self.trip is None:
+        if moving and row.flags & HOMED:
             self._travel(cfg, inp, x, v, t)
 
     def _force(self, row: DataRow, inp: SafetyInputs) -> float:
@@ -345,7 +362,7 @@ class SafetySupervisor:
         if side is None and not planned:
             side = L.predicted_crossing(x, v, lo, hi)
             predicted = side is not None
-        if side is None:
+        if side is None or side in self.latches:
             return
         sgn = 1 if side == "TRAVEL_MAX" else -1
         if not (v * sgn > 0):            # only motion outward trips; moving back inside (limit edited) never does
@@ -359,31 +376,32 @@ class SafetySupervisor:
         reason = f"SW_LIMIT:{trip.limit}"
         self._stop(reason)                     # (1) STOP first
         self._terminate(reason)                # (2) operations
-        self.trip = trip                       # (3) latch
+        self.latches = {**self.latches, trip.limit: trip}   # (3) latch of this class (atomic swap: readers)
         self.trips += 1
-        self._last_restop_us = trip.t_us
+        if trip.t_us is not None:
+            self._last_restop_us[trip.limit] = trip.t_us
         self._row("SW_TRIP", trip.text)        # (4) record + publish
         self._publish("safety.trip", trip)
         log.warning("SAF-SW-001 trip: %s", trip.text)
 
     def _release(self, cfg: LimitConfig, f: float, x: float, moving: bool = False) -> None:
-        t = self.trip
-        if t is None:
-            return
-        if t.limit == "PULL":
-            done = not cfg.pull_enabled or L.back_inside(f, cfg.pull_trip_n)
-        elif t.limit == "PUSH":
-            done = not cfg.push_enabled or L.back_inside(f, cfg.push_trip_n)
-        elif t.limit == "TRAVEL_MAX":            # a travel latch (also a predicted one) holds until standstill
-            done = not cfg.travel_max_enabled or cfg.travel_max_mm is None or (
-                not moving and x <= cfg.travel_max_mm + 1e-9)
-        else:
-            done = not cfg.travel_min_enabled or cfg.travel_min_mm is None or (
-                not moving and x >= cfg.travel_min_mm - 1e-9)
-        if done:
-            self.trip = None
-            self._row("SW_TRIP_CLEARED", t.limit)
-            self._publish("safety.trip", None)
+        """Each class clears by its own rule (SWD-M3-01)."""
+        for t in self.active_trips():
+            if t.limit == "PULL":
+                done = not cfg.pull_enabled or L.back_inside(f, cfg.pull_trip_n)
+            elif t.limit == "PUSH":
+                done = not cfg.push_enabled or L.back_inside(f, cfg.push_trip_n)
+            elif t.limit == "TRAVEL_MAX":        # a travel latch (also a predicted one) holds until standstill
+                done = not cfg.travel_max_enabled or cfg.travel_max_mm is None or (
+                    not moving and x <= cfg.travel_max_mm + 1e-9)
+            else:
+                done = not cfg.travel_min_enabled or cfg.travel_min_mm is None or (
+                    not moving and x >= cfg.travel_min_mm - 1e-9)
+            if done:
+                self.latches = {k: v for k, v in self.latches.items() if k != t.limit}
+                self._last_restop_us.pop(t.limit, None)
+                self._row("SW_TRIP_CLEARED", t.limit)
+                self._publish("safety.trip", self.trip)     # the remaining latest latch, None when all cleared
 
     def _warn(self, cfg: LimitConfig, f: float) -> None:
         for code, trip, en in (("PULL_WARN", cfg.pull_trip_n, cfg.pull_enabled),

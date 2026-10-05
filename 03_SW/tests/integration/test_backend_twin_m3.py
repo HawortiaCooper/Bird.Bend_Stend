@@ -281,7 +281,7 @@ def test_travel_calibration_10_50_mm_measured(twin_exe, tmp_path, monkeypatch):
 
         g = tc.start()
         stub_xfail(g, "travel_cal.start")
-        if not g.ok and any("CONFIRM" in str(i.severity) or "confirm" in i.text for i in g.items):
+        if g.needs_confirmation:                         # B5-18: start() started nothing, returned the CONFIRM gate
             g = tc.start(confirmed=True)                 # the operator confirms "no specimen mounted" (§9.3 CHECK)
         assert g.ok, g
         st = drive(rig, tc, {"REFERENCE": reference, "ENTER_D1": enter_d1, "ENTER_DTOT": enter_dtot},

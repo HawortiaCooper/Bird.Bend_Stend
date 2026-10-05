@@ -1,6 +1,6 @@
 # Project status
 
-**Phase:** P2 Implementation — M1, **M2 ACCEPTED WITH CONDITIONS (2026-10-05)** · **M3 (SW application) in progress** (D-44) · baseline SRS v0.6.1, ICD v0.7.1 (dict 5, 48 params, 0xB7B0263F) · D-06 in force (HW gate pending PO approval of bench procedure) · **Date:** 2026-10-05
+**Phase:** P2 Implementation — M1, M2, **M3 ACCEPTED WITH CONDITIONS (2026-10-05)** · **M4 (Sequencer) in progress** (D-46) · baseline SRS v0.6.2, ICD v0.7.3 (dict 6, 0xF8BCDCB8) · D-06 in force (HW gate pending PO approval of bench procedure) · **Date:** 2026-10-05
 
 ## P0 gate (Orchestrator, 2026-10-03) — ACCEPTED
 R1–R4 written; conflicts resolved: (a) Stefan step-timer error: checked `Stefan/FW/stanok/Core/Src/main.c:136-158` + `tim.c:45` → TIM2 84 MHz / (9+1) = 8.4 MHz vs assumed 10 MHz → 16 % slow (R1/R4 correct, R2's 6.7 % ignores the prescaler); irrelevant for us (D-09). (b) Step timing: SRS takes R2's conservative defaults (≥ 10 µs high/low, ≤ 50 kHz, DIR setup 20 µs) as parameters; R4's TIM2 PWM-mode-2 scheme stays (CCR scaled). Key safety finding R2 §8: motor force ≈ 9 kN ≫ cell safe overload 2.35 kN → FW per-sample load limit is safety-critical.
@@ -121,7 +121,7 @@ Evidence: FW_test_report_M2 (Validator E final **GO WITH CONDITIONS**: DEF-M2-01
 | F2 HG-18 DWT: E-stop handler all-branch 1.15 µs vs ≤ 1 µs, step ISR 2.4 µs vs ≤ 2 µs | E (+A) | HW gate |
 | F3 PO approval of bench safety procedure (FW_test_plan §6.8) | PO | before HW gate |
 | F4 / E-C4 SW quiet during SAVE (MC2-4 verified on sim stall; re-check on twin) | F | M3 |
-| MC2-3 core.safety coverage ≥ 95 % with calibrated path — B reports 96 % (F to verify) | B, F | M3 gate |
+| MC2-3 core.safety coverage ≥ 95 % — **closed** (F: 98.2 %) | B, F | closed 2026-10-05 |
 | MC2-5 reference PC: Win32 hotkey + NFR-003, DM-06, DM-11 | PO, F | M3 |
 | MC2-6 PO demos DM-02, DM-05, SYS-008 walk-through; sim-vs-twin motion subset | PO, C, F | M3 entry / M3 |
 | OBS-M2-08 ring_newest signed compare — **fixed** (stampring.c, FW_design v0.7 §9.10; also fixed a not-full-ring > 35.8 min defect) | A | closed 2026-10-05 |
@@ -134,3 +134,19 @@ Evidence: FW_test_report_M2 (Validator E final **GO WITH CONDITIONS**: DEF-M2-01
 - M3: A fixed DEF-M3-01 (stale sniffed-stop hold: dispatched-before-sniffed queue) + DEF-HG-01 (meas first capture) + `threshold_in_controlled_stop` replay; native 176/176 ×2; release flash 45 464 B / RAM 8 672 B; all images PASS; E's sniffhold reproducer 3/3. SRS v0.6.2 (pulse defaults 12.5/12.5 µs, 40 kHz, D-45 e) → static 15/15 PASS (Orchestrator run). E's twin suite needs updates for 40 kHz + sniffhold xfail removal (at M3 verification).
 - **ICD v0.7.3 / dict 6** (hash 0xF8BCDCB8): D-45 e defaults, OI-FW-43 closed (MOVE_UNTIL_LOAD rules a–e), twin DIAG_MEAS fidelity (OBS-E-HG-01/02/05 fixed, -03 partly), Integrator review of tools/hil: R-HIL-01 stale hash, R-HIL-02 approval substring match, R-HIL-03 50 kHz assumptions (Orchestrator: set 50 kHz + 10/10 µs explicitly for those PSU-off trials), R-HIL-04/05/06 low. Tools 933 ×2, integration 101 ×2. M3 verification queue: E (R-HIL-01…06, twin 40 kHz updates, sniffhold xfail flip, val vectors v0.7.3), F (harness under SAF-SW-001, H3 cases), D cosmetic fakes 62.5 mm/s.
 - M3: **B backend done** (SW_design v0.5 §22b/§15.5e B5-01…24): calc (stats, loadcal, travelcal, tare, limits, derived), engines (tare, load cal, travel cal with restore), calibration store, SafetySupervisor every frame (STOP ≤ 50 ms p95/max on 100 sim violations), ThresholdManager calibrated path, scaling/derived channels, recorder + samples, sessions/marks, sim load model (SWC-M3-02 closed); unit 2192 ×3, core.safety 96 %, GUI 258, integration 100 + 1 (OI-B-M3-03 one-line test fix → C), validation 41 expected failures (harness needs no-specimen mode → F). All M3 implementation done → M3 verification.
+- **Validator E M3: GO WITH CONDITIONS** (FW_test_report_M3.md, plan v0.4.2): FW-MOT-006 incl. ICD §5.4 rules a–e verified (16-test twin suite), DEF-M3-01 + DEF-HG-01 closed, native 210/210, val Unity 34 ×2, val twin 213 ×2, 10k walk + 2000 random stops PASS, images + check_map + TC-SYS-009-02 PASS, static 15/15, HIL unit 39 ×2, HIL twin dry run 44 steps 0 FAIL/0 INCONCLUSIVE/0 ERROR. Conditions M3-C1 HW gate open (D-06), M3-C2 HG-18 DWT bounds, M3-C3 PO approval of §6.8 (+ dedicated approved row), M3-C4 target confirmation FW-MOT-006 timing + DEF-HG-01, M3-C5 R-HIL-04…06 wording (sent). OBS-M3-01 PWM-input 16-bit wrap (A, low), OBS-M3-02 first decel period preloaded (info).
+- **Validator F M3: NOT ACCEPTED (formal)** — SWD-M3-01 (S2): single PC-limit latch → no PC force supervision while a TRAVEL latch is set (sim: 975 N vs 150 N pull limit; FW 110 % FS limit still protects). 3111 tests ×3: 3110 passed + 1 xfail (reproducer); run 1 one real-clock perf smoke false LINK LOST (OBS-M3-R1, 2nd occurrence). Coverage core.safety 98.2 % (MC2-3 closed). 64 new M3 validation tests. → B fixing SWD-M3-01 + MC3-4 logging; D GUI-side logging. Conditions after fix: MC3-2 reference PC NFR-001…004 + hotkey; MC3-3 PO demos + wizard walk-through with real weights at HW gate; MC3-4 LINK LOST instrumentation.
+- M3 fix round: B fixed SWD-M3-01 (per-kind PC-limit latches, every frame) + MC3-4 backend diagnostics; D GUI-side LINK LOST diagnostics + perf smoke on out-of-process sim. B: unit 2207 ×2, validation 560 (--runxfail), GUI 259, integration 101. F re-verifying.
+
+## M3 gate (Orchestrator, 2026-10-05) — ACCEPTED WITH CONDITIONS
+Evidence: FW_test_report_M3 (Validator E **GO WITH CONDITIONS** M3-C1…C4, FW-MOT-006 verified, DEF-M3-01 / DEF-HG-01 closed, HIL dry run 0 FAIL); SW_test_report_M3 v1.1 (Validator F **ACCEPTED WITH CONDITIONS**, SWD-M3-01 closed, 3128 tests ×3 identical: 3127 passed + 1 strict xfail SWD-M3-02; core.safety 98.3 %); Orchestrator spot check: SAF-SW-001 reproducers 5 passed, unit 2207 passed.
+| Condition | Owner | Due |
+|---|---|---|
+| M3-C1 HW-gate items open (D-06) | E | HW gate |
+| M3-C2 HG-18 DWT: E-stop handler 1.15 µs vs 1 µs, step ISR 2.4 µs vs 2 µs | E, A | HW gate |
+| M3-C3 PO approval of §6.8 (+ dedicated approved D-06-GATE row) | PO, Orchestrator | before HW gate |
+| M3-C4 target confirmation FW-MOT-006 timing (HG-12), DEF-HG-01 (HG-29 d / HG-02 c) | E | HW gate |
+| MC3-2 reference PC runs NFR-001…004, Win32 hotkey, DM-11 (reference PC not specified) | PO, F | before M4 gate |
+| MC3-3 PO demos DM-02/03/05/07/09/11; wizard walk-through with real weights | PO, F | M4 / HW gate |
+| MC3-5 SWD-M3-02 (S3) trip-clear toast says "STOP sent" | D (+B) | M4 entry |
+| MC3-6 LINK LOST on the reference PC → use the new diagnostics | F | reference-PC run |

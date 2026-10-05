@@ -1,4 +1,5 @@
-"""Validator E - DEF-M3-01: stale sniffed-stop hold (found by the HIL twin dry run, 2026-10-05).
+"""Validator E - DEF-M3-01: stale sniffed-stop hold (found by the HIL twin dry run, 2026-10-05; fixed by A in
+2d36eec, xfail removed at the M3 verification).
 
 FW_design §5.9.3: the 1 kHz stop sniffer records a hold {TYPE, SEQ}; the in-order dispatch of the same frame
 releases it (hold_on_dispatch). When the main-loop dispatcher handles the STOP / HALT / PAUSE frame BEFORE the next
@@ -23,8 +24,6 @@ from vhelp import V
 MD = {n: i for i, n in enumerate(rc.MOVE_DONE_REASON)}
 
 
-@pytest.mark.xfail(strict=True, reason="DEF-M3-01: stale sniffed-stop hold discards a motion start ≤ 20 ms after a "
-                                       "stop frame that was dispatched before the sniffer scanned it")
 @pytest.mark.parametrize("stop", ["STOP0", "HALT", "PAUSE"])
 def test_motion_after_dispatched_stop_not_discarded(v: V, stop):
     m.need(v, "MOTION", "HOMING")

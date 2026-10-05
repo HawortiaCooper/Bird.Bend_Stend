@@ -519,6 +519,7 @@ class Backend:
         self._latest_t: int | None = None
         self._latest_epoch = 0
         self._th_job: Any = None
+        self._gc_watch: Any = None
         self.safety = SafetySupervisor(stop=self._safety_stop, terminate=self.terminate_all,
                                        publish=self.events.publish, event_row=self.record_event,
                                        limits=lambda: self.session.get().limits, inputs=self._safety_inputs)
@@ -575,6 +576,8 @@ class Backend:
         from bend_stand.core import timing  # noqa: PLC0415
 
         timing.init()
+        self._gc_watch = timing.GcWatch()
+        self._gc_watch.install()
         self.worker.start()
         self.pipeline.start()
         self._sup_stop.clear()
@@ -612,6 +615,9 @@ class Backend:
             if hk is not None:
                 hk.stop()
             self.liveness.uninstall_excepthook()
+            gw, self._gc_watch = self._gc_watch, None
+            if gw is not None:
+                gw.uninstall()
             self._started = False
 
     def gui_beat(self) -> None:
@@ -631,6 +637,7 @@ class Backend:
 
     def _tick(self, now: int) -> None:
         """Supervisor body: link / heartbeat / confirmations (Device), jog refresh (motion), hotkey ping."""
+        self.liveness.beat("supervisor", now)
         self.device.tick(now)
         self.motion.tick(now)
         self._auto_thresholds()
@@ -700,9 +707,31 @@ class Backend:
         self._stop_sim()
         return None
 
+    def link_diagnostics(self, window_ms: int = 10_000) -> dict[str, Any]:
+        """MC3-4 (OBS-M3-R1): longest tick gap of every backend thread and the GC pauses over the last window, the
+        receive age and the frame counters — logged with every LINK LOST."""
+        now = self.clock.monotonic_ns()
+        d = self.device
+        rd = d.reader
+        out: dict[str, Any] = {"window_ms": window_ms,
+                               "tick_gap_ms": self.liveness.longest_gaps(window_ms * MS, now),
+                               "rx_age_ms": None if rd is None or rd.last_rx_ns is None
+                               else round((now - rd.last_rx_ns) / 1e6, 1),
+                               "pipeline_queue": self.pipeline.queued(),
+                               "frames_lost_link": self.pipeline.counters.frames_lost_link}
+        if self._gc_watch is not None:
+            out.update(self._gc_watch.summary(window_ms * MS))
+        return out
+
     def _on_link_change(self, state: LinkState) -> None:
         if state == LinkState.LOST:
-            self.events.log("LINK LOST", logging.ERROR)
+            try:
+                diag = self.link_diagnostics()
+            except Exception as exc:  # noqa: BLE001 — diagnostics must never break the reaction
+                diag = {"error": str(exc)}
+            self.events.log("LINK LOST", logging.ERROR, diagnostics=diag)
+            log.error("LINK LOST diagnostics: %s", diag)
+            self.record_event("LINK_LOST", " ".join(f"{k}={v}" for k, v in diag.items()))
         if state in (LinkState.LOST, LinkState.DISCONNECTED):
             self.motion.on_link_down()
             self.terminate_all("LINK_LOST" if state == LinkState.LOST else "DISCONNECTED")
@@ -1219,7 +1248,7 @@ class Backend:
             load_limits_on=(cfg.pull_enabled or cfg.push_enabled) and not li.no_specimen,
             load_input_valid=lst.valid, load_input_reason=lst.reason, no_specimen=li.no_specimen,
             thresholds_match=d.threshold_mgr.matches(d.thresholds),
-            sw_trip=None if self.safety.trip is None else self.safety.trip.limit, owner=self.owner, operation=op,
+            sw_trip=", ".join(t.limit for t in self.safety.active_trips()) or None, owner=self.owner, operation=op,
             capture_kinds=self.capture.kinds(), moved_recently=recent,
             afe_synthetic=bool(d.info is not None and d.info.feature_mask & pg.Features.AFE_SYNTHETIC),
             travel_cal_differs=self.travel_cal.diff.differs and not self.travel_cal.diff.ignored,
@@ -1283,7 +1312,7 @@ class Backend:
         trip = self.safety.trip
         warns = self.safety.active_warnings() + (("FW_CLAMPED",) if d.thresholds.clamped else ())
         return SafetyStatus(None if trip is None else trip.limit, warns, d.thresholds, st.valid, st.reason,
-                            self.load_input.no_specimen, trip)
+                            self.load_input.no_specimen, trip, self.safety.active_trips())
 
     def _calibration_status(self) -> CalibrationStatus:
         d = self.device

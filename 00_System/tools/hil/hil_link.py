@@ -1,7 +1,7 @@
 """HIL link layer: D-06 safety interlock, transports (FW twin / serial), PC-side command link, DIAG_MEAS wrapper.
 
 Owner: Validator E (00_System/tools/hil, Integrator reviews). Built on the Integrator's reference codec
-(`00_System/tools/ref_codec.py`, ICD v0.7.1) — not the production codec of the SW.
+(`00_System/tools/ref_codec.py`, ICD v0.7.3) — not the production codec of the SW.
 
 **D-06 interlock (the only way this package opens a serial port):** `open_serial()` refuses unless
   1. an explicit PO approval reference `D-06-GATE-YYYYMMDD[-TAG]` is passed (format, real calendar date, not in
@@ -37,8 +37,9 @@ import ref_codec as rc  # noqa: E402
 
 DICT = gen_params.load()
 PBYKEY = {p.key: p for p in DICT.params}
+DICT_HASH = f"0x{DICT.hash:08X}"     # R-HIL-01: from params.yaml (gen_params), never a hard-coded copy
 
-# DIAG_MEAS tables (ICD v0.7.1 Appendix B.18–B.25; tests/test_hil_unit.py proves they match protocol.yaml)
+# DIAG_MEAS tables (ICD v0.7.3 Appendix B.18–B.25; tests/test_hil_unit.py proves they match protocol.yaml)
 MEAS_OP = {n: i for i, n in enumerate(rc.MEAS_OP)}
 MEAS_SRC = {"ESTOP": 0, "LIMIT_START": 1, "LIMIT_END": 2, "PAUSE": 3, "DOUT": 4, "DRV_PWR": 5, "RX": 6, "DIR": 7,
             "STIM": 8}
@@ -62,6 +63,21 @@ APPROVAL_RE = re.compile(r"^D-06-GATE-(\d{4})(\d{2})(\d{2})(?:-[A-Z0-9]{1,16})?$
 APPROVAL_FILES = ("00_System/specs/DECISIONS.md", "00_System/STATUS.md")
 
 
+def approval_row(text: str, ref: str) -> str | None:
+    """R-HIL-02: the reference must be recorded in a DEDICATED markdown table row — one cell equal to the reference
+    as a whole token (backticks / bold stripped) and the row marked 'approved' — not just occur somewhere (a mention
+    like 'D-06-GATE-20261012 pending' or a longer tag 'D-06-GATE-20261012-X' does not count)."""
+    for line in text.splitlines():
+        s = line.strip()
+        if not (s.startswith("|") and s.endswith("|")):
+            continue
+        cells = [c.strip().strip("`*").strip() for c in s.strip("|").split("|")]
+        if ref in cells and re.search(r"\bapproved\b", s, re.IGNORECASE) and not re.search(
+                r"\b(pending|withdrawn|revoked|rejected|proposed)\b", s, re.IGNORECASE):
+            return s
+    return None
+
+
 def check_approval(ref: str | None, *, today: _dt.date | None = None, max_age_days: int = 7,
                    repo: Path = REPO) -> _dt.date:
     """Validate a PO approval reference for hardware access (D-06). Returns its date; raises InterlockError."""
@@ -80,18 +96,18 @@ def check_approval(ref: str | None, *, today: _dt.date | None = None, max_age_da
         raise InterlockError(f"D-06: approval {ref} is dated in the future ({d} > {today})")
     if (today - d).days > max_age_days:
         raise InterlockError(f"D-06: approval {ref} is older than {max_age_days} days — ask the PO to renew it")
-    recorded = False
+    recorded = None
     for rel in APPROVAL_FILES:
-        f = repo / rel
         try:
-            if ref.strip() in f.read_text(encoding="utf-8"):
-                recorded = True
-                break
+            recorded = approval_row((repo / rel).read_text(encoding="utf-8"), ref.strip())
         except OSError:
             continue
+        if recorded:
+            break
     if not recorded:
-        raise InterlockError(f"D-06: approval {ref} is not recorded in {' or '.join(APPROVAL_FILES)} "
-                             "(the Orchestrator records the PO's approval there before any session)")
+        raise InterlockError(f"D-06: approval {ref} is not recorded as an approved row in {' or '.join(APPROVAL_FILES)} "
+                             "(the Orchestrator adds '| <ref> | <date> | PO approved HW gate … | approved (PO) |' "
+                             "before any session)")
     return d
 
 
@@ -219,7 +235,7 @@ class Link:
     frames: list[RxFrame] = field(default_factory=list)
     rtt_log: list[tuple[str, float]] = field(default_factory=list)
     step_ms: float = 0.25
-    stop_guard_ms: float = 25.0      # DEF-M3-01 workaround (0 = off): no motion start ≤ 20 ms after a stop frame
+    stop_guard_ms: float = 0.0       # DEF-M3-01 workaround, off since A's fix (2d36eec); 25 re-enables it
     _last_stop_ns: int = -(10**18)
     _ev_seen: int = 0
     _ev_cache: list[dict] = field(default_factory=list)

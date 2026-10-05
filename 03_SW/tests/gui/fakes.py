@@ -300,7 +300,7 @@ class FakeChannels:
 # --------------------------------------------------------------------------------------------- M2–M3 fakes
 
 def default_limits() -> MotionLimits:
-    return MotionLimits(30.0, 20.0, 62.5, 2.0, 100.0, False, 30.0, 30.0, 0.5, 290.0)
+    return MotionLimits(30.0, 20.0, 50.0, 2.0, 100.0, False, 30.0, 30.0, 0.5, 290.0)   # dict 6: 40 kHz / 800 st/mm
 
 
 class FakeMotion:
@@ -428,6 +428,11 @@ class FakeLimits:
             self.cfg = cfg
         return issues
 
+    def check(self, cfg: LimitConfig) -> list[Issue]:
+        """B5-21: the same issues as ``set`` without applying (scripted via ``next_issues``, not consumed)."""
+        self._o._rec("limits.check", cfg)
+        return list(self.next_issues or [])
+
     def thresholds(self) -> ThresholdState:
         return self._o.status().safety.thresholds
 
@@ -478,6 +483,14 @@ class FakeMarks:
         if self._o is not None:
             self._o._rec("marks.save_preset", path)
         self.presets[path] = self._m
+
+    def delete_preset(self, path: str) -> None:
+        """B5-22 (GRQ-B-27): only ``*.bbmarks.json``; unknown path → FileFormatError."""
+        if self._o is not None:
+            self._o._rec("marks.delete_preset", path)
+        if not path.endswith(".bbmarks.json") or path not in self.presets:
+            raise FileFormatError(f"not a mark preset: {path}")
+        del self.presets[path]
 
     def load_preset(self, path: str) -> TestMarks:
         if self._o is not None:
