@@ -18,7 +18,8 @@ approach (OLS, clamped) → trim (MOVE_DONE + 100 ms, mean of the last 4 samples
 
 Guards (pipeline sink, per sample while a motion command of the sequence runs, SW-SEQ-007): SLIP (load moving
 opposite to the motion by > 5 % of the target / running extreme), BREAK_DETECTED (|F| drops > 20 % below its running
-max while loading, also during the approach), TIMEOUT (1.2 × planned travel time + 10 s; waits without motion
+max while loading, also during the approach; at standstill — settle / capture / hold — a drop > 20 % of the running
+maximum within 0.5 s, D-49 a), TIMEOUT (1.2 × planned travel time + 10 s; waits without motion
 3 × planned + 10 s), ALM 0 → 1 (controlled STOP, DRIVER_ALARM, no retry, D-33 c), recording failure (controlled
 STOP, SW-ACQ-004). Pause (D-30/D-31): the run keeps step / loop counters; the open window is discarded; Resume =
 RESUME 0x3C, wait PAUSED = 0, then the interrupted step is re-run (absolute target / approach + trim / capture anew).
@@ -90,6 +91,36 @@ class _Guard:
     max_abs: float = 0.0
 
 
+class HoldBreakGuard:
+    """D-49 a (SRS v0.6.4 SW-SEQ-007): BREAK_DETECTED at standstill — during a hold / capture (no command changing
+    |F|) a drop of |F| by more than 20 % of its running maximum **within 0.5 s** (max of the last 0.5 s − now) stops
+    the sequence; slow relaxation (≈ 1 %/s) never reaches that rate. Armed per D-48 (running max ≥ max(5 % of the
+    target, 1 % FS)). Samples earlier than ``t_from_us`` (t_reached + 100 ms: the HX711 filter still follows the
+    last move, R4 §8.4) are ignored, so the filter lag after a fast unloading move is not a "drop". Device time µs."""
+
+    WINDOW_US = 500_000
+
+    def __init__(self, target_n: float | None, t_from_us: int = 0) -> None:
+        self.arm = max(0.05 * abs(target_n), GUARD_ARM_N) if target_n is not None else GUARD_ARM_N
+        self.t_from = int(t_from_us)
+        self.max_abs = 0.0
+        self.recent: collections.deque[tuple[int, float]] = collections.deque()
+
+    def update(self, t_us: int, f_n: float) -> str | None:
+        if t_us < self.t_from:
+            return None
+        a = abs(f_n)
+        self.max_abs = max(self.max_abs, a)
+        self.recent.append((t_us, a))
+        while self.recent and t_us - self.recent[0][0] > self.WINDOW_US:
+            self.recent.popleft()
+        peak = max(v for _t, v in self.recent)
+        if self.max_abs >= self.arm and peak - a > BREAK_FRAC * self.max_abs:
+            return (f"load dropped by {peak - a:.1f} N within 0.5 s at standstill (> 20 % of the running maximum "
+                    f"{self.max_abs:.1f} N)")
+        return None
+
+
 @dataclass
 class _Win:
     exec_idx: int
@@ -148,6 +179,7 @@ class _Run:
     window: _Win | None = None
     approach: list[tuple[float, float]] | None = None
     guard: _Guard | None = None
+    hold_guard: HoldBreakGuard | None = None
     alm_prev: bool = False
     valid_on: bool = False
     fail_flags: list[str] = field(default_factory=list)
@@ -204,6 +236,9 @@ class SequenceExecutor:
             plan = None
         run = _Run(seq, plan, x_zero, x_zero if seq.travel_ref == "test" else 0.0, home_confirmed,
                    be.clock.monotonic_ns(), k_est=float(seq.k_est_n_mm))
+        t_u, t32 = getattr(be, "_latest_t", None), be.pipeline.prev_t_raw     # device time of the newest sample
+        if t_u is not None and t32 is not None:                               # (OBS-M4-03: events carry t_us_u)
+            run.last_t_u, run.last_t32 = int(t_u), int(t32)
         with self._lock:
             self._run = run
         be.owner = OWNER
@@ -379,6 +414,12 @@ class SequenceExecutor:
         g = run.guard
         if g is not None and math.isfinite(f):
             self._check_guard(run, g, f)
+        hg = run.hold_guard
+        if hg is not None and math.isfinite(f) and run.state == "RUNNING" and run.guard is None:
+            why = hg.update(int(row.t_us_u), f)
+            if why is not None:
+                run.hold_guard = None
+                self._guard_trip(run, "BREAK_DETECTED", why)
         vmask = self._be.device.valid_status_mask()
         alm = bool(row.status & vmask & DS.ALM)
         if alm and not run.alm_prev and run.state in ACTIVE:
@@ -786,8 +827,8 @@ class SequenceExecutor:
 
     def _dwell(self, run: _Run, exec_idx: int, i: int, iters: tuple[int, ...], t_r: int, *, hold: bool = False,
                settle_only: bool = False, load: bool = False) -> Job:
-        """settle → capture (VALID window) → hold, all measured from ``t_r`` (device time)."""
-        be = self._be
+        """settle → capture (VALID window) → hold, all measured from ``t_r`` (device time); the standstill break
+        guard (D-49 a) watches the whole dwell."""
         step = run.seq.steps[i]
         settle = int(round(float(step.settle_s) * 1e6))
         cap = 0 if settle_only else int(round(float(step.capture_s) * 1e6))
@@ -795,6 +836,16 @@ class SequenceExecutor:
         if not load:
             dwell_s = max(float(step.step_time_s), dwell_s)
         deadline = self._now() + int(T.hold_timeout_s(dwell_s) * S)
+        run.hold_guard = HoldBreakGuard(float(step.target) if load and step.target is not None else None,
+                                        t_r + int(T.SETTLE_AFTER_DONE_S * 1e6))      # D-49 a
+        try:
+            yield from self._dwell_phases(run, exec_idx, step, iters, t_r, settle, cap, dwell_s, deadline, hold)
+        finally:
+            run.hold_guard = None
+
+    def _dwell_phases(self, run: _Run, exec_idx: int, step: Any, iters: tuple[int, ...], t_r: int, settle: int,
+                      cap: int, dwell_s: float, deadline: int, hold: bool) -> Job:
+        be = self._be
         if cap > 0:
             t0, t1 = t_r + settle, t_r + settle + cap
             win = _Win(exec_idx, step.uid, iters, t0, t1, t_reached=t_r)   # every sample of [t0, t1] (report = live)

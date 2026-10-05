@@ -341,8 +341,6 @@ def test_tc_sw_rep_004_01_tv_d_bend():
 
 @pytest.mark.req("SW-SEQ-001")
 @pytest.mark.defect("SWD-M4-01")
-@pytest.mark.xfail(strict=True, reason="SWD-M4-01 open (B): core/sequencer/model.py _validate_step has no rule "
-                                       "'capture_during_move needs capture_s > 0' (§15.5f B6-02, SW_test_plan VV)")
 def test_tc_sw_seq_001_01_ramp_step_needs_a_capture():
     """B6-02 / TC-SW-SEQ-001-01: a TRAVEL step with ``capture_during_move`` and ``capture_s`` 0 is an ERROR (a ramp
     step must define its capture)."""
@@ -351,3 +349,17 @@ def test_tc_sw_seq_001_01_ramp_step_needs_a_capture():
 
     s = _st("travel", 10.0, speed_mm_s=2.0, capture_during_move=True, capture_s=0.0)
     assert any(str(i.severity) == "ERROR" and i.step_uid == s.uid for i in validate(_seq([s], travel_ref="machine")))
+
+
+@pytest.mark.req("SW-WIZ-001")
+@pytest.mark.defect("OBS-M4-01")
+def test_tc_sw_wiz_001_02_staircase_mode_inference():
+    """OBS-M4-01 regression (B6-22): ``count`` without ``by`` → count mode; ``count`` + ``increment`` without ``by`` →
+    ValueError (conflicting fields); with ``by`` given, the other branch's field is ignored."""
+    # Verifies: SW-WIZ-001
+    from bend_stand.core.sequencer.generators import generate
+
+    assert _targets(generate("staircase", start=0, end=10, count=5)) == [0, 2.5, 5, 7.5, 10]
+    with pytest.raises(ValueError):
+        generate("staircase", start=0, end=10, count=5, increment=2.5)
+    assert _targets(generate("staircase", start=0, end=10, by="increment", increment=5, count=3)) == [0, 5, 10]

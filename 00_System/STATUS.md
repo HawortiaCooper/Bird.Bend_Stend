@@ -1,6 +1,6 @@
 # Project status
 
-**Phase:** P2 Implementation — **M1–M4 all ACCEPTED WITH CONDITIONS (M4 gate 2026-10-05)** · next: P3 Integration & validation (HW gate, reference-PC runs, PO demonstrations, PO acceptance) · baseline SRS v0.6.3, ICD v0.7.4 (dict 6, 0xF8BCDCB8) · D-06 in force · **Date:** 2026-10-05
+**Phase:** **P2 complete** — M1–M4 ACCEPTED WITH CONDITIONS; all remaining conditions need the PO / bench / reference PC → **P3 waiting for the PO** (`00_System/P3_READINESS.md`) · baseline SRS v0.6.4, ICD v0.7.4 (dict 6, 0xF8BCDCB8) · D-06 in force (§6.8 approved, gate date pending) · **Date:** 2026-10-05
 
 ## P0 gate (Orchestrator, 2026-10-03) — ACCEPTED
 R1–R4 written; conflicts resolved: (a) Stefan step-timer error: checked `Stefan/FW/stanok/Core/Src/main.c:136-158` + `tim.c:45` → TIM2 84 MHz / (9+1) = 8.4 MHz vs assumed 10 MHz → 16 % slow (R1/R4 correct, R2's 6.7 % ignores the prescaler); irrelevant for us (D-09). (b) Step timing: SRS takes R2's conservative defaults (≥ 10 µs high/low, ≤ 50 kHz, DIR setup 20 µs) as parameters; R4's TIM2 PWM-mode-2 scheme stays (CCR scaled). Key safety finding R2 §8: motor force ≈ 9 kN ≫ cell safe overload 2.35 kN → FW per-sample load limit is safety-critical.
@@ -161,9 +161,13 @@ Evidence: FW_test_report_M4 (Validator E **GO WITH CONDITIONS**, D-47 a 32/32 vs
 | Condition | Owner | Due |
 |---|---|---|
 | M4-C1…C4 (= M3-C1…C4) HW gate: D-06, HG-18 DWT bounds, PO approval §6.8 + approved row, HG-12 / DEF-HG-01 on target | PO, E, A | HW gate |
-| MC4-1 SWD-M4-01 (S3) capture-during-move validation rule | B | before P3 |
+| MC4-1 SWD-M4-01 — **closed** (F re-test) | B | closed |
 | OBS-M4-01 staircase count without by="count" ignored (S4) · OBS-M4-03 SEQ_START/SEQ_STEP meta events lack t_us (S4) | B | before P3 |
 | OBS-M4-01 (E) ICD note: response to link-restoring command may carry LINK_WDG ≤ 1 ms | C | before P3 |
 | MC4-2 reference-PC runs NFR-001…004, Win32 hotkey | PO, F | P3 |
 | MC4-3 PO demonstrations DM-01/02/03/05/07/08/09/10/11 + wizard walk-through with real weights | PO, F | P3 / HW gate |
-| MC4-4 PO decision OBS-M4-02: BREAK detection at standstill (D-48 limits it to load-raising commands) | PO | P3 |
+| MC4-4 OBS-M4-02 — **closed** (D-49 a implemented, F verified with own oracle; Integrator twin scenarios) | B, F | closed |
+- PO 2026-10-05: D-49 (a) BREAK at standstill; (b) §6.8 bench procedure approved, gate date pending (no D-06-GATE row yet). SRS v0.6.4. B pre-P3 fixes done (SWD-M4-01, OBS-M4-01/03; unit 2264 ×2); Integrator OBS-M4-01 ICD note (v0.7.4 entry), README S column. Real-clock flake now diagnosed by MC3-4 logs as a 1.32 s host pipeline stall (OBS-M3-R1 hypothesis supported).
+- B implemented D-49 a (HoldBreakGuard; 100 ms post-move grace confirmed by Orchestrator); unit 2267 ×2, GUI 297; validation: F's SWD-M4-01 strict xfail now XPASS (remove), one real-clock false LINK LOST with 0.99 s host stall in diagnostics. → F pre-P3 confirmation run; Integrator twin scenario for standstill break.
+- Integrator: D-49 a twin scenarios (break at standstill ×2 variants, slow relaxation no-trip) pass; twin model fix `specimen_net_n` (one-sided relaxed specimen never reverses sign) + self-test; integration 171 ×2, tools+HIL 981, E twin 246.
+- **Pre-P3 confirmation (F, SW_test_report_M4 v1.1):** 3352 tests ×3 identical (0 xfail/skip); MC4-1, MC4-4, OBS-M4-01/03 closed; MC3-6 evidence: false LINK LOST = source stalled ~1 s on the loaded dev PC (receive threads alive, GC 3.7 ms) → decided by the reference-PC soak. Remaining: MC4-2 reference PC, MC4-3 PO demos, HW gate. P3_READINESS.md written.

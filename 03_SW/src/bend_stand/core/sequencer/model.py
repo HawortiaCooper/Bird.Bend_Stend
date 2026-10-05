@@ -345,6 +345,9 @@ def _validate_step(seq: Sequence, s: Step, c: ValidationContext, k_est: float | 
             if trips and limit_margin_warning(k_est, v, c.fw_level_n, max(trips)):
                 err("speed_mm_s", "SAF_SW_006_MARGIN", f"speed {v:g} mm/s too high for the limit margin "
                     f"{c.fw_level_n - max(trips):.0f} N (overshoot ≈ {k_est * v * 0.065:.0f} N)", W)
+    if kind == StepKind.TRAVEL and s.capture_during_move and not (_finite(s.capture_s) and s.capture_s > 0):
+        err("capture_s", "RANGE", "capture during move needs capture_s > 0 (the ramp is captured; the window is the "
+                                  "move itself)")                                        # B6-02, SWD-M4-01
     if kind == StepKind.TRAVEL and s.target is not None and _finite(s.target):
         xm = machine_mm(seq, s.target, c.x_zero_mm)
         if (c.travel_lo_mm is not None and xm < c.travel_lo_mm - 1e-9) or \

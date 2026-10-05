@@ -6,6 +6,7 @@ SW-SCH-002, SW-REP-002, FW-MOT-006
 from __future__ import annotations
 
 import errno
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -366,8 +367,9 @@ def test_tare_home_hold_ramp_steps_and_machine_reference(tmp_path) -> None:
         seq = Sequence(travel_ref="machine", steps=[
             Step("t", StepKind.TARE), Step("H", StepKind.HOME),
             Step("x0", StepKind.TRAVEL, 2.0, speed_mm_s=5.0),
-            Step("ramp", StepKind.TRAVEL, 4.0, speed_mm_s=1.0, capture_during_move=True),
+            Step("ramp", StepKind.TRAVEL, 4.0, speed_mm_s=1.0, capture_s=2.0, capture_during_move=True),
             Step("hold", StepKind.HOLD, settle_s=0.2, capture_s=0.5, step_time_s=1.0)])
+        assert not [i for i in be.sequencer.validate(seq) if i.severity == "ERROR"]
         tare0 = be.status().tare.tare_id
         g = be.sequencer.start(seq)
         assert g.ok and g.needs_confirmation and be.sequencer.status().state == "IDLE"   # CONFIRM first (B3-20)
@@ -530,5 +532,62 @@ def test_step_results_carry_t_reached(tmp_path) -> None:
         from bend_stand.core.report import load_result
         rep = load_result(st.report_folder)
         assert [r.t_reached_s for r in rep.results] == [r.t_reached_s for r in be.sequencer.results()]
+    finally:
+        be.shutdown()
+
+
+# ------------------------------------------------------------------------------------------------ D-49 a
+@pytest.mark.req("SW-SEQ-007")
+def test_hold_break_guard_rule() -> None:
+    """D-49 a: > 20 % of the running max within 0.5 s at standstill trips; slow decay does not; armed per D-48;
+    samples before t_reached + 100 ms ignored."""
+    from bend_stand.core.sequencer.executor import HoldBreakGuard
+
+    g = HoldBreakGuard(200.0)
+    assert all(g.update(i * 12_500, 200.0) is None for i in range(40))
+    assert g.update(40 * 12_500, 165.0) is None                          # 17.5 % drop: below 20 %
+    assert g.update(41 * 12_500, 155.0) is not None                      # 45 N > 40 N within 0.5 s
+    slow = HoldBreakGuard(200.0)
+    t, f = 0, 200.0
+    for _ in range(4800):                                                # 30 % over 60 s (exponential, τ 15 s)
+        assert slow.update(t, f) is None
+        t += 12_500
+        f = 200.0 * (1 - 0.3 * (1 - math.exp(-t / 15e6)))
+    assert f < 145.0 and slow.max_abs == 200.0
+    small = HoldBreakGuard(None)                                         # not armed below 1 % FS (19.6 N)
+    assert small.update(0, 15.0) is None and small.update(12_500, 0.0) is None
+    lag = HoldBreakGuard(None, t_from_us=100_000)                        # filter lag after the move ignored
+    assert lag.update(0, 300.0) is None and lag.update(50_000, 100.0) is None and lag.update(100_000, 0.0) is None
+
+
+@pytest.mark.req("SW-SEQ-007")
+def test_break_at_standstill_during_capture_stops(tmp_path) -> None:
+    """D-49 a: the specimen fails during the capture of a load step (world: specimen removed) → BREAK_DETECTED,
+    priority STOP, sequence STOPPED."""
+    be = ready(tmp_path)
+    try:
+        h = be.test_hooks
+        start(be, load_seq(150.0, capture=3.0))
+        assert h.run_until(lambda: be.sequencer.status().phase == "CAPTURE", 60_000)
+        h.advance(500)
+        be.sim.act("specimen", kind="none")
+        st = run_to_end(be)
+        assert st.state == "STOPPED" and st.end_reason == "BREAK_DETECTED", st.message
+        assert "standstill" in st.message and 0 in stop_modes(be)
+        assert "BREAK_DETECTED" in be.sequencer.results()[-1].flags
+    finally:
+        be.shutdown()
+
+
+@pytest.mark.req("SW-SEQ-007")
+def test_slow_relaxation_during_a_long_hold_does_not_trip(tmp_path) -> None:
+    """D-49 a: relaxation of ≈ 30 % over 60 s (simulator relax model, τ = 15 s) during the capture → no trip."""
+    be = ready(tmp_path, specimen={"relax_pct": 30.0, "relax_tau_s": 15.0})
+    try:
+        start(be, load_seq(150.0, capture=60.0, settle=0.2, ret=False))
+        st = run_to_end(be, 240_000)
+        assert st.state == "FINISHED", st.message
+        r = be.sequencer.results()[-1]
+        assert r.f_drift_n < -25.0 and r.n >= 3800                       # the relaxation was measured honestly
     finally:
         be.shutdown()

@@ -9,7 +9,8 @@ Pure functions returning a ``Block(steps, loops)`` (indices relative to the bloc
   ``return_to_zero`` inserts a zero step (same speed, no capture) after every non-zero level incl. the last;
   a step equal to the previous step's target is never generated. Example start 0, end 30, count 4, up_down,
   return_to_zero → 0, 10, 0, 20, 0, 30, 0, 20, 0, 10, 0.
-* ``linear_ramp``: TRAVEL x0 (no capture) + TRAVEL x1 with ``capture_during_move`` (VALID = 1 while moving).
+* ``linear_ramp``: TRAVEL x0 (no capture) + TRAVEL x1 with ``capture_during_move`` (VALID = 1 while moving;
+  ``capture_s`` = the nominal ramp time |x1 − x0| / speed, informative — the window is the move itself).
 * ``cyclic``: two steps lo / hi (dwell = minimum step time, optional capture) inside ``Loop(count = cycles)``.
 * ``hold``: one step at the target with ``capture_s = duration`` (creep / relaxation captured throughout).
 * ``return_``: TRAVEL 0 (sequence coordinate) or HOME.
@@ -152,7 +153,7 @@ def linear_ramp(*, x0_mm: float = 0.0, x1_mm: float = 1.0, speed_mm_s: float = 0
         raise ValueError("x1_mm: must differ from x0_mm")
     s0 = _step("travel", x0_mm, speed=approach_speed_mm_s or speed_mm_s, accel=accel_mm_s2, label="ramp start")
     s1 = _step("travel", x1_mm, speed=speed_mm_s, accel=accel_mm_s2, label=f"ramp → {x1_mm:g} mm",
-               capture_during_move=True)
+               capture=abs(x1_mm - x0_mm) / speed_mm_s, capture_during_move=True)
     return Block([s0, s1], [])
 
 
@@ -268,6 +269,19 @@ def generate(name: str, params: Mapping[str, Any] | None = None, *, ctx: SchemaC
     unknown = [k for k in p if k not in names]
     if unknown:
         raise ValueError(f"{unknown[0]}: unknown parameter of {name}")
+    # OBS-M4-01: a conditional field given while its condition field is not given — the staircase level mode is
+    # inferred (``count`` alone → by = "count"); any other such field is an error (never silently ignored).
+    # With the condition given explicitly, fields of the other branch are ignored (hidden form fields).
+    if name == "staircase" and "by" not in p:
+        if "count" in p and "increment" in p:
+            raise ValueError("count / increment: give one, or set by = 'increment' | 'count'")
+        if "count" in p:
+            p["by"] = "count"
+    for f in sc.fields:
+        if f.depends_on is not None and f.name in p and p[f.name] is not None:
+            dep, val = f.depends_on
+            if dep not in p and next((g.default for g in sc.fields if g.name == dep), None) != val:
+                raise ValueError(f"{f.name}: applies only with {dep} = {val!r}")
     for f in sc.fields:
         if f.depends_on is not None:
             dep, val = f.depends_on

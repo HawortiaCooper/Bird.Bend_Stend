@@ -2,7 +2,7 @@
 
 | Doc | SW_test_report_M4 |
 |---|---|
-| Version | **1.0 — M4 gate verification** |
+| Version | **1.1 — pre-P3 re-test** (1.0: M4 gate verification, ACCEPTED WITH CONDITIONS) |
 | Date | 2026-10-05 |
 | Author | Validator F — SW |
 | Plan | `03_SW/docs/SW_test_plan.md` **v0.5** (M4 corrections §10d M4-C1…C7) |
@@ -12,7 +12,26 @@
 
 ---
 
-## 0. Verdict
+## 0. Final verdict (after the pre-P3 re-test, §7)
+
+```
+Verdict M4: ACCEPTED WITH CONDITIONS (PO-dependent items only)
+SW tree: aed10d9 + B's pre-P3 fixes (SW_design §15.5f B6-22, B6-23 / D-49 a) — 03_SW/src fingerprint identical before /
+         after all runs
+Runs (full 03_SW/tests: unit 2267 + gui 297 + integration 171 + validation 617 = 3352):
+   #1 fixed order          3352 passed (1126 s)
+   #2 seed 12345           3352 passed (1142 s)
+   #3 seed 3788228584      3352 passed (1139 s)
+   → identical, no xfail, no skip
+Validation trace run: 616 passed, 1 failed — real-clock test_v_twin frame-count case after a false LINK LOST
+   (1.27 s pipeline gap, reader / supervisor alive, GC 3.7 ms; 5 / 5 in isolation) → MC3-6 evidence, §7.3
+Closed: SWD-M4-01 (MC4-1), OBS-M4-01, OBS-M4-03, OBS-M4-02 / MC4-4 (D-49 a implemented and verified)
+Open defects: none
+Remaining conditions (PO / REF PC): MC4-2 (= MC3-2, incl. MC3-6 LINK LOST evidence on the REF PC), MC4-3 (= MC3-3 +
+   DM-01 / DM-08 / DM-10)
+```
+
+## 0a. Verdict of the gate verification (v1.0, superseded by §0)
 
 ```
 Verdict M4: ACCEPTED WITH CONDITIONS
@@ -115,8 +134,66 @@ The TIMEOUT guard (step timeout 1.2·T + 10 s) is verified at the vector level a
 
 Closed at this gate: MC3-5 / SWD-M3-02 (trip-clear message), MC3-4 (implemented at the M3 re-test).
 
-## 6. Change history
+## 7. Pre-P3 re-test (v1.1)
+
+B reported (SW_design §15.5f):
+* **B6-22:** SWD-M4-01 fixed (capture-during-move needs capture > 0; `linear_ramp` sets `capture_s`); OBS-M4-01 (staircase mode inference, ValueError on conflicting fields); OBS-M4-03 (SEQ_START / SEQ_STEP carry `t_us_u`).
+* **B6-23 — D-49 a** (SRS v0.6.4 SW-SEQ-007, PO decision): BREAK_DETECTED also at standstill (`HoldBreakGuard`), when |F| drops by more than 20 % of the running maximum within 0.5 s. Arming per D-48; samples before t_reached + 100 ms ignored.
+
+### 7.1 Results
+| Item | Re-test | State |
+|---|---|---|
+| SWD-M4-01 | strict xfail removed; `test_tc_sw_seq_001_01_ramp_step_needs_a_capture` passes | **closed (MC4-1)** |
+| OBS-M4-01 | `test_tc_sw_wiz_001_02_staircase_mode_inference`: `count` alone → count mode (0, 2.5, 5, 7.5, 10); `count` + `increment` without `by` → ValueError; with `by` the other branch is ignored | **closed** |
+| OBS-M4-03 | report test extended: every `sequence_runs[].events` entry has `t_us_u` | **closed** |
+| D-49 a — break at standstill | `test_tc_sw_seq_007_06_break_at_standstill_d49a`: the specimen breaks (`specimen kind none`) 0.5 s into the capture of a 150 N load step → BREAK_DETECTED. The STOP is written ≤ 1 frame + 20 ms after the receipt of the first sample that **F's oracle** (`_drop_rows`: max of the last 0.5 s − \|F\| > 20 % of the running max, from t_reached + 100 ms) classifies as a drop; step flagged | **verified** |
+| D-49 a — slow relaxation | `…_slow_relaxation_does_not_trip`: relaxation 30 %, τ 20 s during a 30 s hold. Precondition from the recorded data: the total drop is > 20 % of the maximum. Never 20 % within 0.5 s (oracle) → no BREAK; COMPLETED | **verified** |
+| D-49 a — grace | `…_grace_after_t_reached[30 ms / 300 ms]`: a break 30 ms after t_reached is not reported at standstill — the documented grace; the running maximum starts after the grace, so the capture then shows the unloaded value. A break 300 ms after t_reached trips BREAK_DETECTED | **verified** (limitation noted) |
+| OBS-M4-02 / MC4-4 | PO decision D-49 a implemented as decided | **closed** |
+
+### 7.2 Notes (no defect)
+* **Status label before its phase:** `SeqStatus` briefly shows the new step's label with the previous step's phase (e.g. "F150 / SETTLE" before APPROACH) for one status update at a step change. It was seen while driving the grace test and is cosmetic (S4). The GUI may show it for one tick.
+* **Grace limitation (D-49 a):** a break inside the first 100 ms after t_reached is not reported by the standstill guard. The FW load limit, the motion guard of the preceding command (while loading) and the step result (F̄ far from the target → NOT_ON_TARGET) remain.
+* **Remaining t_reached gap:** a step aborted in SETTLE (before its capture window) has `StepResult.t_reached_s = None`. B6-20 covers windows only; reports are unaffected.
+
+### 7.3 MC3-6 — LINK LOST evidence (false LINK LOSTs on the real clock)
+| Source | Diagnostics (`Backend.link_diagnostics`, MC3-4) | Reading |
+|---|---|---|
+| F, trace run of this re-test (`test_v_twin.py::test_twin_one_frame_per_conversion_and_fw_drop_attribution`, FW twin over TCP, real clock) | `tick_gap_ms {reader 97.8, supervisor 97.8, pipeline 1267.8}`, `rx_age_ms 1002.5`, `pipeline_queue 5`, `frames_lost_link 0`, `gc_count 1`, `gc_max_ms 3.7` | The reader and supervisor threads were alive, but **no byte arrived for 1.0 s**, and GC was negligible. The source stopped sending: the twin is a separate process, so this is a host scheduling stall of the twin, not a backend GC pause. The test then miscounted frames (58 vs 485) after the reconnect. It passed 5 / 5 in isolation and in all three full runs |
+| B (reported by B, not re-observed by F) | two real-clock false LINK LOSTs with pipeline stalls of **0.99 s** and **1.32 s** in the MC3-4 diagnostics | same pattern (stall ≈ 1 s on a loaded host) |
+| Earlier | OBS-M2-R1, OBS-M3-R1 (full-suite runs on a loaded DEV host) | — |
+
+**Assessment:** all occurrences sit on the DEV PC under parallel load from other roles' suites, at about the 1 s link threshold.
+- F's diagnostics rule out a GC pause and show live PC receive threads with a silent source.
+- No occurrence was in an operator-like setting.
+- The link watchdog behaving as designed (LOST after 1 s of silence) is correct behaviour, not a defect.
+
+**Condition MC3-6 stays open**, with the PR-4 1 h soak on the REF PC as the deciding evidence:
+- any LINK LOST there is evaluated with these diagnostics;
+- a stall of the SW process itself (pipeline / reader gap with rx_age small) would be a defect;
+- a silent source would point to the board, VCP or host.
+
+### 7.4 Evidence
+```
+.venv\Scripts\python -m pytest 03_SW\tests -p no:randomly -rfEsxX                       (run 1: 3352 passed)
+.venv\Scripts\python -m pytest 03_SW\tests -p randomly --randomly-seed=12345 -rfEsxX     (run 2: 3352 passed)
+.venv\Scripts\python -m pytest 03_SW\tests -p randomly -rfEsxX                           (run 3, seed 3788228584: 3352 passed)
+.venv\Scripts\python -m pytest 03_SW\tests\validation -p no:randomly                      (trace run: 616 passed, 1 failed — §7.3)
+test_twin_one_frame_per_conversion_and_fw_drop_attribution alone: 5 / 5 passed
+```
+Logs: scratchpad `validator-f-sw/m4retest/`.
+- `_reports/processes.log`: 462 started and 462 stopped / exited, each by PID, plus the waited report-CLI subprocess exits (rc 0).
+- `_reports/trace.json` is from the trace run, with one failed entry: the twin case of §7.3.
+
+### 7.5 Remaining conditions
+| ID | Condition | Owner | Due |
+|---|---|---|---|
+| MC4-2 | REF PC: NFR-001…004 (PR-1…PR-5 incl. the 100-trial SW-limit latency, DM-11), Win32 hotkey / NFR-003 (PR-3, DM-06), **MC3-6** LINK LOST evaluation in PR-4; REF PC still unspecified | PO / Orchestrator, F | HW gate / P3 |
+| MC4-3 | PO demonstrations DM-01 (full workflow), DM-08 (sequence chart + marker), DM-10 (HTML report), DM-02 / 03 / 05 / 07 / 09 / 11 | PO, F | P3 |
+
+## 8. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 1.0 | 2026-10-05 | Validator F | M4 gate verification on 5daf3b8: housekeeping (SWD-M3-02 closed, TC-SW-SEQ-007-03 aligned), M4 validation modules (U 14 functions / 25 cases, C 16 functions / 26 cases), 3 full runs (3340 tests) identical, coverage, code review; SWD-M4-01 (S3), OBS-M4-01…03; verdict ACCEPTED WITH CONDITIONS (MC4-1…4). |
+| 1.1 | 2026-10-05 | Validator F | Pre-P3 re-test: SWD-M4-01 / OBS-M4-01 / OBS-M4-03 closed; D-49 a verified with F's oracle (standstill break trips, slow relaxation does not, grace); MC4-1 / MC4-4 closed; 3 runs identical (3352 passed); MC3-6 evidence recorded (§7.3); remaining conditions MC4-2 / MC4-3 (PO / REF PC). |

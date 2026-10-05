@@ -56,6 +56,7 @@ def test_three_files_and_regenerated_numbers_equal_live(run_dir, tmp_path) -> No
     run = meta["sequence_runs"][0]
     assert run["state"] == "FINISHED" and run["sequence"]["schema"] == "bird.bend.sequence"
     assert len(run["windows"]) == 2 and run["scale_log"] and "k_est_final_n_mm" in run
+    assert run["events"][0]["name"] == "SEQ_START" and all(e["t_us_u"] is not None for e in run["events"])  # OBS-M4-03
     res = load_result(folder)
     assert len(res.results) == 2
     for a, b in zip(live, res.results, strict=True):

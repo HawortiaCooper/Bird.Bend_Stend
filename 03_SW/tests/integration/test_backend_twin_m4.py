@@ -643,3 +643,76 @@ def test_report_offline_equals_online_and_the_wire(m4):
         assert a["f_mean_n"] == pytest.approx(b["f_mean_n"] - m.K * 1000.0, abs=1e-6)
     # B6-08: t_reached_s = the device time the step reached its target (TRAVEL: MOVE_DONE t_us)
     assert [r["t_reached_s"] for r in with_window[:2]] == pytest.approx([e["t_us"] / 1e6 for e in done[:2]], abs=1e-6)
+
+
+# ============================================================================================ 10 D-49 a hold guard
+def _hold_doc(capture_s: float, tol: float = 2.0) -> dict:
+    return ss.seq_doc("hold break", [
+        ss.step("l1", "load", 150.0, speed_mm_s=2.0, tol_n=tol, settle_s=0.5, capture_s=capture_s),
+        ss.step("r", "travel", 0.0, speed_mm_s=5.0)], k_est=40.0)
+
+
+@pytest.mark.req("SW-SEQ-007", "D-49")
+@pytest.mark.parametrize("how", ["specimen_removed", "break_by_travel"])
+def test_break_detected_at_standstill_during_a_capture(m4, how):
+    """D-49 a (SRS v0.6.4 SW-SEQ-007): load step 150 N (spring 50 N/mm from test 5 mm), 3 s capture; 1 s into the
+    capture the specimen is gone — removed (``specimen kind=none``) or broken by an external deflection
+    (``break_travel_um`` 4 mm, ``world_shift`` +1.5 mm while the axis stands) → BREAK_DETECTED at standstill:
+    immediate STOP (mode 0) ≤ 50 ms after the first DATA frame of the drop, sequence STOPPED, nothing afterwards."""
+    m = m4
+    rig, tw = m.rig, m.rig.tw
+    kw = {"break_travel_um": 4000.0} if how == "break_by_travel" else {}
+    rig.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=m.world(ZERO_MM + 5.0), **kw)
+    seq = m.load(_hold_doc(3.0))
+    t0 = tw.now_us
+    ss.start_sequence(rig.be, seq)
+    seen: dict[str, float] = {}
+
+    def in_capture(st) -> bool:  # noqa: ANN001
+        v = [d for d in ss.data(tw, t0)[-100:] if "VALID" in d["flags"]]
+        if v and "t" not in seen:
+            seen["t"] = tw.now_us
+        return "t" in seen and tw.now_us - seen["t"] >= 1_000_000
+    ss.run_sequence(rig, 60_000, step_ms=1.0, on_tick=in_capture)
+    assert ss.state_name(rig.be.sequencer.status()) == "RUNNING"
+    t_ev = tw.now_us
+    if how == "specimen_removed":
+        rig.act("specimen", kind="none")
+    else:
+        rig.act("world_shift", um=1500.0)
+    st = ss.run_sequence(rig, 10_000)
+    if how == "break_by_travel":
+        brk = [e for e in tw.seam_log if e["call"] == "specimen_break" and e["t_us"] >= t_ev]
+        assert len(brk) == 1, brk
+        t_ev = brk[0]["t_us"]
+    first = ss.data(tw, t_ev)[0]
+    stops = ss.rx_cmds(tw, t_ev, ("STOP", "HALT"))
+    assert stops and stops[0]["name"] == "STOP" and stops[0]["fields"]["mode"] == 0, stops
+    assert stops[0]["first_us"] - first["wire_us"] <= 50_000, (first, stops[0])
+    assert ss.state_name(st) == "STOPPED" and "BREAK_DETECTED" in ss.outcome_text(st), ss.outcome_text(st)
+    rig.advance(2000)
+    assert ss.no_motion_after(tw, stops[0]["first_us"]) == []
+    assert not any("VALID" in d["flags"] for d in ss.data(tw, stops[0]["last_us"] + FRAME + SLACK))
+    assert any("BREAK_DETECTED" in flags_of(r) for r in results(m))
+
+
+@pytest.mark.req("SW-SEQ-007", "D-49")
+def test_slow_relaxation_during_a_long_capture_does_not_trip(m4):
+    """D-49 a negative: spring 50 N/mm with relaxation 30 % / τ 15 s (≈ 3 N/s at 150 N = 1.5 N per 0.5 s, far below
+    20 % of the running maximum), load step 150 N (tol 5 N against the drift during the trim), 60 s capture: the
+    load relaxes by ≈ 44 N during the capture, the sequence finishes, no STOP, no guard flag."""
+    m = m4
+    rig, tw = m.rig, m.rig.tw
+    rig.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=m.world(ZERO_MM + 5.0), relax_pct=30.0,
+            relax_tau_s=15.0)
+    seq = m.load(_hold_doc(60.0, tol=5.0))
+    t0 = tw.now_us
+    ss.start_sequence(rig.be, seq)
+    st = ss.run_sequence(rig, 180_000)
+    assert_finished(st)
+    assert ss.rx_cmds(tw, t0, ("STOP", "HALT")) == []
+    runs = ss.valid_runs(ss.data(tw, t0))
+    assert len(runs) == 1 and len(runs[0]) >= 60 * 80 - 2, [len(r) for r in runs]
+    f = [m.force(d["afe_raw"]) for d in runs[0]]
+    assert f[0] - f[-1] >= 30.0, (f[0], f[-1])                          # the relaxation really happened
+    assert not any({"BREAK_DETECTED", "SLIP", "TIMEOUT"} & flags_of(r) for r in results(m))

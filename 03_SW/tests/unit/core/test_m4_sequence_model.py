@@ -300,3 +300,21 @@ def test_edit_helpers_keep_loop_indices() -> None:
     t = _seq(4, [Loop(2, 3, 2)])
     assert t.duplicate_steps([0]) == [1] and t.loops == [Loop(3, 4, 2)] and t.duplicate_steps([]) == []
     assert not [i for i in validate(s) if i.severity == E]
+
+
+@pytest.mark.req("SW-SEQ-001", "SW-WIZ-001")
+def test_gate_fixes_swd_m4_01_obs_m4_01() -> None:
+    """SWD-M4-01: a ramp step (capture during move) needs capture_s > 0; OBS-M4-01: staircase ``count`` alone
+    infers by = "count", conflicting / inapplicable conditional fields raise."""
+    bad = Sequence(steps=[Step("r", StepKind.TRAVEL, 1.0, capture_during_move=True, capture_s=0.0)])
+    assert ("r", "capture_s", "RANGE", E) in {(i.step_uid, i.field, i.code, i.severity) for i in validate(bad)}
+    ramp = G.linear_ramp(x0_mm=1.0, x1_mm=4.0, speed_mm_s=0.5)
+    assert ramp.steps[1].capture_s == pytest.approx(6.0)
+    assert not [i for i in validate(Sequence(steps=ramp.steps)) if i.severity == E]
+    assert [s.target for s in G.generate("staircase", start=0.0, end=4.0, count=5).steps] == [0, 1, 2, 3, 4]
+    with pytest.raises(ValueError, match="count / increment"):
+        G.generate("staircase", start=0.0, end=4.0, count=5, increment=1.0)
+    with pytest.raises(ValueError, match="tol_n"):
+        G.generate("staircase", start=0.0, end=4.0, increment=1.0, tol_n=1.0)     # kind defaults to travel
+    assert len(G.generate("staircase", kind="travel", start=0.0, end=4.0, increment=1.0, tol_n=1.0).steps) == 5
+    assert len(G.generate("staircase", by="increment", start=0.0, end=4.0, increment=1.0, count=3).steps) == 5

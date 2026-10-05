@@ -460,6 +460,8 @@ def test_tc_sw_rep_001_02_report_files_contents_and_live_equals_report(lockstep)
         if w["kind"] == "load":
             assert ("ON_TARGET" in live[w["exec_idx"]].flags) == (abs(f_mean - w["target"]) <= w["tol_n"])
     assert [r.loop_iters for r in rep.values() if r.loop_iters]
+    ev = run["events"]                                            # OBS-M4-03 regression: every event has device time
+    assert ev and all(e["t_us_u"] is not None for e in ev), [e for e in ev if e["t_us_u"] is None][:3]
 
 
 @pytest.mark.req("SW-REP-003", "SW-REP-004")
@@ -598,3 +600,110 @@ def test_tc_sw_seq_001_02_test_travel_reference(lockstep):
     assert H.seq_start(be, seq2).ok
     H.seq_wait_end(be)
     assert [w.fields["target_um"] for w in H.tx(be, "MOVE_ABS", since=m1)][:1] == [5_000]
+
+
+# ============================================================================================ D-49 a standstill break
+
+def _drop_rows(rows, t_from_us, k_frac=0.20, win_us=500_000):
+    """F's oracle for D-49 a: first row (t ≥ t_from) where |F| is more than ``k_frac`` of the running maximum (since
+    t_from) below the maximum of the preceding 0.5 s."""
+    mx, recent = 0.0, []
+    for r in rows:
+        if r[0] < t_from_us or r[5] != r[5]:
+            continue
+        a = abs(r[5])
+        mx = max(mx, a)
+        recent = [(t, v) for t, v in recent if r[0] - t <= win_us] + [(r[0], a)]
+        if max(v for _, v in recent) - a > k_frac * mx:
+            return r
+    return None
+
+
+def _hold_after_load(be, *, capture_s=2.0, hold_s=0.0, relax=None):
+    H.ready_for_sequence(be)
+    kw = dict(kind="spring", k_n_per_mm=50.0, x_contact_um=20_000)
+    if relax:
+        kw.update(relax_pct=relax[0], relax_tau_s=relax[1])
+    H.act(be, "specimen", **kw)
+    steps = [H.step("travel", 15.0, speed_mm_s=5.0),
+             H.step("load", 150.0, speed_mm_s=2.0, tol_n=2.0, settle_s=0.3, capture_s=capture_s, label="F150")]
+    if hold_s:
+        steps.append(H.step("hold", None, capture_s=hold_s, step_time_s=hold_s, label="hold"))
+    return H.sequence(steps, travel_ref="machine", k_est_n_mm=50.0)
+
+
+@pytest.mark.req("SW-SEQ-007")
+@pytest.mark.defect("OBS-M4-02")
+def test_tc_sw_seq_007_06_break_at_standstill_d49a(lockstep):
+    """D-49 a (SRS v0.6.4 SW-SEQ-007): a specimen that breaks during the capture of a load step (no command changing
+    |F|) → BREAK_DETECTED: STOP within one frame + 20 ms of the first sample that F's oracle classifies as a > 20 %
+    drop within 0.5 s; sequence ends BREAK_DETECTED with the step flagged."""
+    # Verifies: SW-SEQ-007
+    be = lockstep()
+    seq = _hold_after_load(be, capture_s=2.0)
+    assert H.seq_start(be, seq).ok
+    assert H.seq_until(be, lambda s: s.label == "F150" and s.phase in ("APPROACH", "TRIM"), 60_000)
+    assert H.seq_until(be, lambda s: s.label == "F150" and s.phase == "CAPTURE", 60_000)
+    H.advance(be, 500)
+    m0 = H.wire_mark(be)
+    H.act(be, "specimen", kind="none")                          # instant break at constant travel
+    st = H.seq_wait_end(be)
+    assert st.end_reason == "BREAK_DETECTED", st
+    w = [x for x in H.seq_run_log(st.recording_folder)["windows"] if x["kind"] == "load"][0]
+    rows = _rows(st.recording_folder)
+    first = _drop_rows(rows, w["t_reached_us_u"] + 100_000)
+    stops = H.tx(be, "STOP", since=m0)
+    assert first is not None and stops
+    rx = [x for x in H.rx(be, "DATA", since=m0) if x.fields["t_us"] == first[0] & 0xFFFFFFFF]
+    assert rx and 0 <= (stops[0].t_ns - rx[0].t_ns) / MS <= 1000 * FRAME_S + 20, (stops[0].t_ns - rx[0].t_ns) / MS
+    res = [r for r in be.sequencer.results() if r.label == "F150"]
+    assert res and "BREAK_DETECTED" in res[0].flags
+
+
+@pytest.mark.req("SW-SEQ-007")
+@pytest.mark.defect("OBS-M4-02")
+def test_tc_sw_seq_007_06_slow_relaxation_does_not_trip(lockstep):
+    """D-49 a: relaxation of 30 % with τ = 20 s during a 30 s hold drops |F| by more than 20 % of the maximum in total
+    (precondition from the recorded data) but never by 20 % within 0.5 s (F's oracle) → no BREAK; the sequence
+    completes."""
+    # Verifies: SW-SEQ-007
+    be = lockstep()
+    seq = _hold_after_load(be, capture_s=0.5, hold_s=30.0, relax=(30.0, 20.0))
+    assert H.seq_start(be, seq).ok
+    st = H.seq_wait_end(be, timeout_ms=200_000)
+    assert st.end_reason == "COMPLETED", st
+    rows = _rows(st.recording_folder)
+    w = [x for x in H.seq_run_log(st.recording_folder)["windows"] if x["kind"] == "hold"][0]
+    hold = [r for r in rows if w["t_reached_us_u"] <= r[0] <= w["t1_us_u"]]
+    fmax, fmin = max(r[5] for r in hold), min(r[5] for r in hold)
+    assert fmax - fmin > 0.20 * fmax, (fmax, fmin)                # total relaxation > 20 % …
+    assert _drop_rows(hold, w["t_reached_us_u"] + 100_000) is None  # … but never 20 % within 0.5 s
+
+
+@pytest.mark.req("SW-SEQ-007")
+@pytest.mark.defect("OBS-M4-02")
+@pytest.mark.parametrize("delay_ms, trips", [(30, False), (300, True)])
+def test_tc_sw_seq_007_06_grace_after_t_reached(lockstep, delay_ms, trips):
+    """D-49 a grace: samples before t_reached + 100 ms are ignored (HX711 filter lag after a move). A break 30 ms after
+    t_reached is therefore not reported at standstill (accepted limitation: the running maximum starts after the grace,
+    the capture then shows the unloaded value); a break 300 ms after t_reached trips BREAK_DETECTED."""
+    # Verifies: SW-SEQ-007
+    be = lockstep()
+    seq = _hold_after_load(be, capture_s=1.0)
+    assert H.seq_start(be, seq).ok
+    assert H.seq_until(be, lambda s: s.label == "F150" and s.phase in ("APPROACH", "TRIM"), 60_000)
+    assert H.seq_until(be, lambda s: s.label == "F150" and s.phase in ("SETTLE", "CAPTURE"), 60_000, chunk_ms=2.0)
+    t_phase = H.rx(be, "DATA")[-1].fields["t_us"]          # ≥ t_reached, ≤ t_reached + 2 ms + 1 frame
+    H.advance(be, max(0, delay_ms - 5))
+    H.act(be, "specimen", kind="none")
+    st = H.seq_wait_end(be)
+    run = H.seq_run_log(st.recording_folder)
+    w = [x for x in run["windows"] if x["kind"] == "load"]
+    rows = _rows(st.recording_folder)
+    # t_reached: from the window log when the capture window exists, else bounded by the observed phase change
+    t_reached = w[0]["t_reached_us_u"] if w else t_phase - int(1e6 * FRAME_S) - 2000
+    t_drop = next(r[0] for r in rows if r[0] > t_reached and r[5] == r[5] and abs(r[5]) < 50.0)
+    if trips:
+        assert (t_drop - t_reached) / 1000 >= 100 and st.end_reason == "BREAK_DETECTED", (st, t_drop - t_reached)
+    else:
+        assert (t_drop - t_reached) / 1000 < 100 and st.end_reason != "BREAK_DETECTED", (st, t_drop - t_reached)

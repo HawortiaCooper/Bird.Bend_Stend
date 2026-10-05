@@ -145,6 +145,8 @@ static double specimen_force_n(void)
     return sg * f;
 }
 
+static double specimen_net_n(void);
+
 /* M3 load model (ICD v0.7.2): force on the cell = specimen (elastic - relaxation) + hung weights; the cell adds
  * creep (first order toward creep_frac x the load counts, tau creep_tau_s), non-linearity (nonlin_frac x FS x
  * 4u(1-u), u = |F| / FS, odd in F) and a linear zero drift (counts/s). States advance with virtual time at every
@@ -159,18 +161,24 @@ static void load_update(void)
         T.relax_n += (T.relax_frac * fe - T.relax_n) * (1.0 - exp(-dt / T.relax_tau_s));
     } else T.relax_n = 0.0;
     if (T.creep_frac > 0.0 && T.creep_tau_s > 0.0) {
-        double fs = specimen_force_n();
-        double fc = T.afe_cpn * ((fs != 0.0 ? fs - T.relax_n : 0.0) + T.weight_n);
+        double fc = T.afe_cpn * (specimen_net_n() + T.weight_n);
         T.creep_counts += (T.creep_frac * fc - T.creep_counts) * (1.0 - exp(-dt / T.creep_tau_s));
     } else T.creep_counts = 0.0;
 }
 
-static double world_force_n(void)
+/* Specimen force on the cell = elastic - relaxation; a one-sided (pull / push) specimen cannot change sign through
+ * its relaxation: unloading a relaxed specimen loses contact (force 0) instead of pushing back (D-49 a scenarios:
+ * no artificial reversal when a relaxed specimen is unloaded). A clamped specimen (side both) is not limited. */
+static double specimen_net_n(void)
 {
     double fs = specimen_force_n();
-    if (fs != 0.0) fs -= T.relax_n;                     /* relaxation acts on either side (M4) */
-    return fs + T.weight_n;
+    if (fs == 0.0) return 0.0;
+    double n = fs - T.relax_n;
+    if (T.spec_side != 2 && n * fs < 0.0) n = 0.0;
+    return n;
 }
+
+static double world_force_n(void) { return specimen_net_n() + T.weight_n; }
 
 static double drift_counts(void) { return T.drift_acc + T.drift_cps * (double)(T.now - T.drift_t) / 1e9; }
 

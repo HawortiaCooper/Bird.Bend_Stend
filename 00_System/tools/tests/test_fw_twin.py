@@ -656,3 +656,19 @@ def test_specimen_m4_grip_slip_once_and_kept_over_reset(tw):
     tw.act("reset", cause="pin")
     tw.advance_ms(5)
     assert tw.act("query", what="world")["specimen_n"] == pytest.approx(125.0)
+
+
+def test_specimen_m4_relaxed_one_sided_specimen_never_reverses(tw):
+    """Unloading a relaxed pull specimen loses contact (force 0) instead of pushing back; a clamped (both)
+    specimen may go negative."""
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=0.0, relax_pct=30.0, relax_tau_s=1.0)
+    _spec_at(tw, 3_000)
+    tw.advance_ms(5000)                                            # relax_n ≈ 45 N
+    w = _spec_at(tw, 500)                                          # elastic 25 N < relaxation
+    assert w["relax_n"] > 25.0 and w["load_n"] == 0.0
+    tw.act("specimen", kind="spring", k_n_per_mm=50.0, x_contact_um=0.0, side="both", relax_pct=30.0,
+           relax_tau_s=1.0)
+    _spec_at(tw, 3_000)
+    tw.advance_ms(5000)
+    w = _spec_at(tw, 500)
+    assert w["load_n"] == pytest.approx(25.0 - w["relax_n"]) and w["load_n"] < 0

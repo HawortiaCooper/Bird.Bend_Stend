@@ -766,6 +766,7 @@ mass and plausibility rules), `test_v_gui_m3.py` (G: slider, hold-to-jog, TARE p
 | M4-C4 | TC-SW-SEQ-006-04 | the D-32 bound is checked with an enabled SW travel limit nearer than the soft limit (D-33 d) — 60 mm instead of the 290 mm soft limit (same rule, shorter run) | D-33 d |
 | M4-C5 | TC-SW-SEQF-001-01 | a structurally valid file with overlapping loops loads; the sequence is then invalid (ERROR, start refused). Corrupt / wrong schema / newer version / unknown step type → FileFormatError, current sequence unchanged | design (§10.7) |
 | M4-C6 | TC-SW-REP-001-01 | the "JSON metadata" checklist is checked over `meta.json` + `report.json` (events, board params, versions live in `meta.json`) | SRS SW-REP-001 wording |
+| M4-C8 | TC-SW-SEQ-007-06 (new) | D-49 a: standstill break (> 20 % of the running max within 0.5 s) trips; slow relaxation (30 %, τ 20 s) does not; grace t_reached + 100 ms (30 ms: not reported, 300 ms: trips); oracle `_drop_rows` | D-49 a, SRS v0.6.4 |
 | M4-C7 | TC-SW-SEQ-007-01 | guards per D-48: armed at \|F\| ≥ max(5 % target, 1 % FS), SLIP floor 0.5 % FS, BREAK evaluated before SLIP and only while a command increases \|F\|; a slip that also drops > 20 % is reported BREAK_DETECTED (accepted outcome) | D-48 |
 
 Validation suite (v0.5): `test_v_m4_calc.py` (U: TV-SS, VV-SS mask bits, INCOMPLETE / ON_TARGET boundaries, TV-C / VV-C,
