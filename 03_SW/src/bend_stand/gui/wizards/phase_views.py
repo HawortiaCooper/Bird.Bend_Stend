@@ -16,7 +16,7 @@ TERMINAL_PHASES: frozenset[str] = frozenset({"ABORTED", "RESTORING", "DONE", "RE
 IDLE_PHASES: frozenset[str] = frozenset({"IDLE", "NONE", ""})
 
 VIEWS: Mapping[str, Mapping[str, str]] = {
-    "travel_cal": {"CHECK": "checklist", "BACKLASH": "move", "REFERENCE": "instruction", "MOVE1": "move",
+    "travel_cal": {"CHECK": "checklist", "HOME": "move", "BACKLASH": "move", "REFERENCE": "instruction", "MOVE1": "move",
                    "ENTER_D1": "input", "MOVE2": "move", "ENTER_DTOT": "input", "RESULT": "result",
                    "ACCEPT": "progress", "DONE": "done", "ABORTED": "aborted", "RESTORING": "restoring",
                    "CANCELLED": "aborted"},

@@ -605,6 +605,7 @@ class SafetyStatus:
     no_specimen_mode: bool = False
     trip: SwTrip | None = None
     trips: tuple[SwTrip, ...] = ()          # every latched class (PULL / PUSH / TRAVEL_MIN / TRAVEL_MAX, SWD-M3-01)
+    no_specimen_scope: str | None = None    # D-54 a: wizard-scoped no-specimen state (e.g. "TRAVEL_CAL"; banner)
 
 
 @dataclass(frozen=True)

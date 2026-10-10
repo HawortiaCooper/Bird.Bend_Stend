@@ -52,9 +52,12 @@ Fresh install (DM-02) · full workflow on the simulator (DM-01) · two-monitor l
 - ALM / PEND are reported only (plus the ALM start-block, D-28); automatic ALM reaction is a later release.
 - PC on-screen STOP latency depends on the GUI thread under heavy host load; the Pause/Break key (own thread) is the robust stop path (OBS-P3-02).
 
-## 4. Further PO decisions (from tasks 1–7)
-- Is the 600 s window on 4 plot windows required at ≥ 20 fps (OBS-P3-03; dev PC reaches ~6–15 fps)? Lighter "all channels" layout / OpenGL (OBS-P3-02)?
-- Driver-alarm reset procedure (OI-UM-02): manual proposes E-stop → 48 V off/on → release → Clear E-STOP → Enable → HOME.
-- Interval of the periodic D-42 ENA-cut check (OI-UM-04; manual says "start of every test campaign").
-- Code signing of the distribution (F-B-PKG-02); recordings-folder picker in the GUI (F-B-PKG-04).
-- Optionally prepare the fixed-point step ramp now, so a second FW image is ready at the gate (OI-FW-45).
+## 4. PO answers 2026-10-10 (D-54)
+- Travel calibration must be available independently of the load calibration → fixing (SW-CAL-002, B + D, F verifies).
+- 600 s × 4 windows at ≥ 20 fps desired → new NFR-009 (Should); GPU (OpenGL) rendering being tried (D).
+- Driver-alarm reset procedure confirmed: E-stop → 48 V off/on → release → Clear E-STOP → Enable → HOME.
+- D-42 ENA-cut check at the start of every test campaign confirmed.
+- No code signing.
+- Recordings-folder picker in the GUI → building (B + D).
+- Fixed-point step ramp → prepared as a second, selectable FW image (A, E verifies); the default image is unchanged.
+- HW gate date and reference-PC runs: waiting for the PO's go.

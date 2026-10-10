@@ -43,10 +43,9 @@ def _ready(**kw):
 def _to_move2(be) -> tuple[float, float]:
     """Run BACKLASH → REFERENCE → MOVE1 → ENTER_D1 (D1 = real travel) → MOVE2 (trial written); returns (x_ref, d1)."""
     tc = be.travel_cal
-    g = tc.start(v_mm_s=10.0)                       # load unknown → CONFIRM "no specimen mounted", nothing started
-    assert g.needs_confirmation and "NO_SPECIMEN_MOUNTED" in g.codes() and not tc.active
-    g = tc.start(v_mm_s=10.0, confirmed=True)
-    assert g.ok, g
+    g = tc.start(v_mm_s=10.0)                       # D-54 a: the session no-specimen mode (C-10) already confirmed
+    assert g.ok and "NO_SPECIMEN_MOUNTED" not in g.codes(), g
+    assert be.status().safety.no_specimen_scope is None   # no wizard scope needed inside the session mode
     assert tc.state().phase == "BACKLASH" and tc.state().continue_moves
     tc.continue_()
     _wait(be, "REFERENCE")

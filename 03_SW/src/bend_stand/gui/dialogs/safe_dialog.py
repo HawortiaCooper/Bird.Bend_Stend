@@ -40,6 +40,7 @@ from bend_stand.gui.widgets.stop_button import StopButton
 
 __all__ = [
     "SafeDialog", "SafeMessageBox", "SafeFileDialog", "get_open_file_name", "get_save_file_name",
+    "get_existing_directory",
     "disable_native_dialogs", "FILE_DIALOG_HOOK",
 ]
 
@@ -234,6 +235,24 @@ def get_save_file_name(parent: QWidget | None, caption: str, directory: str = ""
     dlg.setFileMode(QFileDialog.FileMode.AnyFile)
     if default_suffix:
         dlg.setDefaultSuffix(default_suffix)
+    try:
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selectedFiles():
+            return dlg.selectedFiles()[0]
+        return ""
+    finally:
+        dlg.deleteLater()
+
+
+def get_existing_directory(parent: QWidget | None, caption: str, directory: str = "") -> str:
+    """Folder chooser (non-native, with STOP; D-54 c recordings folder). "" = cancelled. Test seam:
+    ``FILE_DIALOG_HOOK("dir", caption, "")``."""
+    hook = FILE_DIALOG_HOOK[0]
+    if hook is not None:
+        return hook("dir", caption, "")
+    dlg = SafeFileDialog(parent, caption, directory, "")
+    dlg.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+    dlg.setFileMode(QFileDialog.FileMode.Directory)
+    dlg.setOption(QFileDialog.Option.ShowDirsOnly, True)
     try:
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selectedFiles():
             return dlg.selectedFiles()[0]

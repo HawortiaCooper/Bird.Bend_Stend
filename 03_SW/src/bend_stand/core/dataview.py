@@ -49,6 +49,36 @@ def _fill_vstate(vs: np.ndarray, t_map: np.ndarray, col_w: float, window_s: floa
     return out
 
 
+def minmax_select(y: np.ndarray, stride: int) -> np.ndarray:
+    """Indices of the per-segment minimum and maximum of ``y`` (segments of ``stride`` samples), each segment's pair in
+    ascending index order, one index when both coincide; NaN ignored; a segment without a finite extreme contributes
+    its first index. Vectorised (NFR-009: the former per-segment Python loop dominated the refresh with 600 s
+    windows); identical to the loop version (unit test ``test_minmax_select_equals_the_loop``)."""
+    # Implements: SW-RT-003, NFR-001 (x–y decimation)
+    n = len(y)
+    stride = max(1, int(stride))
+    n_seg = -(-n // stride)
+    pad = n_seg * stride - n
+    yy = np.asarray(y, dtype=np.float64)
+    if pad:
+        yy = np.concatenate([yy, np.full(pad, np.nan)])
+    seg = yy.reshape(n_seg, stride)
+    nan = np.isnan(seg)
+    lo_src = np.where(nan, np.inf, seg)
+    hi_src = np.where(nan, -np.inf, seg)
+    lo_v = lo_src.min(axis=1)
+    hi_v = hi_src.max(axis=1)
+    i_lo = np.where(np.isfinite(lo_v), lo_src.argmin(axis=1), 0)
+    i_hi = np.where(np.isfinite(hi_v), hi_src.argmax(axis=1), 0)
+    base = np.arange(n_seg, dtype=np.int64) * stride
+    a = base + np.minimum(i_lo, i_hi)
+    b = base + np.maximum(i_lo, i_hi)
+    pairs = np.stack([a, b], axis=1)
+    keep = np.ones_like(pairs, dtype=bool)
+    keep[:, 1] = a != b
+    return pairs[keep].astype(np.int64)
+
+
 class DataView:
     def __init__(self, pipeline: Pipeline, now_ns: Callable[[], int]) -> None:
         self.pipeline = pipeline
@@ -97,16 +127,7 @@ class DataView:
         n = len(x)
         if n > max_points > 0:
             stride = -(-n // max(1, max_points // 2))
-            starts = np.arange(0, n, stride)
-            ia = np.fmin.reduceat(np.where(np.isnan(y), np.inf, y), starts)
-            imx = np.fmax.reduceat(np.where(np.isnan(y), -np.inf, y), starts)
-            sel = []
-            for s0, lo_v, hi_v in zip(starts, ia, imx, strict=True):
-                seg = y[s0:s0 + stride]
-                i_lo = s0 + int(np.argmin(np.where(np.isnan(seg), np.inf, seg))) if np.isfinite(lo_v) else s0
-                i_hi = s0 + int(np.argmax(np.where(np.isnan(seg), -np.inf, seg))) if np.isfinite(hi_v) else s0
-                sel.extend(sorted({i_lo, i_hi}))
-            sel_a = np.array(sel, np.int64)
+            sel_a = minmax_select(y, stride)
             x, y, vs = x[sel_a], y[sel_a], vs[sel_a]
         t_end = float(t[-1]) if len(t) else float("nan")
         return XYSnapshot(x.copy(), y.copy(), np.nan_to_num(vs, nan=3).astype(np.uint8), t_end)

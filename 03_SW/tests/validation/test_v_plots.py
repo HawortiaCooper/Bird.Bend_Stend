@@ -286,12 +286,14 @@ def test_tc_sw_rt_006_11_xy_pane_type(vbe, window):
     calls = []
 
     class _Data:
-        def xy(self, x, y, window_s):
-            calls.append((x, y, window_s))
-            return vbe.data.xy(x, y, window_s)
+        # the published DataView.xy signature (core.api: max_points since NFR-009, since=); the fake follows it
+        def xy(self, x, y, window_s=None, max_points=4000, *, since="window"):
+            calls.append((x, y, window_s, max_points, since))
+            return vbe.data.xy(x, y, window_s, max_points, since=since)
 
     H.advance(vbe, 500)
-    assert d.refresh_xy(_Data()) == 1 and calls == [("x_mm", "raw", d.window_s)]
+    assert d.refresh_xy(_Data()) == 1 and [c[:3] for c in calls] == [("x_mm", "raw", d.window_s)]
+    assert 1 <= calls[0][3] <= 4000 and calls[0][4] == "window", calls     # point budget within the API default
     entry = d.layout_state()["panes"][d.panes().index(xy)]
     assert isinstance(entry, dict) and entry.get("type") == "xy"
 

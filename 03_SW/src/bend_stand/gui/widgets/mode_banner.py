@@ -14,12 +14,25 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 from bend_stand.gui.theme import MODE_BANNER_STYLE
 
 
+def scope_of(status: Any) -> str | None:
+    """D-54 a: the wizard-scoped no-specimen state (e.g. "TRAVEL_CAL"), None when not active."""
+    return getattr(getattr(status, "safety", None), "no_specimen_scope", None) or None
+
+
+def scope_label(scope: str) -> str:
+    return scope.lower().replace("_cal", " calibration").replace("_", " ")
+
+
 def mode_text(status: Any) -> str:
     thr = getattr(getattr(status, "safety", None), "thresholds", None)
     if getattr(thr, "state", "") == "VERIFIED" and getattr(thr, "eff_pull_n", None) is not None:
         board = f"calibrated: +{thr.eff_pull_n:.1f} N / {thr.eff_push_n:.1f} N"
     else:
         board = "default thresholds"
+    scope = scope_of(status)
+    if scope and not getattr(getattr(status, "safety", None), "no_specimen_mode", False):
+        return (f"NO SPECIMEN – {scope_label(scope)}: PC load limits OFF for the wizard's own moves. Board load limit "
+                f"active ({board}). Travel limits active. Do not mount a specimen.")
     return ("NO-SPECIMEN MODE – PC load limits OFF for this session. Board load limit active "
             f"({board}). Travel limits active. Do not mount a specimen.")
 
@@ -43,7 +56,12 @@ class ModeBanner(QFrame):
         self.hide()
 
     def update_status(self, status: Any) -> None:
-        on = bool(getattr(getattr(status, "safety", None), "no_specimen_mode", False))
+        """Implements: SW-LIM-004, SW-CAL-002 (D-54 a) — shown for the session mode and for a wizard scope; the
+        [Leave] button only for the session mode (the scope ends with the wizard)."""
+        session = bool(getattr(getattr(status, "safety", None), "no_specimen_mode", False))
+        on = session or bool(scope_of(status))
+        if self.leave_button.isHidden() == session:
+            self.leave_button.setVisible(session)
         if on:
             t = mode_text(status)
             if self.label.text() != t:

@@ -694,6 +694,34 @@ class ReportAPI:
 
         return be._report_job(job)  # noqa: SLF001
 
+    def set_root(self, path: str) -> GateResult:
+        """D-54 c (SW-ACQ-002): set the recordings folder at runtime. Refused while a recording runs or when the
+        folder cannot be created / written (a probe file is created and deleted); stored in the session file."""
+        # Implements: SW-ACQ-002 (D-54 c)
+        be = self._be
+        if be.recorder.state != "IDLE":
+            return GateResult((GateItem(GateCode.RECORDING_ACTIVE, Severity.REFUSE,
+                                        "a recording is running — stop it before changing the recordings folder"),))
+        try:
+            p = Path(str(path)).expanduser()
+            if not str(path).strip():
+                raise OSError("empty path")
+            p.mkdir(parents=True, exist_ok=True)
+            probe = p / f".bend_stand_write_probe_{os.getpid()}"
+            probe.write_bytes(b"probe")
+            probe.unlink()
+        except (OSError, ValueError) as exc:
+            return GateResult((GateItem("FOLDER_NOT_WRITABLE", Severity.REFUSE,
+                                        f"recordings folder not writable: {exc}"),))
+        resolved = str(p.resolve())
+        issues = be.session.set(replace(be.session.get(), recordings_root=resolved))
+        if issues:
+            return GateResult(tuple(GateItem(i.code, Severity.REFUSE, i.text) for i in issues))
+        be._root_override = resolved  # noqa: SLF001
+        be.record_event("RECORDINGS_ROOT", resolved)
+        be.events.log(f"recordings folder: {resolved}")
+        return GATE_OK_
+
     def root(self) -> str:
         """Effective recordings folder (GRQ-B-31 b): ``BackendSettings.recordings_root``, else the session value,
         else ``Documents/BirdBendStand/recordings`` — the folder ``record_start`` writes to."""
@@ -719,6 +747,8 @@ class Backend:
         self.liveness.on_fault = self._on_liveness_fault          # SWR-01: faults have a reaction (§4.6)
         self._liveness_bad: set[str] = set()                     # liveness conditions currently active (one fault each)
         self._hk_mode_pub: str | None = None
+        self.wizard_no_specimen: str | None = None               # D-54 a: scope of a wizard-only no-specimen state
+        self._root_override: str | None = None                   # D-54 c: recordings folder set at runtime
         self._sup_prev_ns = 0                                    # previous Supervisor tick (process-stall filter)
         self._pipe_bad_since: int | None = None
         self.worker = Worker(self.clock, "worker")
@@ -1294,7 +1324,7 @@ class Backend:
         self.events.publish("sample.taken", row)
 
     def _recordings_root(self) -> str:
-        return (self.settings.recordings_root or self.session.get().recordings_root
+        return (self._root_override or self.settings.recordings_root or self.session.get().recordings_root
                 or str(paths.default_recordings_root()))
 
     def _free_space(self, path: Path) -> int | None:
@@ -1452,18 +1482,39 @@ class Backend:
         li.no_specimen = on
         self.record_event("NO_SPECIMEN_ON" if on else "NO_SPECIMEN_OFF", why)
         if not on:
-            # Implements: SW-LIM-003, SW-LIM-004, SAF-SW-001 (D-53 a, SWR-29): on ANY exit from the mode both PC load
-            # limits are enabled again at their configured levels; the motion gate (valid load input) then decides
-            lim = self.session.get().limits
-            if not (lim.pull_enabled and lim.push_enabled):
-                self.session.apply_limits(replace(lim, pull_enabled=True, push_enabled=True))
-                self.record_event("LIMITS_RESTORED", f"no-specimen mode left ({why}): PC load limits ON — "
-                                                     + _limits_text(self.session.get().limits))
-                self.events.log(f"no-specimen mode left ({why}): both PC load limits switched ON again (D-53 a)",
-                                logging.WARNING)
+            self._restore_load_limits(f"no-specimen mode left ({why})")
         self.events.log(("no-specimen mode ON — PC load limits off" if on else "no-specimen mode OFF") + f" ({why})",
                         logging.WARNING if on else logging.INFO)
         self.events.publish("safety.no_specimen", on)
+
+    def _restore_load_limits(self, why: str) -> None:
+        """Implements: SW-LIM-003, SW-LIM-004, SAF-SW-001 (D-53 a, SWR-29, D-54 a): on ANY exit from a no-specimen
+        state both PC load limits are enabled again at their configured levels; the motion gate then decides."""
+        lim = self.session.get().limits
+        if not (lim.pull_enabled and lim.push_enabled):
+            self.session.apply_limits(replace(lim, pull_enabled=True, push_enabled=True))
+            self.record_event("LIMITS_RESTORED", f"{why}: PC load limits ON — " + _limits_text(self.session.get().limits))
+            self.events.log(f"{why}: both PC load limits switched ON again (D-53 a)", logging.WARNING)
+
+    def set_wizard_no_specimen(self, scope: str | None, why: str = "") -> None:
+        """D-54 a: the travel-calibration wizard's own no-specimen state (``scope`` = the motion owner whose moves run
+        without PC load limits; None = ended). The session no-specimen mode is not touched; MANUAL / SEQUENCE motion
+        stays under D-53 a; the FW load limit keeps its nominal / calibrated thresholds (never widened)."""
+        # Implements: SW-CAL-002, SW-LIM-004 (D-54 a)
+        old = self.wizard_no_specimen
+        if old == scope:
+            return
+        self.wizard_no_specimen = scope
+        if scope is not None:
+            self.record_event("NO_SPECIMEN_WIZARD_ON", f"{scope}: {why}")
+            self.events.log(f"no specimen mounted ({scope.lower().replace('_', ' ')}): PC load limits off for its "
+                            "own moves — board load limit active", logging.WARNING)
+        else:
+            self.record_event("NO_SPECIMEN_WIZARD_OFF", f"{old}: {why}")
+            self.events.log(f"{(old or '').lower().replace('_', ' ')} ended ({why}): PC load limits apply again",
+                            logging.INFO)
+            self._restore_load_limits(f"{(old or '').lower().replace('_', ' ')} ended ({why})")
+        self.events.publish("safety.no_specimen_scope", scope)
 
     def _on_synced(self) -> None:
         """Worker thread, end of the connect / BOOT resync: scale + post-sync checks (travel restore rule); a VALID
@@ -1491,7 +1542,8 @@ class Backend:
         st = li.evaluate(d.params.values(), d.info)
         cal = li.cal
         spm = d.params.get("motion.steps_per_mm")
-        return SafetyInputs(li.no_specimen, st.valid, st.reason, cal.k if cal is not None else None,
+        scoped = self.wizard_no_specimen is not None and self.owner == self.wizard_no_specimen   # D-54 a
+        return SafetyInputs(li.no_specimen or scoped, st.valid, st.reason, cal.k if cal is not None else None,
                             float(spm) if spm else 800.0, self.session.get().pull_dir, self.motion.current_end_um())
 
     def _track_row(self, row: DataRow) -> None:
@@ -1623,7 +1675,9 @@ class Backend:
         ok = th.state in ("VERIFIED", "DEFAULT_ONLY") and d.threshold_mgr.matches(th)
         items["thresholds_state"] = Indicator("ON" if ok else "OFF", None, th.state, 1.0 if th.clamped else 0.0,
                                               None if ok else "Recheck thresholds") if connected else INDICATOR_UNKNOWN
-        items["no_specimen_mode"] = Indicator("ON" if self.load_input.no_specimen else "OFF")
+        scope = self.wizard_no_specimen                    # D-54 a: the banner also shows the wizard-scoped state
+        items["no_specimen_mode"] = (Indicator("ON") if self.load_input.no_specimen else
+                                     Indicator("ON", None, scope) if scope is not None else Indicator("OFF"))
         diff = self.travel_cal.diff
         items["travel_cal_differs"] = (Indicator("ON", None, diff.source, diff.board_spm,
                                                  "Restore / keep board value / ignore for this session")
@@ -1681,7 +1735,8 @@ class Backend:
             seq_capture=self.seq.capture_open, recording_failed=self.recorder.state == "FAILED",
             estop_release_ms=int(params.get("io.estop_release_ms") or ESTOP_RELEASE_MS_DEFAULT)
             if "io.estop_release_ms" not in d.params.invalid() else ESTOP_RELEASE_MS_DEFAULT,
-            params_invalid=tuple(sorted(d.params.invalid())))
+            params_invalid=tuple(sorted(d.params.invalid())),
+            wizard_no_specimen=self.wizard_no_specimen is not None)
 
     def _gates(self, now: int | None = None) -> Mapping[GateId, GateResult]:
         return all_gates(self._gate_snapshot(now))
@@ -1741,7 +1796,7 @@ class Backend:
         trip = self.safety.trip
         warns = self.safety.active_warnings() + (("FW_CLAMPED",) if d.thresholds.clamped else ())
         return SafetyStatus(None if trip is None else trip.limit, warns, d.thresholds, st.valid, st.reason,
-                            self.load_input.no_specimen, trip, self.safety.active_trips())
+                            self.load_input.no_specimen, trip, self.safety.active_trips(), self.wizard_no_specimen)
 
     def _calibration_status(self) -> CalibrationStatus:
         d = self.device

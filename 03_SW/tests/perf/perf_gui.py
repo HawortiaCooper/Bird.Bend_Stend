@@ -11,7 +11,8 @@ limits (±1000 N) → ENABLE → HOME → spring specimen 10 N/mm from 20 mm →
 optional motion loop (10 ↔ 60 mm at 10 mm/s, re-issued after every stop).
 
 Phases (each optional, in this order):
-* PR-1 (``--pr1-s``)   TC-NFR-001-01/-03/-04: paint-to-paint interval of every pane viewport (Paint events), GUI
+* PR-1 (``--pr1-s``)   TC-NFR-001-01/-04, TC-NFR-009-01 (``--plots all600``, ``--gl off|on``, all 4 windows; v0.5.5:
+  judged on content changes — refresh-tick interval + change → paint latency per pane, see ``change_metrics``): paint-to-paint interval of every pane viewport (Paint events), GUI
   refresh-tick interval, event-loop lateness (20 ms probe timer), refresh stage times.
 * PR-2 (``--pr2 N``)   TC-NFR-002-01: N posted mouse presses alternating toolbar STOP / Plot-1 dock STOP;
   latency = stimulus stamp → first STOP frame through the sniffer.
@@ -25,7 +26,8 @@ Phases (each optional, in this order):
 
 Usage (PowerShell, repo root):
   .venv\\Scripts\\python 03_SW\\tests\\perf\\perf_gui.py --out <dir> --plots all --pr1-s 600 --pr2 100 --pr3 100
-  .venv\\Scripts\\python 03_SW\\tests\\perf\\perf_gui.py --out <dir> --plots all600 --pr1-s 600
+  .venv\\Scripts\\python 03_SW\\tests\\perf\\perf_gui.py --out <dir> --plots all600 --pr1-s 600 --gl off   # TC-NFR-009-01
+  .venv\\Scripts\\python 03_SW\\tests\\perf\\perf_gui.py --out <dir> --plots all600 --pr1-s 600 --gl on    # TC-NFR-009-01, GPU
   .venv\\Scripts\\python 03_SW\\tests\\perf\\perf_gui.py --out <dir> --plots four --pr1-s 600
   .venv\\Scripts\\python 03_SW\\tests\\perf\\perf_gui.py --out <dir> --plots all --pr5 100 --wire-log
   .venv\\Scripts\\python 03_SW\\tests\\perf\\perf_gui.py --out <dir> --plots all --soak-s 3600
@@ -33,7 +35,7 @@ Results: ``<dir>/results.json`` (+ ``summary.txt``, ``sniff.jsonl``, ``hostload.
 
 D-06: no COM port is opened (endpoint = loopback TCP sniffer). Never edits ``03_SW/src``.
 
-Verifies: NFR-001, NFR-002, NFR-003, NFR-004, SAF-SW-001, SW-RT-006
+Verifies: NFR-001, NFR-002, NFR-003, NFR-004, NFR-009, SAF-SW-001, SW-RT-006
 """
 from __future__ import annotations
 
@@ -80,6 +82,36 @@ def dist(a: list[float]) -> dict[str, float]:
 
 
 # ============================================================================================== processes
+
+
+def apply_render_setting(gl: str) -> dict[str, Any]:
+    """TC-NFR-009-01 (D-54 b): select CPU or GPU (OpenGL) plot rendering **before** the main window exists.
+
+    Preference: a GUI-side setting of D (``plot_dock.set_opengl`` / ``configure_pyqtgraph(<…gl…>=)``) — then the result
+    counts for the product; otherwise pyqtgraph's global ``useOpenGL`` set by this harness (``via = "harness"``: the
+    result is informative until the GUI offers the setting, SW_test_plan TC-NFR-009-01)."""
+    import inspect  # noqa: PLC0415
+
+    import pyqtgraph as pg  # noqa: PLC0415
+    from bend_stand.gui.plots import plot_dock  # noqa: PLC0415
+
+    on = gl == "on"
+    via = "default"
+    setter = getattr(plot_dock, "set_opengl", None)
+    if callable(setter):
+        setter(on)
+        via = "gui:plot_dock.set_opengl"
+    else:
+        params = inspect.signature(plot_dock.configure_pyqtgraph).parameters
+        name = next((n for n in params if "gl" in n.lower() or "gpu" in n.lower()), None)
+        if name is not None:
+            setattr(plot_dock, "_CONFIGURED", False)
+            plot_dock.configure_pyqtgraph(**{name: on})
+            via = f"gui:configure_pyqtgraph({name})"
+        elif on:
+            pg.setConfigOptions(useOpenGL=True)
+            via = "harness:pg.useOpenGL"
+    return {"gl": gl, "via": via, "pg_useOpenGL": bool(pg.getConfigOption("useOpenGL"))}
 
 class Procs:
     """Child processes of this run, each stopped through its own handle (PID recorded)."""
@@ -172,6 +204,10 @@ class Runner:
         self._motion_target = 60.0
         self._motion_hold_until = 0.0
         self.paint: dict[str, list[int]] = {}
+        self.changes: dict[str, list[int]] = {}       # TC-NFR-001-01 / TC-NFR-009-01: content-change stamps per pane
+        self.change_ticks = 0                          # refresh ticks seen by the change probe
+        self.change_kinds: dict[str, dict[str, int]] = {}   # diagnostic: what changed (view / items / data)
+        self.pane_keys: dict[str, list[str]] = {}            # channels shown per probed pane (diagnostics)
         self.loop_late: list[float] = []
         self.loop_late_t: list[tuple[int, float]] = []
         self.tick_intervals: list[float] = []
@@ -235,6 +271,7 @@ class Runner:
         from bend_stand.gui.plots.plot_dock import configure_pyqtgraph  # noqa: PLC0415
         from bend_stand.gui.settings import make_settings  # noqa: PLC0415
         configure_pyqtgraph()
+        self.results["render"] = apply_render_setting(self.a.gl)   # TC-NFR-009-01: GPU off / on
         data = self.out / "data"
         data.mkdir(exist_ok=True)
         os.environ["BEND_STAND_DATA_DIR"] = str(data)
@@ -401,12 +438,82 @@ class Runner:
                 return False
 
         self._probes = []
+        targets: list[tuple[str, Any]] = []
         for di, d in enumerate(self.docks):
             for pi, pane in enumerate(d.panes()):
                 key = f"P{di + 1}.{pi}{'xy' if pane in d.xy_panes() else ''}"
                 pr = Probe(key)
                 pane.plot_widget.viewport().installEventFilter(pr)
                 self._probes.append(pr)
+                targets.append((key, pane))
+                self.changes.setdefault(key, [])
+                try:
+                    self.pane_keys[key] = list(pane.keys()) if callable(getattr(pane, "keys", None)) else []
+                except Exception:  # noqa: BLE001
+                    self.pane_keys[key] = []
+        self.install_change_probe(targets)
+
+    def install_change_probe(self, targets: list[tuple[str, Any]]) -> None:
+        """Content-change probe (TC-NFR-001-01 / TC-NFR-009-01, v0.5.5): a refresh stage registered **after** the GUI's
+        own stages compares, per pane, the data arrays of every plot item and the view range with the previous tick by
+        **object identity** (the previous arrays are kept referenced, so an id can never be reused). A pane whose content
+        changed gets a stamp; its next viewport Paint gives the change → paint latency. Independent of the GUI's own
+        skip decision: an unchanged pane (D's redraw skip, SW_design_GUI §4.8) has nothing to paint; a changed pane that
+        does not repaint shows up as a long latency."""
+        prev: dict[str, tuple] = {}
+        runner = self
+
+        def signature(pane: Any) -> tuple:
+            items = []
+            for it in pane.plot_item.items:
+                xd, yd = getattr(it, "xData", None), getattr(it, "yData", None)
+                if (xd is None and yd is None) or not it.isVisible():
+                    continue                    # a hidden item's data needs no repaint; showing / hiding changes the set
+                items.append((it, xd, yd, True))
+            vb = pane.plot_item.vb
+            vr = (tuple(vb.state["viewRange"][0]), tuple(vb.state["viewRange"][1]))
+            return (vr, tuple(items))
+
+        def same(a: tuple, b: tuple) -> bool:
+            if a[0] != b[0] or len(a[1]) != len(b[1]):
+                return False
+            return all(x[0] is y[0] and x[1] is y[1] and x[2] is y[2] and x[3] == y[3] for x, y in zip(a[1], b[1]))
+
+        def why(a: tuple, b: tuple) -> str:
+            """Diagnostic kind of a change (counted per pane in ``panes_change[*].kinds``)."""
+            if a[0][0] != b[0][0]:
+                return "view_x"
+            if a[0][1] != b[0][1]:
+                return "view_y"
+            if len(a[1]) != len(b[1]) or any(x[0] is not y[0] for x, y in zip(a[1], b[1])):
+                return "item_set"
+            for x, y in zip(a[1], b[1]):
+                if x[1] is not y[1] or x[2] is not y[2]:
+                    import numpy as _np  # noqa: PLC0415
+                    eq = (x[1] is not None and y[1] is not None and x[2] is not None and y[2] is not None
+                          and len(x[1]) == len(y[1]) and _np.array_equal(x[1], y[1])
+                          and _np.array_equal(x[2], y[2], equal_nan=True))
+                    return f"data_{type(y[0]).__name__}{'_same_content' if eq else ''}"
+            return "other"
+
+        def stage(_status: Any) -> None:
+            t = time.perf_counter_ns()
+            runner.change_ticks += 1
+            for key, pane in targets:
+                try:
+                    sig = signature(pane)
+                except Exception:  # noqa: BLE001 - pane closed
+                    continue
+                old = prev.get(key)
+                if old is None or not same(old, sig):
+                    runner.changes[key].append(t)
+                    if old is not None:
+                        k2 = runner.change_kinds.setdefault(key, {})
+                        w = why(old, sig)
+                        k2[w] = k2.get(w, 0) + 1
+                prev[key] = sig
+
+        self.win.refresh.add_stage("nfr_change_probe", stage, every=1)
 
     def start_loop_probe(self) -> None:
         from PySide6.QtCore import Qt, QTimer  # noqa: PLC0415
@@ -441,6 +548,10 @@ class Runner:
     def reset_measurements(self) -> None:
         for k in self.paint:
             self.paint[k] = []
+        for k in self.changes:
+            self.changes[k] = []
+        self.change_ticks = 0
+        self.change_kinds = {}
         self.loop_late = []
         self.loop_late_t = []
         self.tick_intervals = []
@@ -479,6 +590,13 @@ class Runner:
         p1 = [v for k, v in panes.items() if k.startswith("P1.") and v.get("n", 0)]
         res["plot1_worst_pane_p95_ms"] = max((v["p95"] for v in p1), default=float("nan"))
         res["plot1_min_fps"] = min((v["fps"] for v in p1), default=float("nan"))
+        # TC-NFR-009-01 (NFR-009): every pane of every plot window counts, the worst one decides
+        allp = [v for v in panes.values() if v.get("n", 0)]
+        res["all_worst_pane_p95_ms"] = max((v["p95"] for v in allp), default=float("nan"))
+        res["all_min_fps"] = min((v["fps"] for v in allp), default=float("nan"))
+        res["windows_measured"] = sorted({k.split(".")[0] for k, v in panes.items() if v.get("n", 0)})
+        res["render"] = self.results.get("render")
+        res.update(self.change_metrics(seconds))
         res["tick_interval_ms"] = dist(self.tick_intervals)
         res["event_loop_late_ms"] = dist(self.loop_late)
         res["stage_p95_ms_last"] = {k: round(v, 2) for k, v in perf_snaps[-1].items() if k.endswith("_p95_ms")}
@@ -488,6 +606,44 @@ class Runner:
         res["link_lost_diag"] = list(self.win.link_lost_diagnostics)
         res["gc"] = self.gc_text()
         return res
+
+    def change_metrics(self, seconds: float) -> dict[str, Any]:
+        """TC-NFR-001-01 / TC-NFR-009-01 (v0.5.5): judged on content changes, not on paints of unchanged panes.
+        * ``change_to_paint_ms``: for every content change of every pane, the time to the pane's next viewport Paint
+          (a change without any later paint in the window counts as ``unpainted``);
+        * ``changing_panes``: panes whose content changed in >= 90 % of the refresh ticks — their paint-to-paint
+          interval is the classic fps figure (``changing_worst_pane_p95_ms``);
+        * the refresh-tick interval bounds how often changes can be pushed (``tick_interval_ms``)."""
+        lat: list[float] = []
+        per: dict[str, Any] = {}
+        unpainted = 0
+        ticks = max(1, self.change_ticks)
+        changing: list[str] = []
+        for key, cs in self.changes.items():
+            ps = np.asarray(self.paint.get(key, []), np.int64)
+            ls = []
+            for t in cs:
+                i = int(np.searchsorted(ps, t, side="left"))
+                if i >= len(ps):
+                    unpainted += 1
+                    continue
+                ls.append((int(ps[i]) - t) / 1e6)
+            lat += ls
+            frac = len(cs) / ticks
+            per[key] = {"changes": len(cs), "change_frac": round(frac, 3), "changes_per_s": round(len(cs) / max(1e-9, seconds), 1),
+                        "change_to_paint_ms": dist(ls), "kinds": dict(self.change_kinds.get(key, {})),
+                        "channels": self.pane_keys.get(key, [])}
+            if frac >= 0.9:
+                changing.append(key)
+        a = {k: np.diff(np.asarray(self.paint.get(k, []), np.int64)) / 1e6 for k in changing}
+        worst = max((pct(np.asarray(v, float), 95) for v in a.values() if len(v)), default=float("nan"))
+        judged = {k: v for k, v in per.items() if v["changes"] >= 10 and v["change_to_paint_ms"].get("n", 0)}
+        wk = max(judged, key=lambda k: judged[k]["change_to_paint_ms"]["p95"], default=None)
+        return {"change_to_paint_worst_pane": wk,
+                "change_to_paint_worst_pane_p95_ms": judged[wk]["change_to_paint_ms"]["p95"] if wk else float("nan"),
+                "change_to_paint_ms": dist(lat), "change_unpainted": unpainted, "change_ticks": self.change_ticks,
+                "changing_panes": changing, "changing_worst_pane_p95_ms": round(float(worst), 2) if worst == worst
+                else float("nan"), "panes_change": per}
 
     def gc_text(self) -> str:
         try:
@@ -1057,6 +1213,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--plots", choices=("all", "all600", "four"), default="all")
+    ap.add_argument("--gl", choices=("off", "on"), default="off",
+                    help="TC-NFR-009-01: plot rendering through OpenGL (the GUI setting if it exists, else pyqtgraph's "
+                         "useOpenGL forced by the harness; recorded in results.json 'render')")
     ap.add_argument("--pr1-s", type=float, default=0.0)
     ap.add_argument("--pr2", type=int, default=0)
     ap.add_argument("--pr3", type=int, default=0)

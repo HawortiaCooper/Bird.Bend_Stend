@@ -1,10 +1,10 @@
-# Reference-PC performance runs PR-1...PR-5 (SW_test_plan section 6.1; SRS NFR-001...004, SAF-SW-001).
+# Reference-PC performance runs PR-1...PR-5 (SW_test_plan section 6.1; SRS NFR-001...004, NFR-009, SAF-SW-001).
 # Run from the repository root in an interactive desktop session (real display, keyboard; not over RDP):
 #   powershell -ExecutionPolicy Bypass -File 03_SW\tests\perf\run_ref_pc.ps1 [-Out D:\perf_ref] [-SoakS 3600] [-Quick]
 # The PC must otherwise be idle: close other applications, no builds / test suites running.
 # Nothing here opens a COM port (D-06): the app connects to the out-of-process simulator through a loopback sniffer.
 # Every child process is stopped by its own handle (PID logged in <run>\processes.log).
-# Verifies: NFR-001, NFR-002, NFR-003, NFR-004, SAF-SW-001 (procedure)
+# Verifies: NFR-001, NFR-002, NFR-003, NFR-004, NFR-009, SAF-SW-001 (procedure)
 param(
     [string]$Out = "$env:TEMP\bbs_perf_ref_$(Get-Date -Format yyyyMMdd_HHmm)",
     [int]$SoakS = 3600,
@@ -33,10 +33,11 @@ function Run([string]$name, [string[]]$a) {
     if ($LASTEXITCODE -ne 0) { Write-Warning "$name exited with $LASTEXITCODE (see $name\results.json)" }
 }
 Run "A_all"    @("--plots", "all",    "--pr1-s", "$pr1", "--pr2", "$n", "--pr3", "$n")   # PR-1 (TC-NFR-001-01) + PR-2 + PR-3
-Run "B_all600" @("--plots", "all600", "--pr1-s", "$pr1")                                 # PR-1 (TC-NFR-001-03)
+Run "B_nfr009_gl_off" @("--plots", "all600", "--pr1-s", "$pr1", "--gl", "off")             # PR-1 (TC-NFR-009-01, CPU)
+Run "B_nfr009_gl_on"  @("--plots", "all600", "--pr1-s", "$pr1", "--gl", "on")              # PR-1 (TC-NFR-009-01, GPU / OpenGL)
 Run "C_four"   @("--plots", "four",   "--pr1-s", "$pr1")                                 # PR-1 (TC-NFR-001-04)
 Run "D_pr5"    @("--plots", "all",    "--pr5", "$n")                                     # PR-5 (TC-SAF-SW-001-01 rt)
 Run "E_soak"   @("--plots", "all",    "--soak-s", "$soak", "--soak-ref-min", "$ref")     # PR-4 (TC-NFR-004-01)
-& $Py (Join-Path $PSScriptRoot "perf_summary.py") (Join-Path $Out "A_all") (Join-Path $Out "B_all600") `
+& $Py (Join-Path $PSScriptRoot "perf_summary.py") (Join-Path $Out "A_all") (Join-Path $Out "B_nfr009_gl_off") (Join-Path $Out "B_nfr009_gl_on") `
     (Join-Path $Out "C_four") (Join-Path $Out "D_pr5") (Join-Path $Out "E_soak") | Tee-Object (Join-Path $Out "summary.md")
 Write-Host "Results: $Out  (send the whole folder to Validator F)"

@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QTableWidget,
@@ -51,7 +52,7 @@ from PySide6.QtWidgets import (
 
 from bend_stand.core import api
 from bend_stand.gui import seq_access as sa
-from bend_stand.gui.dialogs.safe_dialog import get_open_file_name
+from bend_stand.gui.dialogs.safe_dialog import SafeMessageBox, get_existing_directory, get_open_file_name
 from bend_stand.gui.format import fmt_value
 from bend_stand.gui.units_state import force_unit
 
@@ -157,6 +158,12 @@ class ReportTab(QWidget):
         self.root_button.setAutoDefault(False)
         self.root_button.clicked.connect(self.open_root)
         row.addWidget(self.root_button)
+        self.root_change_button = QPushButton("Change…", top)              # D-54 c (SW-ACQ-002)
+        self.root_change_button.setObjectName("reportChangeRoot")
+        self.root_change_button.setAutoDefault(False)
+        self.root_change_button.setToolTip("Choose another recordings folder (stored with the session)")
+        self.root_change_button.clicked.connect(lambda _c=False: self.change_root())
+        row.addWidget(self.root_change_button)
         tl.addLayout(row)
         self.rec_table = QTableWidget(0, len(REC_COLUMNS), top)
         self.rec_table.setObjectName("recordingsTable")
@@ -278,6 +285,31 @@ class ReportTab(QWidget):
             return
         if not open_url(root):
             self.message.emit(f"Could not open {root}", "warn")
+
+    def change_root(self, path: str | None = None) -> bool:
+        """[Change…] (D-54 c): choose a folder → ``reports.set_root(path)`` (B: refused while recording, write probe,
+        stored in the session). A refusal is shown in a warning box and as a message; success refreshes the folder
+        line and the list. Returns True when changed.
+
+        Implements: SW-ACQ-002 (recordings folder chosen in the GUI, D-54 c)"""
+        if path is None:
+            path = get_existing_directory(self, "Recordings folder", self.root_edit.text())
+        if not path:
+            return False
+        try:
+            g = self._backend.reports.set_root(str(path))
+        except Exception as exc:  # noqa: BLE001
+            text = _err_text(exc)
+        else:
+            if getattr(g, "ok", False):
+                self.refresh_list()
+                self.message.emit(f"Recordings folder: {self.root_edit.text()}", "info")
+                return True
+            text = "; ".join(i.text for i in getattr(g, "refused", ()) or ()) or "refused"
+        self.message.emit(f"Recordings folder not changed: {text}", "warn")
+        self.root_box = SafeMessageBox.show_message(self, "Recordings folder not changed", f"{path}\n\n{text}",
+                                                    QMessageBox.Icon.Warning)
+        return False
 
     def refresh_list(self) -> None:
         self.update_root()
@@ -496,5 +528,11 @@ class ReportTab(QWidget):
     def _on_report_ready(self, _record: Any) -> None:
         self.refresh_list()
 
-    def update_status(self, _st: Any) -> None:
-        """Nothing polled per tick: the list follows ``report.ready`` and [Refresh]."""
+    def update_status(self, st: Any) -> None:
+        """The list follows ``report.ready`` and [Refresh]; per tick only the [Change…] enable state (D-54 c: the
+        backend refuses a new folder while a recording runs — shown in advance, display only)."""
+        rec = str(getattr(getattr(st, "recording", None), "state", "") or "") == "RECORDING"
+        if self.root_change_button.isEnabled() == rec:
+            self.root_change_button.setEnabled(not rec)
+            self.root_change_button.setToolTip("Stop the recording before changing the recordings folder" if rec
+                                               else "Choose another recordings folder (stored with the session)")

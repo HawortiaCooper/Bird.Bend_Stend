@@ -3,7 +3,7 @@
 | Item | Value |
 |---|---|
 | Document | `03_SW/docs/SW_code_review.md` |
-| Version | 1.4 — 2026-10-10 (§8.8 round 6, final HW-gate verdict) · 1.3 — 2026-10-10 (§8.7 add-on) · 1.2 — 2026-10-09 (§8 fix verification) · 1.1 — 2026-10-09 (re-check against the working tree after B's tasks 4/7, D's GUI follow-ups and packaging, §7.1) · 1.0 — 2026-10-08 |
+| Version | 1.5 — 2026-10-10 (§8.9 D-54 a / c) · 1.4 — 2026-10-10 (§8.8 round 6, final HW-gate verdict) · 1.3 — 2026-10-10 (§8.7 add-on) · 1.2 — 2026-10-09 (§8 fix verification) · 1.1 — 2026-10-09 (re-check against the working tree after B's tasks 4/7, D's GUI follow-ups and packaging, §7.1) · 1.0 — 2026-10-08 |
 | Author | Validator F (SW) |
 | Anchor | commit **e600169** ("P2 complete …"). Every `file:line` below is a line of that commit (`git show e600169:<path>`), paths relative to `03_SW/src/bend_stand/` unless stated otherwise |
 | Baseline | SRS v0.6.4, ICD v0.7.4, SW_design v0.6, SW_design_GUI v0.6 |
@@ -706,6 +706,7 @@ too, so the practical impact is small; the fix is one `except Exception`.
 | SWR-34 | S4 | `requirements-dev.lock.txt` pins `iniconfig 2.3.1`, the verified `.venv` has 2.3.0 — the dev lock is not the verified environment | `03_SW/requirements-dev.lock.txt` | `pip freeze` vs lock | B (packaging) |
 | SWR-35 | S4 | Shutdown STOP condition omits a just-started jog (`_moving_now()` exists) | `Backend.shutdown` | analysis | B |
 | SWR-36 | S4 | Incident log misses FW-threshold FAILED / INVALID and lost FW EVENTs | `core/logfile.IncidentLogger.TOPICS`, `core/pipeline.py` `_event` | analysis | B |
+| SWR-38 | **S3** | Travel wizard Cancel does not stop its own running motion; under the D-54 a scope it is stopped by a SAF-SW-001 LOAD_INPUT_INVALID trip, in the session mode it runs on (§8.9) | `TravelCalEngine._abort` | `test_d54a_09` (strict xfail ×2) | B |
 | SWR-37 | **S3** | Pipeline-liveness filter of OBS-P3-05: a genuine Pipeline stall is never reported while Supervisor gaps > 100 ms repeat with < 30 ms of operation in between (§8.7). **Closed (§8.8)** | `Backend._check_liveness` | `test_swr37` | B |
 
 Fix hints: SWR-29 — on leaving the mode (any cause) restore `pull_enabled = push_enabled = True` when both are off
@@ -846,10 +847,61 @@ part 2 is an accepted S4 backlog item. Conditions:
 3. **On target at the HW gate:** the hardware items of the FW / SW test plans (NFR-003 last PUL edge, VCP soak, E-stop /
    limit / load-limit reactions); the incident log `<data>\logs\bend_stand.log` is collected with every HW-gate run.
 
+### 8.9 D-54 a / c verification (B's hand-back SW_design §9.3, §15.5f B6-35; 2026-10-10)
+
+**Implementation read.** `g_cal_travel_start` = the MOVE items without LOAD_INPUT_INVALID / NOT_HOMED / OWNER_CONFLICT +
+busy items + CONFIRM `NO_SPECIMEN_MOUNTED` when the load input is invalid outside the session mode + the 62 mm room check
+once homed. `Backend.set_wizard_no_specimen("TRAVEL_CAL")` sets a scope that is effective only while
+`owner == TRAVEL_CAL`: in `motion_items` (LOAD_INPUT_INVALID skipped for that owner only) and in `_safety_inputs` (the
+SafetySupervisor treats the PC load limits as off only for that owner). FW thresholds are not touched (the provider
+target is unchanged → DEFAULT_ONLY without calibration). The scope ends in `_accepted` and `_abort` (cancel, every
+`terminate_all` cause, link loss, homing failure), always together with `owner = MANUAL`, and runs
+`_restore_load_limits` (SWR-29 rule). HOME is the wizard's first phase (`motion.home(load_confirmed=True,
+owner=TRAVEL_CAL)`), a failure aborts the wizard. The session no-specimen mode is never changed by the wizard.
+
+**Tests** (`test_v_d54a.py`, armed — pending markers removed): F's pre-written 01–04 (unconfirmed start writes
+nothing; confirmed start homes first, banner on, FW thresholds DEFAULT_ONLY, MANUAL move / jog and sequence start
+refused, nothing stored in the session; every exit — Cancel, STOP, HALT, link loss — restores both PC load limits; a
+session mode entered before survives) and the additions 05–09 + D-54 c:
+
+| Test | Case | Result |
+|---|---|---|
+| 05 | MANUAL jog / move / home during the wizard → refused (OWNER_CONFLICT), no JOG / MOVE_ABS of them on the wire; the wizard's own homing completes and it reaches BACKLASH (its moves run without PC load limits) | pass |
+| 06 | session no-specimen mode entered during the wizard → refused (operation running); a session mode entered before and left during the wizard → limits on at once, no leak after the wizard ends | pass |
+| 07 | FW E-stop (red button) during the wizard's homing → wizard aborted, scope ended, limits on, owner MANUAL, no wizard motion frame after the E-stop | pass |
+| 08 | homing failure (START switch never closes → FW HOME_FAILED NOT_FOUND) → wizard ABORTED, no calibration move, scope ended, limits on | pass |
+| 09 | **Cancel while the wizard's homing runs** (wizard scope / session mode) → the wizard should stop its own motion | **strict xfail — SWR-38** |
+| D-54 c | `reports.set_root`: a non-creatable folder (file in the way) refused (`FOLDER_NOT_WRITABLE`), nothing changed; a writable folder created, stored in the session, the write probe removed, the next recording written there; refused while recording (`RECORDING_ACTIVE`) | pass |
+
+Runs: `test_v_d54a.py` fixed order and `--randomly-seed=99`: 12 passed, 2 xfailed (SWR-38 × 2) each.
+Full validation run, all groups armed (`03_SW\tests\validation --arm all -p no:randomly`): first run 659 passed,
+2 xfailed (SWR-38), 1 failed — `test_v_plots.py::test_tc_sw_rt_006_11_xy_pane_type`, a **test** defect: F's fake
+`_Data.xy(x, y, window_s)` did not follow the published `DataView.xy` signature (`core.api`: `max_points` since NFR-009,
+`since=`), so `refresh_xy` caught the `TypeError` (D's diagnosis, agreed). Fake updated to the API signature (+ check
+that the pane passes a point budget 1 … 4000 and `since="window"`). Final run on the current tree: **660 passed,
+2 xfailed (SWR-38), 0 failed** (884 s; `_reports/trace.json` regenerated).
+
+**SWR-38 (S3, new, owner B) — the wizard's Cancel does not stop its own running motion.** `TravelCalEngine._abort`
+ends the scope and returns the owner to MANUAL but sends no STOP for the move / homing in progress (before D-54 a the
+restore job only waited for standstill). Measured: under the wizard scope the homing is then stopped one frame later by
+the SafetySupervisor (D-53 a: motion with an invalid load input) — STOP mode 0 plus an `SW_TRIP LOAD_INPUT_INVALID`
+event "load limit without valid input": the right result through the safety net, with a misleading SW-trip report; with
+the session no-specimen mode on, the cancelled homing simply runs on under MANUAL ownership. Fix: `_abort` sends a
+controlled STOP when the wizard's own command is running (not needed when the abort was caused by a stop / latch), before
+the owner returns to MANUAL. Not a HW-gate blocker for the safety function (the axis is stopped in both scope cases, the
+session-mode case equals the pre-D-54 behaviour), but it should be fixed before the travel calibration is used at the
+gate, because operators will cancel during homing.
+
+**Verdict:** D-54 a **verified — closed, with SWR-38 open (S3)**; the wizard scope cannot leak (other owners, session
+mode, stops, latches, link loss, homing failure, cancel all end it with the PC load limits on). D-54 c **verified —
+closed**. Not covered by F: the GUI side of the `NO_SPECIMEN_MOUNTED` confirmation (Enter / Space never confirm,
+SAF-SW-004) — D's GUI tests.
+
 ## 9. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
+| 1.5 | 2026-10-10 | Validator F | §8.9: D-54 a / c verified (D54A armed, F's cases 05–09 + D-54 c); new SWR-38 (S3) |
 | 1.4 | 2026-10-10 | Validator F | §8.8: round 6 verified (SWR-19, 29–32, 34–37 closed; SWR-17 part 2 accepted backlog); shorter test-only logs do not weaken any validation hook; final full suite 2 × 3630 passed (fixed + random); final SW verdict for the HW gate ACCEPTED WITH CONDITIONS |
 | 1.3 | 2026-10-10 | Validator F | §8.7: SWR-05 closed on the final recorder (SWD-P3-01, + SWR-33), independent threaded stop / start test; liveness filter judged — new SWR-37 (S3, no ceiling) with reproducer; owners of SWR-29 … 37; SWR-31 closed (XPASS); PR-4 soak not re-run (machine busy) |
 | 1.2 | 2026-10-09 | Validator F | §8 fix verification of B's round (§7.2) and the packaging share: per-SWR verdicts (26 closed, SWR-17 part 2 open — accepted, SWR-19 dialog pending), SWR-01 false-positive measurement, focus analyses SWR-15 / 07 / 26 / 03 / 14; new findings SWR-29 (S2) … SWR-36 (S4); independent tests and reproducers added to `test_v_review.py` |

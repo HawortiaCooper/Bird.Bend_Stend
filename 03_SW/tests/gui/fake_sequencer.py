@@ -171,6 +171,15 @@ class FakeReports:
         self.pending: Future | None = None
         self.root_path: str | None = None            # scripted ``root()``; None = session value / default
 
+    def set_root(self, path: str) -> Any:
+        """D-54 c (B's ``reports.set_root``): scripted ``set_root_result`` (None = OK, then ``root()`` returns it)."""
+        self._rec("set_root", path)
+        g = getattr(self, "set_root_result", None)
+        if g is not None and not g.ok:
+            return g
+        self.root_path = str(path)
+        return GATE_OK
+
     def root(self) -> str:
         """GRQ-B-31 b (B's ``reports.root()``): effective recordings folder — the scripted path, else the owner's
         session ``recordings_root``, else the default ``Documents/BirdBendStand/recordings``. A query: not logged."""

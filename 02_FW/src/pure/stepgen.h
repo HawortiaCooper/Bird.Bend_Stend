@@ -46,6 +46,14 @@ static inline bool stepgen_stretch_ok(uint32_t cnt, uint32_t ccr1, uint32_t arr,
     return cnt + guard < new_ccr1;
 }
 
+/* Step ISR fast path (NFR-007, FW_design §9.8 v0.8.6): core/motion.c step_isr_core(count) is the body
+ * of step_isr() (seam v1) with the HAL's new count passed in and the result packed into 64 bits, so it
+ * is returned in registers; the target HAL (hal/f446/step_tim2.c) calls it directly, the twin keeps
+ * calling step_isr(). Low 32 bits = period (0 with LAST / STOP). Not a seam v1 function. */
+#define STEP_NEXT_LAST ((uint64_t)1u << 32)
+#define STEP_NEXT_STOP ((uint64_t)1u << 33)
+uint64_t step_isr_core(int32_t count);
+
 /* Controlled-stop path (FW_design §5.6.4, ICD §6.5; oracle: motion_vectors.json ctrl_stop_paths).
  * p_ticks = running step period, f = ticks per second, d_steps = planned stop distance
  * v^2/(2 a_stop) with v = f / p_ticks (ramp_stop_dist, binary64). */

@@ -36,8 +36,10 @@ def allowed_for(env: str) -> set[str]:
     inst = {f"src/hal/f446/{c.name}.o" for c in hal.glob("*.c")
             if '#include "meas_dwt.h"' in c.read_text(encoding="utf-8", errors="ignore")}
     return set(ALLOWED) | inst | {"src/main.cpp.o"}
+# OI-FW-53 (FW v0.8.6, D-55): the target step ISR calls step_isr_core(count) directly; the seam-v1 wrapper
+# step_isr() is only referenced by the twin / host harnesses and is garbage-collected from the images
 SAFETY = ["EXTI15_10_IRQHandler", "EXTI0_IRQHandler", "EXTI1_IRQHandler", "EXTI9_5_IRQHandler",
-          "EXTI4_IRQHandler", "TIM2_IRQHandler", "TIM5_IRQHandler", "step_isr", "hal_step_stop_now",
+          "EXTI4_IRQHandler", "TIM2_IRQHandler", "TIM5_IRQHandler", "step_isr_core", "hal_step_stop_now",
           "hal_step_abort", "hal_ena_set"]
 
 

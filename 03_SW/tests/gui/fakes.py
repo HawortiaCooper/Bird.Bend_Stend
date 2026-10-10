@@ -522,7 +522,7 @@ class FakeSession:
 
 
 ENGINE_PHASES = {
-    "travel_cal": ("CHECK", "BACKLASH", "REFERENCE", "MOVE1", "ENTER_D1", "MOVE2", "ENTER_DTOT", "RESULT", "ACCEPT",
+    "travel_cal": ("CHECK", "HOME", "BACKLASH", "REFERENCE", "MOVE1", "ENTER_D1", "MOVE2", "ENTER_DTOT", "RESULT", "ACCEPT",
                    "DONE"),
     "load_cal": ("CONFIG", "AWAIT_OPERATOR", "PRESETTLE", "CAPTURE", "EVALUATE", "FIT", "ACCEPT", "DONE"),
     "tare": ("CHECK", "CAPTURE", "EVALUATE", "DONE"),

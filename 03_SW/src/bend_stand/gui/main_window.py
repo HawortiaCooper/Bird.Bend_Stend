@@ -68,11 +68,12 @@ from bend_stand.gui.dialogs.safe_dialog import SafeMessageBox, get_open_file_nam
 from bend_stand.gui.dialogs.status_help import StatusHelpDialog
 from bend_stand.gui.dialogs.tare_popup import TarePopup
 from bend_stand.gui.mode_state import no_specimen
+from bend_stand.gui.plots import render
 from bend_stand.gui.plots.plot_dock import PlotDock
 from bend_stand.gui.refresh import RefreshScheduler
 from bend_stand.gui.resources import app_icon
 from bend_stand.gui.stop import set_stop_handler
-from bend_stand.gui.settings import KEY_LAST_TAB, KEY_UNITS
+from bend_stand.gui.settings import KEY_LAST_TAB, KEY_OPENGL, KEY_UNITS
 from bend_stand.gui.tabs.calibration_tab import CalibrationTab
 from bend_stand.gui.tabs.connection_tab import ConnectionTab
 from bend_stand.gui.tabs.limits_tab import LimitsTab
@@ -228,6 +229,8 @@ class MainWindow(QMainWindow):
         self.link_lost_diagnostics: list[str] = []      # MC3-4: one line per LINK LOST shown
         self._announced_trips: dict[tuple, float] = {}   # MC3-5: SW trips already announced (identity → time)
 
+        # NFR-009 (D-54 b): render mode before the first plot pane exists (env override > gui.ini, default raster)
+        render.set_opengl(render.wanted(settings.value(KEY_OPENGL, False) if settings is not None else False))
         self._build_toolbar()
         self._build_banner_bar()
         self._build_tabs()
@@ -461,6 +464,12 @@ class MainWindow(QMainWindow):
             m_units.addAction(act)
             self.unit_actions[u] = act
         self.unit_actions["N"].setChecked(True)
+        self.opengl_action = QAction("OpenGL rendering", self, checkable=True)
+        self.opengl_action.setChecked(render.active())
+        self.opengl_action.setToolTip("Draw the plot panes with OpenGL (GPU). Off = software raster (default, faster "
+                                      "on the DEV PC). Falls back to raster when OpenGL is not available.")
+        self.opengl_action.toggled.connect(self.set_opengl)
+        m_view.addAction(self.opengl_action)
         m_view.addSeparator()
         for dock in (*self.plot_docks, self.readout_dock, self.event_log):
             m_view.addAction(dock.toggleViewAction())
@@ -488,7 +497,8 @@ class MainWindow(QMainWindow):
     def _on_status(self, status: Any) -> None:
         self.last_status = status
         self._status_n += 1
-        no_specimen().set(bool(getattr(status.safety, "no_specimen_mode", False)))
+        no_specimen().set(bool(getattr(status.safety, "no_specimen_mode", False))       # tags: mode or D-54 a scope
+                          or bool(getattr(status.safety, "no_specimen_scope", None)))
         self._track_trips(status)
         if self._status_n % PARAMS_EVERY == 1:
             try:
@@ -794,6 +804,13 @@ class MainWindow(QMainWindow):
                            "warn")
             elif on is True:
                 self.toast("No-specimen mode ON – PC load limits off for this session", "warn")
+        elif record.topic == "safety.no_specimen_scope":            # D-54 a (SW-CAL-002)
+            scope = record.payload
+            if scope:
+                self.toast(f"No specimen ({str(scope).lower().replace('_', ' ')}): PC load limits off for the "
+                           "wizard's moves — do not mount a specimen", "warn")
+            else:
+                self.toast("Wizard ended: PC load limits apply again", "info")
         elif record.topic == "safety.trip" or record.topic.startswith("safety.trip"):
             # MC3-5 / SWD-M3-02: only a *new* trip is announced as an error with "STOP sent"; a clear is info
             severity, text = trip_announcement(record.payload, self._announced_trips,
@@ -1022,6 +1039,22 @@ class MainWindow(QMainWindow):
     def enter_no_specimen(self) -> None:
         """Every [Enter no-specimen mode…] (banner, wizard start page, limits tab) → C-10 (limits tab)."""
         self.limits_tab.enter_no_specimen()
+
+    def set_opengl(self, on: bool) -> None:
+        """View ▸ OpenGL rendering (NFR-009): applied to every plot pane at once and stored in ``gui.ini``; a GL
+        failure falls back to raster with a message (``plots/render.py``)."""
+        render.set_opengl(on)
+        modes = [m for d in self.plot_docks for m in d.apply_render()]
+        if self.settings is not None:
+            self.settings.setValue(KEY_OPENGL, bool(on))
+        if on and (render.STATE["failed"] or "opengl" not in modes):
+            self.toast(f"OpenGL rendering not available — software raster used ({render.STATE['reason'] or 'no GL'})",
+                       "warn")
+            self.opengl_action.blockSignals(True)
+            self.opengl_action.setChecked(False)
+            self.opengl_action.blockSignals(False)
+        else:
+            self.toast("Plot rendering: " + ("OpenGL" if on else "software raster"), "info")
 
     def set_force_unit(self, unit: str) -> None:
         """View ▸ Units N / kgf (SYS-003): display only; stored in the session and the GUI settings."""

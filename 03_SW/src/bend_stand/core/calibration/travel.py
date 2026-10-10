@@ -10,6 +10,13 @@ back, the record notes it) → ``MOVE2`` (Continue: ``N2 = round(50·spm1)`` ste
 read-back, SAVE_PARAMS, ``travel_<UTC>.json`` + ``active_travel.json``, record deleted → ``DONE``. While the wizard
 runs it owns motion (``Backend.owner = "TRAVEL_CAL"``; the manual motion gates refuse ``OWNER_CONFLICT``).
 
+**D-54 a** (SRS v0.6.7 SW-CAL-002): the start does not need a load calibration. Without a valid load input outside
+the no-specimen mode it needs the CONFIRM "no specimen mounted" and the wizard runs in its own no-specimen scope
+(``Backend.set_wizard_no_specimen("TRAVEL_CAL")``): the PC load limits are off for the wizard's moves only, MANUAL /
+SEQUENCE motion stays refused (D-53 a), the FW load limit keeps its nominal thresholds; the scope ends (and the PC
+load limits apply again) on accept, cancel, abort, link loss and disconnect. An un-homed axis is homed first (phase
+``HOME``, same scope); a homing failure ends the wizard with its reason.
+
 **Restore rule** (§9.3.1): every exit other than accept (Cancel, STOP, HALT, PAUSE, E-stop, faults, link loss …)
 restores spm0: board reachable → ``RESTORING`` (wait ≤ 2 s for standstill, SET spm0 + read-back, record deleted) →
 ``ABORTED``; link down / app exit → the record stays and ``post_sync_job`` (every connect / BOOT resync) resolves it:
@@ -30,6 +37,7 @@ from bend_stand import __version__
 from bend_stand.calc.motion import f32
 from bend_stand.calc.rounding import round_half_away
 from bend_stand.calc.travelcal import consistency, spm_from_steps, target_for_steps, travel_plausibility
+from bend_stand.core import protocol_gen as pg
 from bend_stand.core.clock import wall_utc_iso
 from bend_stand.core.engine import EngineBase, refuse
 from bend_stand.core.errors import BendStandError, CommandTimeout, FileFormatError, LinkError
@@ -52,8 +60,8 @@ ROOM_MM = BACKLASH_MM + L1_MM + L2_MM
 class TravelCalEngine(EngineBase):
     KIND = "travel_cal"
     TOPIC = "cal.travel.state"
-    PHASES = ("CHECK", "BACKLASH", "REFERENCE", "MOVE1", "ENTER_D1", "MOVE2", "ENTER_DTOT", "RESULT", "ACCEPT",
-              "DONE")
+    PHASES = ("CHECK", "HOME", "BACKLASH", "REFERENCE", "MOVE1", "ENTER_D1", "MOVE2", "ENTER_DTOT", "RESULT",
+              "ACCEPT", "DONE")
     TERMINAL = ("IDLE", "DONE", "ABORTED")
 
     def __init__(self, backend: Backend) -> None:
@@ -69,6 +77,7 @@ class TravelCalEngine(EngineBase):
         self.diff = TravelDiffState()
         self._ignored_uid: str | None = None
         self._pending_confirm: list[tuple[str, str]] = []
+        self._stop_pending: str | None = None          # SWR-38: abort waiting for the wizard's STOP to complete
 
     # ================================================================================ start
     def start(self, *, v_mm_s: float | None = None, confirmed: bool = False, **_kw: Any) -> GateResult:
@@ -97,13 +106,62 @@ class TravelCalEngine(EngineBase):
         except OSError as exc:
             return refuse("FILE", f"restore record not written: {exc}")
         be.owner = OWNER
+        st = be.load_input.evaluate(be.device.params.values(), be.device.info)
+        if not st.valid and not be.load_input.no_specimen:          # D-54 a: wizard-scoped no-specimen state
+            be.set_wizard_no_specimen(OWNER, "travel calibration started, no specimen mounted (confirmed)")
         self._reset(phase="CHECK", title="Travel calibration", step_count=len(self.PHASES), can_cancel=True,
                     result=self._r)
-        self._set(phase="BACKLASH", step_index=1, can_continue=True, continue_moves=True,
-                  continue_label="Move +2 mm ▶",
-                  instruction=f"No specimen mounted. Board steps/mm = {spm0:.3f}. The axis first moves +2 mm (backlash "
-                              "take-up); all moves go in the + direction.")
+        if not be.device.last_flags & INT_DF.HOMED:      # D-54 a: the wizard's first step is HOME (automatic)
+            self._set(phase="HOME", step_index=1, can_continue=False, continue_moves=True,
+                      instruction="The axis is not homed: homing first (no specimen mounted), then the calibration "
+                                  "moves follow.")
+            self._home()
+        else:
+            self._to_backlash()
         return g
+
+    def _to_backlash(self) -> None:
+        self._set(phase="BACKLASH", step_index=2, can_continue=True, continue_moves=True,
+                  continue_label="Move +2 mm ▶", errors=(),
+                  instruction=f"No specimen mounted. Board steps/mm = {self._r.spm0:.3f}. The axis first moves +2 mm "
+                              "(backlash take-up); all moves go in the + direction.")
+
+    def _home(self) -> None:
+        """D-54 a: home inside the wizard (same no-specimen scope); a failure ends the wizard with its reason."""
+        be = self._be
+        self._moving = True
+        self._set(phase="HOME", can_continue=False, errors=(), needs_confirmation=None, inputs=())
+        ticket = be.motion.home(load_confirmed=True, owner=OWNER)
+        ticket.add_done_callback(lambda f: self._on_ticket(f, "HOME", self._home_done))
+
+    def _home_done(self, _done: Any) -> None:
+        """The homing ticket resolves with the MOVE_DONE of a homing leg; the wizard continues when HOMED is set and
+        the axis stands still (≤ 120 s), else it ends with the reason."""
+        d = self._be.device
+        self._moving = True
+
+        def wait() -> Job:
+            ok = yield Poll(lambda: bool(d.last_flags & INT_DF.HOMED) and not d.last_flags & INT_DF.MOVING
+                            or self._state.phase != "HOME", 120_000 * MS)
+            return ok
+
+        self._be._job(wait).add_done_callback(self._homed)  # noqa: SLF001
+
+    def _homed(self, f: Any) -> None:
+        self._moving = False
+        if self._state.phase != "HOME":
+            return                                     # aborted meanwhile
+        if f.exception() is not None or not f.result() or not self._be.device.last_flags & INT_DF.HOMED:
+            self._abort("homing did not complete (HOMED not set)")
+            return
+        be = self._be
+        x = be.motion.position_mm()
+        _lo, hi = be.motion.travel_range_mm()
+        room = None if x is None or hi is None else hi - x
+        if room is not None and room < ROOM_MM:
+            self._abort(f"only {room:.1f} mm of travel in + direction after homing ({ROOM_MM:g} mm needed)")
+            return
+        self._to_backlash()
 
     # ================================================================================ continue
     def continue_(self, inputs: Mapping[str, float] | None = None, *, confirmed: bool = False) -> None:
@@ -161,7 +219,7 @@ class TravelCalEngine(EngineBase):
 
     def _backlash_done(self, done: Any) -> None:
         self._s_ref = int(done.pos_steps)
-        self._set(phase="REFERENCE", step_index=2, can_continue=True, continue_moves=True,
+        self._set(phase="REFERENCE", step_index=3, can_continue=True, continue_moves=True,
                   continue_label="Move 10 mm ▶",
                   instruction="Zero the caliper / dial indicator at the current position, then Continue: the axis "
                               f"moves {L1_MM:g} mm (N1 = {round_half_away(L1_MM * self._r.spm0)} steps).")
@@ -170,7 +228,7 @@ class TravelCalEngine(EngineBase):
         self._s1 = int(done.pos_steps)
         n1 = self._s1 - self._s_ref
         self._r = TravelCalResult(self._r.spm0, n1)
-        self._set(phase="ENTER_D1", step_index=4, result=self._r, can_continue=True, continue_moves=False,
+        self._set(phase="ENTER_D1", step_index=5, result=self._r, can_continue=True, continue_moves=False,
                   continue_label="Set trial steps/mm ▶",
                   inputs=(InputSpec("d1_mm", "Measured distance D1", "mm", 0.001, 100.0, L1_MM),),
                   instruction=f"Enter the measured distance D1 (nominal {L1_MM:g} mm, {n1} steps issued).")
@@ -231,7 +289,7 @@ class TravelCalEngine(EngineBase):
             return
         self._spm1_board = float(f.result())
         self._be.motion.resync()
-        self._set(phase="MOVE2", step_index=5, can_continue=True, continue_moves=True,
+        self._set(phase="MOVE2", step_index=6, can_continue=True, continue_moves=True,
                   continue_label="Move 50 mm ▶",
                   instruction=f"Trial steps/mm {self._spm1_board:.3f} set (board RAM). Do not touch the caliper; "
                               f"Continue: the axis moves {L2_MM:g} mm more in the same direction.")
@@ -240,7 +298,7 @@ class TravelCalEngine(EngineBase):
         n2 = int(done.pos_steps) - self._s1
         r = self._r
         self._r = TravelCalResult(r.spm0, r.n1, r.d1_mm, r.spm1, n2)
-        self._set(phase="ENTER_DTOT", step_index=6, result=self._r, can_continue=True, continue_moves=False,
+        self._set(phase="ENTER_DTOT", step_index=7, result=self._r, can_continue=True, continue_moves=False,
                   continue_label="Compute ▶",
                   inputs=(InputSpec("dtot_mm", "Measured TOTAL distance D_tot", "mm", 0.001, 200.0,
                                     L1_MM + L2_MM),),
@@ -268,7 +326,7 @@ class TravelCalEngine(EngineBase):
         if self._cfg_dirty0:
             conf.append(("CFG_DIRTY", "the board has other unsaved parameter changes: accepting saves them too"))
         self._pending_confirm = conf
-        self._set(phase="RESULT", step_index=7, result=self._r, can_continue=True, continue_moves=False,
+        self._set(phase="RESULT", step_index=8, result=self._r, can_continue=True, continue_moves=False,
                   continue_label="Accept ▶", inputs=(), errors=(), warnings=tuple(t for _c, t in chk.warn),
                   needs_confirmation=ConfirmRequest(conf[0][0], " — ".join(t for _c, t in conf)) if conf else None,
                   instruction=f"spm0 {r.spm0:.3f} → spm1 {float(r.spm1 or 0):.3f} → spm2 {spm2:.3f} steps/mm "
@@ -283,7 +341,7 @@ class TravelCalEngine(EngineBase):
         if be.motion.fw_moving() or be.motion.busy:
             self._set(errors=("accept only while the axis stands still",))
             return
-        self._set(phase="ACCEPT", step_index=8, can_continue=False, errors=())
+        self._set(phase="ACCEPT", step_index=9, can_continue=False, errors=())
         be._job(self._accept_job).add_done_callback(self._accepted)  # noqa: SLF001
 
     def _accept_job(self) -> Job:
@@ -313,10 +371,11 @@ class TravelCalEngine(EngineBase):
         path, spm = f.result()
         self._trial_written = False
         be.owner = "MANUAL"
+        be.set_wizard_no_specimen(None, "travel calibration accepted")
         be.motion.resync()
         self.diff = TravelDiffState()
         be.record_event("CAL_TRAVEL_ACTIVATED", f"{path.name} steps/mm={spm:.3f}")
-        self._set(phase="DONE", step_index=9, can_cancel=False, needs_confirmation=None,
+        self._set(phase="DONE", step_index=10, can_cancel=False, needs_confirmation=None,
                   instruction=f"Travel calibration active: {spm:.3f} steps/mm ({path.name}).")
 
     # ================================================================================ abort / restore
@@ -329,9 +388,42 @@ class TravelCalEngine(EngineBase):
             self._abort(reason)
 
     def _abort(self, reason: str) -> None:
+        """Every abort path (cancel, error, homing failure, termination). SWR-38: while the wizard's own command still
+        runs, a controlled STOP is sent first and its standstill awaited (≤ 5 s; the STOP itself follows the usual
+        confirmation rules, never auto-retried as a clear); only then the scope and the owner are released — so the
+        safety net never has to stop the wizard's motion (no misleading SW-trip event) and a cancelled homing never
+        runs on in the operator's no-specimen mode."""
+        # Implements: SW-CAL-002, SW-STOP-001, SAF-SW-001 (SWR-38)
         be = self._be
+        if self._stop_pending is not None:
+            return                                     # already stopping (the STOP's own events end up here again)
+        if be.device.connected and (self._moving or be.motion.busy or be.motion.fw_moving()):
+            self._stop_pending = reason
+            self._set(can_continue=False, can_cancel=False, needs_confirmation=None, inputs=(),
+                      instruction="stopping the wizard's motion …")
+            try:
+                be.device.stop(pg.StopMode.CONTROLLED, f"travel calibration: {reason}")
+            finally:
+                be.motion.on_stop_issued("STOP")
+            be._job(self._standstill_job).add_done_callback(lambda _f: self._release(reason))  # noqa: SLF001
+            return
+        self._release(reason)
+
+    def _standstill_job(self) -> Job:
+        be = self._be
+        d = be.device
+        ok = yield Poll(lambda: not d.connected or (not d.last_flags & INT_DF.MOVING and not be.motion.busy),
+                        5000 * MS)
+        if not ok:
+            log.warning("travel calibration: motion did not stop within 5 s after the wizard's STOP")
+        return ok
+
+    def _release(self, reason: str) -> None:
+        be = self._be
+        self._stop_pending = None
         self._moving = False
         be.owner = "MANUAL"
+        be.set_wizard_no_specimen(None, f"travel calibration ended: {reason}")
         if not self._trial_written:
             try:
                 be.calibration_store.delete_restore()

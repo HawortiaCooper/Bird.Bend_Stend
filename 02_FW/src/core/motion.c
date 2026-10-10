@@ -815,30 +815,33 @@ bool motion_home_edge(uint8_t lim_id, int32_t steps)
 }
 
 /* ------------------------------------------------------------------ step ISR (level 2) */
-/* NFR-007 (FW_design §9.8 v0.8): the ramp body is inlined here (ramp_next_inl, no call level) */
-step_next_t step_isr(void)
+/* NFR-007 (FW_design §9.8 v0.8 / v0.8.6): the ramp body is inlined here (ramp_next_inl, no call
+ * level); the count comes from the caller and the result is packed for a register return (target HAL
+ * fast path, stepgen.h); step_isr() below is the seam v1 entry with identical behaviour */
+uint64_t step_isr_core(int32_t c)
 {
-    step_next_t n;
-    int32_t c = hal_step_count();
-    n.period = 0u;
-    n.last = false;
-    n.stop = false;
     if (!M.running) {
-        n.stop = true;
-        return n;
+        return STEP_NEXT_STOP;
     }
     if (c - M.isr_count != (int32_t)M.dir) {
         M.step_fault = true;                           /* missed update / count fault (SAF-FW-004) */
-        n.stop = true;
-        return n;
+        return STEP_NEXT_STOP;
     }
     M.isr_count = c;
     if (M.ramp.rem == 0u) {
-        n.last = true;                                 /* the period that just started is the last */
-        M.last_armed = true;
-        return n;
+        M.last_armed = true;                           /* the period that just started is the last */
+        return STEP_NEXT_LAST;
     }
-    n.period = ramp_next_inl(&M.ramp);
+    return (uint64_t)ramp_next_inl(&M.ramp);
+}
+
+step_next_t step_isr(void)
+{
+    step_next_t n;
+    uint64_t v = step_isr_core(hal_step_count());
+    n.period = (uint32_t)v;
+    n.last = (v & STEP_NEXT_LAST) != 0u;
+    n.stop = (v & STEP_NEXT_STOP) != 0u;
     return n;
 }
 

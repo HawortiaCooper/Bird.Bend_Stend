@@ -21,6 +21,7 @@ KEY_STATE = "main/state"
 KEY_LAST_TAB = "ui/last_tab"
 KEY_LAST_ENDPOINT = "ui/last_endpoint"
 KEY_UNITS = "ui/units"
+KEY_OPENGL = "ui/opengl"          # NFR-009: OpenGL plot rendering (default off)
 
 
 def settings_path() -> Path:

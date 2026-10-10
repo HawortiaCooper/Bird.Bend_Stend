@@ -59,6 +59,7 @@ TOPICS: tuple[str, ...] = (
     "channels.changed", "seq.status", "seq.step_result", "seq.window", "rec.state", "rec.failure",
     "sample.taken", "marks.edited", "resume.ignored", "hotkey.state", "hotkey.test", "report.ready", "log",
     "device.board_changed",                                       # B6-33 (6), SWR-19: payload = new board UID
+    "safety.no_specimen_scope",                                   # B6-35, D-54 a: payload scope str | None
 )
 TOPICS_PENDING_GUI: tuple[str, ...] = ()                         # topics published before the GUI maps them
 

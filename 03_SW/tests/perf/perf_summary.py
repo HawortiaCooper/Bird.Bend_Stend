@@ -3,10 +3,11 @@
 Usage: ``python perf_summary.py <run dir> [<run dir> ...]`` — prints one Markdown table row per measured item
 (value, budget, verdict, margin) plus the host load of each run.
 
-Budgets: NFR-001 paint-to-paint p95 ≤ 50 ms (≥ 20 fps), event-loop p99 ≤ 100 ms (reported); NFR-002 / NFR-003 p95
+Budgets (v0.5.5): NFR-001 / NFR-009 — refresh-tick interval p95 ≤ 50 ms and change → paint p95 ≤ 50 ms for every
+changed pane (unchanged panes are not judged; the old worst-pane paint p95 is reported as informative); event-loop p99 ≤ 100 ms (reported); NFR-002 / NFR-003 p95
 ≤ 50 ms; SAF-SW-001 (TC-SAF-SW-001-01) p95 ≤ 50 ms; NFR-004 0 SW-attributable losses, growth ≤ 50 MB.
 
-Verifies: NFR-001, NFR-002, NFR-003, NFR-004, SAF-SW-001 (report tool)
+Verifies: NFR-001, NFR-002, NFR-003, NFR-004, NFR-009, SAF-SW-001 (report tool)
 """
 from __future__ import annotations
 
@@ -39,8 +40,30 @@ def rows_for(run: Path) -> list[str]:
 
     if "pr1" in r:
         p = r["pr1"]
-        row(f"NFR-001 paint p95 (worst Plot-1 pane, {r['plots']['mode']})", p["plot1_worst_pane_p95_ms"], 50.0,
-            f"min fps {p['plot1_min_fps']}, tick p95 {p['tick_interval_ms'].get('p95')} ms")
+        mode = r["plots"]["mode"]
+        rd = p.get("render") or r.get("render") or {}
+        via = str(rd.get("via", "?"))
+        req = "NFR-009" if mode == "all600" else "NFR-001"
+        tag = (f"{req} ({mode}, {r['plots'].get('plot_windows')} windows, GPU {rd.get('gl', 'off')})")
+        harness = " — harness-forced OpenGL: informative until the GUI offers it" if via.startswith("harness") else ""
+        # v0.5.5 criterion (TC-NFR-001-01 / TC-NFR-009-01): content changes are pushed at >= 20 Hz (refresh tick) and
+        # every changed pane repaints within 50 ms; unchanged panes (redraw skip, SW_design_GUI §4.8) are not judged
+        row(f"{tag}: refresh-tick interval p95", p["tick_interval_ms"].get("p95", float("nan")), 50.0,
+            f"max {p['tick_interval_ms'].get('max')} ms{harness}")
+        if "change_to_paint_ms" in p:
+            c = p["change_to_paint_ms"]
+            wk = p.get("change_to_paint_worst_pane")
+            wch = (p.get("panes_change", {}).get(wk) or {}).get("channels", []) if wk else []
+            row(f"{tag}: change → paint p95, worst changed pane (>= 10 changes)",
+                p.get("change_to_paint_worst_pane_p95_ms", float("nan")), 50.0,
+                f"pane {wk} {wch}, unpainted {p.get('change_unpainted')}{harness}")
+            row(f"{tag}: change → paint p95, all changes (informative)", c.get("p95", float("nan")), 50.0,
+                f"n {c.get('n')}, max {c.get('max')} ms, changing panes {len(p.get('changing_panes', []))}")
+            row(f"{tag}: paint p95 of continuously changing panes (informative)",
+                p.get("changing_worst_pane_p95_ms", float("nan")), 50.0, "panes changing in >= 90 % of the ticks")
+        row(f"{tag}: paint p95 worst pane incl. unchanged panes (informative, pre-v0.5.5 metric)",
+            p.get("all_worst_pane_p95_ms", p["plot1_worst_pane_p95_ms"]), 50.0,
+            f"min fps {p.get('all_min_fps', p['plot1_min_fps'])} (static lanes repaint only on change)")
         row("NFR-001 event-loop lateness p99", p["event_loop_late_ms"].get("p99", float("nan")), 100.0,
             f"max {p['event_loop_late_ms'].get('max')} ms")
     if "pr2" in r:

@@ -2,7 +2,7 @@
 
 | Item | Value |
 |---|---|
-| Version | v1.2 (2026-10-10): §15 re-check of FW v0.8.5 (FWR-21, OBS-RC-7, OBS-RC-8 CLOSED; final HW-gate verdict GO WITH CONDITIONS). v1.1 (2026-10-10): §14 re-check of FW v0.8.4 (FWR-20 and OBS-RC-6 CLOSED; new FWR-21 Low, OBS-RC-7, OBS-RC-8). v1.0 (2026-10-09): §13 re-check of FW v0.8.3 (FWR-19 CLOSED; new FWR-20 Medium; OBS-RC-6). v0.9 (2026-10-09): §12 re-check of FW v0.8.2 (FWR-18 CLOSED; new FWR-19 Low). v0.8 (2026-10-09): §11 re-check of FW v0.8.1 (FWR-16, OBS-RC-1…3, FWR-09 pure check CLOSED; new FWR-18 Medium). v0.7 (2026-10-09): §10.5 D-52 HG-18 criteria and check-vector state_schema 4 applied. v0.6 (2026-10-09): §10 re-check of A's Task 1 + FWR-01…10 (all CLOSED, new FWR-16 / FWR-17 Low), §7 status. v0.5 (2026-10-08): §7 FWR-14 / FWR-09 (ICD) status and §9.2 Integrator re-review of round 2 (Implementer C). v0.4 (2026-10-08): §7 / §8.2 fixes of the Integrator review findings C-R1…C-R3, O-1…O-3 (round 2, for C's re-review). v0.3 (2026-10-08): §9 Integrator review of the HIL fixes (Implementer C). v0.2 (2026-10-08): §7 fix status, §8 change list of the HIL fixes for the Integrator's review. v0.1 (2026-10-08): review at e600169 |
+| Version | v1.3 (2026-10-10): §16 re-check of FW v0.8.6 (D-55: `step_isr_core` target entry ≡ seam entry, acc clamp proof, branch-free selects; OI-FW-53 applied; OBS-RC-9 informational; HW-gate verdict GO WITH CONDITIONS). v1.2 (2026-10-10): §15 re-check of FW v0.8.5 (FWR-21, OBS-RC-7, OBS-RC-8 CLOSED; final HW-gate verdict GO WITH CONDITIONS). v1.1 (2026-10-10): §14 re-check of FW v0.8.4 (FWR-20 and OBS-RC-6 CLOSED; new FWR-21 Low, OBS-RC-7, OBS-RC-8). v1.0 (2026-10-09): §13 re-check of FW v0.8.3 (FWR-19 CLOSED; new FWR-20 Medium; OBS-RC-6). v0.9 (2026-10-09): §12 re-check of FW v0.8.2 (FWR-18 CLOSED; new FWR-19 Low). v0.8 (2026-10-09): §11 re-check of FW v0.8.1 (FWR-16, OBS-RC-1…3, FWR-09 pure check CLOSED; new FWR-18 Medium). v0.7 (2026-10-09): §10.5 D-52 HG-18 criteria and check-vector state_schema 4 applied. v0.6 (2026-10-09): §10 re-check of A's Task 1 + FWR-01…10 (all CLOSED, new FWR-16 / FWR-17 Low), §7 status. v0.5 (2026-10-08): §7 FWR-14 / FWR-09 (ICD) status and §9.2 Integrator re-review of round 2 (Implementer C). v0.4 (2026-10-08): §7 / §8.2 fixes of the Integrator review findings C-R1…C-R3, O-1…O-3 (round 2, for C's re-review). v0.3 (2026-10-08): §9 Integrator review of the HIL fixes (Implementer C). v0.2 (2026-10-08): §7 fix status, §8 change list of the HIL fixes for the Integrator's review. v0.1 (2026-10-08): review at e600169 |
 | Reviewer | Validator E (FW) — Task 6, PO-approved whole-codebase review (not milestone-scoped) |
 | Anchor | commit **e600169** (P2 complete). Every `file:line` below refers to that commit. The review ran on a `git archive e600169` export in the role scratchpad, so Implementer A's parallel ISR work (Task 1) does not affect the line numbers. |
 | Baseline | SRS v0.6.4, ICD v0.7.4 (dict 6, 0xF8BCDCB8), FW_design v0.7, DECISIONS up to D-49 |
@@ -321,7 +321,7 @@ Commands ran in `scratchpad\validator-e-review\src` (a `git archive e600169` exp
 | `pio test -e native` (MinGW 13.1 on PATH, private build dir; validator vectors from `gen_val_vectors.py`) | 27 impl suites PASS; validator suites PASS except the new reproducers (6 FAIL, §4) |
 | `python -m pytest -p no:randomly 00_System/tools/hil/tests 02_FW/test/static/test_val_review_gen.py` | 41 PASS, 13 FAIL = the new reproducers |
 
-## 7. Fix status (v1.2, 2026-10-10)
+## 7. Fix status (v1.3, 2026-10-10)
 
 | ID | Status | By | Evidence |
 |---|---|---|---|
@@ -334,6 +334,8 @@ Commands ran in `scratchpad\validator-e-review\src` (a `git archive e600169` exp
 | FWR-21 (Low, new in the v0.8.4 re-check; also in v0.8.3) | **CLOSED** (§15.1, FW v0.8.5) | A | `test_val_haltwin` late-pulse cases PASS at 6 and 12 ticks / access (FAIL on v0.8.3 / v0.8.4) |
 | OBS-RC-7 (0.5 µs guard margin, stretch / CLEAN halt_hw path) | **CLOSED** (§15.2, guard 1.5 µs in FW v0.8.5) | A | TC-SAF-FW-004-05 (c): margin factor 2.96 / 3.58 ≥ 2 (v0.8.4: 1.04, FAIL) |
 | OBS-RC-8 (`test_fw_twin.py` ignores `BEND_TWIN_BUILD_DIR`) | **CLOSED** (§15.1) | Integrator | pytest 1 349 passed with a private twin dir |
+| OBS-RC-9 (count source of the step ISR outside the timing budget, FW v0.8.6) | informational, no action | – | §16.5; `test_val_isrcore` characterisation |
+| OI-FW-53 (`check_meas_build.py` safety symbol `step_isr_core`) | **done** (§16.1) | Validator E | TC-SYS-009-02 PASS on v0.8.6 |
 | OBS-RC-6 (documentation: CRIT_HALT 0.2 µs statements) | **CLOSED** (§14.2 (c), FW_design v0.8.4, pinout §4; TC-FW-SW-002-01 corrected by Validator E) | A / Validator E | §14.2 (c) |
 | FWR-14 | **fixed** by the Integrator (ICD v0.7.5 entry (e)): `gen_params.py` / `gen_protocol.py` validate identifiers, versions, integers and free text in `load()`; generated output byte-identical for the current YAML (both `--check` exit 0, hash 0xF8BCDCB8) | C | `02_FW/test/static/test_val_review_gen.py` 9/9 PASS ×2 (8 were FAIL); `00_System/tools/tests/test_gen_text_safety.py` 45 PASS |
 | FWR-09 (ICD Appendix C wording) | **done** by the Integrator (ICD v0.7.5 entry (d)): STATIC_LEVEL sel PUL also needs the ENA output at the disabled level (§4.3, §5.6, Appendix C op 8, `protocol.yaml` MEAS_STATE / STATIC_LEVEL texts); the FW check stays with A (FWR-09 FW part) | C | both `--check` exit 0; integration 176 ×2 |
@@ -1150,3 +1152,115 @@ The guard is now 1.5 µs (`s_guard = (f / 2 MHz) × 3` = 135 ticks, read back fr
 1. **OI-FW-51 / NFR-007 (HG-18, Validator E with A).** DWT sections 11 and 16–18 decide the CRIT_HALT windows. The conservative static bounds of `stop_now` (1.22 µs), `abort` (1.14 µs) and `set_period_now` (1.79 µs) exceed 1 µs; the nominal bounds are ≤ 0.95 µs (D-51). D-52 criteria apply to sections 1–5 and 23.
 2. **Target-only items under D-06.** SAF-FW-002 / 004 / 005 on-target timing and count trials, with the random phase covering the 1.5 µs guard window; the `isr_wcet.py` calibration record (OI-FW-46); and the reference-manual premise "CNT = 0 after an OPM stop" (§14.2 b1), confirmed indirectly by the HG-09 count trials.
 3. **OI-FW-52** is answered by §15.3: my criterion replaces A's proposal. A can close it in FW_design.
+
+## 16. Re-check of FW v0.8.6 (D-55: step-ISR trim, `step_isr_core`) and updated HW-gate verdict (Validator E, 2026-10-10)
+
+**Inputs.** Working-tree snapshot of 2026-10-10 21:36 (`rc9`). `sha256` over `02_FW/{src,include,tools,platformio.ini}` = `b98a6cad…`. Since §15, `core/motion.c`, `hal/f446/step_tim2.c`, `pure/ramp.h`, `pure/stepgen.h` and FW_design (§9.8 v0.8.6, OI-FW-45 resolved, OI-FW-53) changed. DECISIONS D-55. No hardware; nothing committed; private build and twin directories.
+
+**Verdict: GO WITH CONDITIONS** (§16.5). All four items are clean:
+- **(a)** The target entry is behaviourally identical to the twin's seam entry inside the timing budget. A new host suite drives both entries with the same inputs on the real core.
+- **(b)** The acc-clamp removal proof is correct, and an exhaustive float check confirms it.
+- **(c)** The branch-free selects are correct, including the FWR-05 late latch.
+- **(d)** I applied OI-FW-53.
+
+There is one characterisation outside the budget, OBS-RC-9 (informational, no action).
+
+### 16.1 Verdict per item
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| (a) target entry ≡ seam entry | **identical** (within the D-52 timing budget) | §16.2; `test_val_isrcore` 8 / 8 PASS; mutants caught |
+| (b) acc clamp removal | **proof correct** | §16.3; `test_acc_clamp_unreachable_exhaustive` (> 80 M cases) PASS |
+| (c) branch-free selects, FWR-05 | **correct** | §16.4; `test_entries_equal_fwr05_late_latch` PASS; the swapped-select mutant fails 7 / 8 cases |
+| (d) OI-FW-53 | **applied** (Validator E) | `check_meas_build.py`: `step_isr` → `step_isr_core`. TC-SYS-009-02 **PASS** on the three v0.8.6 images. With the old list it fails: `step_isr` is garbage-collected from both images. |
+| FWR-01 / 02 / 05 / 17 / 18 / 20 / 21 | **CLOSED** (unchanged) | The start / halt protocol, the FWR-21 branch, `halt_hw()` and the OPM-stopped branch are unchanged apart from the `s_t2` struct layout. `test_val_steprace`, `test_val_toctou`, `test_val_tickgen` and `test_val_haltwin` PASS. They run the HOST_TEST (seam) form of the handler; `test_val_isrcore` runs the target form. |
+| isr_wcet reproduction | **reproduced** | On my rc9 ELF (conservative / nominal µs):<br>- step ISR 2.65 / 1.97<br>- E-stop 1.28 / 0.99<br>- EXTI0/1 2.84 / 1.99<br>- **D-52 sum 5.49 / 3.96**<br>- `stop_now` 1.15 / 0.84, `abort` 1.04 / 0.75, `set_period_now` 1.53 / 0.88, `take_halt_flags` 0.96 / 0.49<br>A's step-ISR, E-stop and D-52 figures agree. |
+
+### 16.2 (a) Target entry vs seam entry
+
+**Disassembly of the target handler** (rc9 `TIM2_IRQHandler` 0x080122dc):
+- **Count.** `cnt = s_count + d` (plus `d` for a missed update) is stored to `s_t2.count` (`str r0,[r4,#0]`, 0x08012316). Then the CEN test runs, the late select runs, and `bl step_isr_core` (0x08012336) gets **the same register r0**.
+  - The seam form (v0.8.5 and the twin) read `hal_step_count()` inside the core instead. That read returns the value just stored, unless a level-0/1 handler that changes `s_count` pre-empts in between.
+  - Every pre-empting stop primitive touches `s_count` only through its UIF check (`halt_hw()`, `step_estop_reaction()`, DEF-M2-01). UIF was cleared at handler entry, so a change needs a **second update inside the step ISR**. That means a pre-emption longer than one step period, while the minimum period is ≥ 10 µs (`max_step_rate_hz` ≤ 100 kHz; 25 µs at the default). The longest pre-emption chain inside the step ISR is one level-1 handler plus the E-stop: ≤ 2.84 + 1.28 µs conservative.
+  - So inside the budget the two count sources are identical. Outside it, see OBS-RC-9.
+- **Packing and precedence.**
+  - The core returns exactly one of: `STEP_NEXT_STOP` (bit 33, period 0), `STEP_NEXT_LAST` (bit 32, period 0), or a period ≥ 1 (`ramp_next_inl` never returns 0).
+  - The handler tests the high word first (`cbnz r1`). In that branch bit 33 (`lsls r3,r1,#30; bmi`) tail-calls `halt_hw()` (RAM 0x200002b5); otherwise it takes the LAST branch (OPM read-modify-write under PRIMASK, unchanged). With a zero high word it writes the period (`cbz r0` skips 0).
+  - This is v0.8.5's stop > last > period. Since the core's results are exclusive, the order cannot change an outcome. The wrapper `step_isr()` unpacks with the same bit masks.
+- **FWR-01 / 02 / 21.** The start sequence, the stop primitives and the FWR-21 re-read are unchanged and use no core result. The step ISR's OPM-stopped branch (CEN = 0) does not call the core, in either version.
+
+**Host test (new, TC-FW-MOT-002-03): `test_val_isrcore`.** The twin no longer runs the exact target entry, so this suite does.
+- **Setup.** The unchanged `step_tim2.c` is compiled twice on a TIM2 register model:
+  - `tu_core.c` without HOST_TEST: the handler calls `step_isr_core(cnt)`.
+  - `tu_seam.c` with HOST_TEST: handler → `step_isr()` → `step_isr_core(hal_step_count())`, which is A's wrapper body.
+  - Both call the **real** core in `core/motion.c`. Its state comes from a real MOVE_ABS of 240 steps on A's fake seams, re-created identically for each entry.
+- **Compared between the two entries:** every core call (count argument and packed result), every PUL rise time, completed pulses, runts, update events, final count, stop generation, CR1 / CCMR1 / ARR / CCR1 / CNT, and scenario observations.
+- **Checked in every run:** the target's count argument equals the HAL count at the call, and the count equals the completed pulses (TRUNCATE: ± the cut pulse).
+- **Scenarios:**
+  - plain move to LAST;
+  - missed update (ISR held over two updates → count estimate → STOP);
+  - FWR-05 late latch;
+  - CLEAN / TRUNCATE / E-stop halts between ISRs at 10 phases, including the last pulse tick (FWR-21) and the guard region;
+  - halts with the ISR pending (DEF-M2-01);
+  - E-stop / limit / abort pre-empting the handler before the core is consulted, which exercises the count read timing.
+- **Result:** all PASS.
+- **Anti-vacuity (mutants on a scratch copy):**
+
+| Mutant | Cases that fail |
+|---|---|
+| count passed as `cnt − d` | 7 / 8 |
+| late select swapped | 7 / 8 |
+| packing test `>> 33` instead of `>> 32` | 1 / 8 |
+
+  A precedence mutation (LAST before STOP) cannot be seen, because the core never sets both bits. That is a property of the core, which I checked by inspection.
+
+### 16.3 (b) Removal of the acc clamp
+
+A's proof is correct:
+1. The preceding clamp gives `c ≤ RAMP_U32_MAX_F` = 2^32 − 256, the largest float below 2^32. The ternary form is equivalent to the former `if`, including for NaN: both leave NaN unchanged.
+2. **`0 ≤ carry < 1` is invariant.** `n = (uint32_t)acc` truncates the non-negative `acc`.
+   - For `acc < 2^24`, `n` is exact as a float, and `acc − (float)n` is exact (Sterbenz) and lies in [0, 1).
+   - For `acc ≥ 2^24`, `acc` is an integer, so `carry` = 0.
+3. **`carry + c ≤ RAMP_U32_MAX_F` in round-to-nearest.**
+   - For `c ≥ 2^24` the ulp is ≥ 2, so `carry < 1 ≤ ulp / 2` (never a tie) and the sum rounds to `c`.
+   - For `c < 2^24` the sum is < 2^24 + 1.
+   - So the removed `if (acc > MAX)` could never fire.
+4. The FPU rounding mode is the default round-to-nearest on the M4 and on the host SSE path; there is no FMA contraction, since there is no multiply.
+5. **Exhaustive check:** every float c in [2^22, 2^32 − 256] with carry = 1 − 2^-24 (rounding is monotone in carry, so this covers every carry), plus every 61st float in [1, 2^22) with seven carries. No case exceeds the bound, and the carry stays in [0, 1).
+
+### 16.4 (c) The branch-free selects
+
+- **Running-period select in the handler:**
+  - Code: `s_cur = late ? late_cur : pre`, compiled as `ldrb late; ldr late_cur; ldr pre; cmp; it ne; movne; str s_cur; strb late = 0`.
+  - The two extra volatile loads have no side effect. No context that can pre-empt the step ISR writes `s_late`, `s_late_cur` or `s_pre`: `latch_running()`, `hal_step_set_period()` and `set_period_now()` run at tick level with the ISR masked, and the level-0/1 stop primitives only read them.
+  - So the select is equivalent to v0.8.5's branch.
+  - The FWR-05 scenario confirms it: the ISR takes the period the pending update started, and `s_late` is cleared. Both entries agree, and the swapped-select mutant is caught.
+- **`per_running()` / `ccr_running()` in the stop primitives:** unchanged (a branch on UIF).
+- **The `c` clamp:** as in §16.3.
+
+### 16.5 Observation and evidence
+
+| ID | Sev | Observation | Evidence | Owner |
+|---|---|---|---|---|
+| OBS-RC-9 | Obs. (informational, no action) | **Count source outside the timing budget.** Suppose the step ISR is pre-empted for more than one step period, so a second update happens inside it, and the pre-empting handler halts and counts that update (`halt_hw()` / E-stop UIF check). Then the target entry passes the pre-halt count: the core sees no count fault and returns a period, which is written to the stopped timer. The seam entry (v0.8.5, twin) reads the corrected count: the core flags STEP_FAULT and returns STOP. **In both, the step count is exact and the axis is stopped.** Only the STEP_FAULT / POS_UNCERTAIN verdict differs, and the v0.8.6 behaviour is the more accurate one: no pulse was lost. Not reachable within D-52 (≤ 4.2 µs of pre-emption against a ≥ 10 µs minimum period). | `test_characterise_handler_preempted_beyond_budget`: target call 10 → period 0x1033c (argument 810), seam → STOP (argument 811); count exact in both | – |
+
+| Run | Result |
+|---|---|
+| Builds (rc9): `nucleo_f446re`, `_meas`, `_meas_dwt`, private dir | rc 0; 0 warnings in our sources; `check_map` M-1…M-4 PASS |
+| TC-SYS-009-02 `check_meas_build.py` (OI-FW-53 applied) | PASS (meas 49 / 51, meas_dwt 42 / 51 objects identical, all differences allowed; safety symbols present); the old list: FAIL (`step_isr` missing) |
+| Disassembly: `TIM2_IRQHandler` 0x080122dc, `step_isr_core` 0x0800f4b0, `s_t2` 0x20000018 | as in §16.2 / §16.4 |
+| `isr_wcet.py` (conservative / nominal) | as in §16.1 |
+| `test_val_isrcore` (new) | 8 / 8 PASS; mutants caught (§16.2) |
+| `pio test -e native` (rc9, all suites) | **251 / 251 PASS** (42 suites) |
+| Validator suites in seeded random order (`VAL_SEED=20261016`) | **66 / 66 PASS** |
+| `pytest 02_FW/test/twin` + HIL tests + `00_System/tools/tests` + `test_val_review_gen.py` (private `BEND_TWIN_BUILD_DIR`) | **1 349 passed** |
+| Twin rehearsal `hil_session.py --twin --quick` | 43 steps, rc 0. Verdicts: 21 PASS, 13 PARTIAL, 5 OPEN, 4 N/A (unchanged since §13) |
+
+### 16.6 Updated FW verdict for the HW gate
+
+**GO WITH CONDITIONS.** No FW finding is open; FWR-01…21 and OBS-RC-1…3 / 6…8 are CLOSED, and OBS-RC-9 is informational. What changed since §15.5: the static step ISR now meets NFR-007 nominally (1.97 µs ≤ 2 µs), and so does the D-52 sum (3.96 µs ≤ 5 µs). Under the conservative model the step ISR (2.65 µs) and the D-52 sum (5.49 µs) are still above budget. Conditions:
+1. **HG-18 (Validator E with A).** The DWT sections decide NFR-007 / D-52: section 1 (step ISR, now including `step_isr_core`), 2, 3/4, 5, 23, the sum of section 1 and the largest level-1 handler, and the CRIT_HALT windows 11 / 16–18 (OI-FW-51). The `isr_wcet.py` calibration record is still needed (OI-FW-46).
+2. **Target-only items under D-06.**
+   - SAF-FW-002 / 004 / 005 timing and count trials, with the random phase covering the 1.5 µs guard window.
+   - HG-09 count trials. These are now also the target evidence that the `step_isr_core` entry counts like the seam form the twin runs.
+   - The reference-manual premise "CNT = 0 after an OPM stop".

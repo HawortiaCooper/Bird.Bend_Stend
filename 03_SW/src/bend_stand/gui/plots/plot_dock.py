@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from bend_stand.gui.plots import render
 from bend_stand.gui.plots.pane_grid import COLUMN_CHOICES, PaneGrid
 from bend_stand.gui.plots.plot_pane import BIT_UNIT, PlotPane, XYPane, pane_from_mime
 from bend_stand.gui.plots.quantity import BITS, quantity_group
@@ -78,6 +79,13 @@ XY_X_UNITS = ("mm", "µm", "um")
 
 _CONFIGURED = False
 _LIVE_DOCKS: "weakref.WeakSet[PlotDock]" = weakref.WeakSet()
+
+
+def set_opengl(on: bool) -> list[str]:
+    """NFR-009 hook (also used by F's ``perf_gui.py --gl``): switch every live plot window between OpenGL and raster
+    (``plots/render.py``; fallback to raster when GL fails). Returns the modes now in use."""
+    render.set_opengl(on)
+    return [m for d in list(_LIVE_DOCKS) if shiboken6.isValid(d) for m in d.apply_render()]
 
 
 def configure_pyqtgraph() -> None:
@@ -666,6 +674,10 @@ class PlotDock(SafeDock):
             return False
         return self.isFloating() or not self.visibleRegion().isEmpty()
 
+    def apply_render(self) -> list[str]:
+        """Re-apply the render mode (View ▸ OpenGL rendering) to every pane; returns the modes now in use."""
+        return [p.set_render() for p in self.panes()]
+
     def wants_snapshot(self) -> bool:
         return not self.frozen and self.is_shown() and bool(self.snapshot_keys())
 
@@ -698,8 +710,8 @@ class PlotDock(SafeDock):
         for p in self.xy_panes():
             if not (p.x_key and p.y_key):
                 continue
-            try:
-                xy = data.xy(p.x_key, p.y_key, self.window_s)
+            try:                                        # NFR-009: point budget from the pane width
+                xy = data.xy(p.x_key, p.y_key, self.window_s, max_points=render.xy_points(p.px_width()))
             except Exception as exc:  # noqa: BLE001 - not connected / channel not available yet
                 self._info(f"X-Y: {exc}")
                 continue

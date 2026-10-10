@@ -170,15 +170,12 @@ RAMP_INLINE uint32_t ramp_next_inl(ramp_t *r)
     if (r->mono && c < r->last) {
         c = r->last;
     }
-    if (c > RAMP_U32_MAX_F) {
-        c = RAMP_U32_MAX_F;
-    }
+    c = (c > RAMP_U32_MAX_F) ? RAMP_U32_MAX_F : c;
     r->prev = r->last;
     r->last = c;
+    /* no clamp needed (v0.8.6, NFR-007): c <= RAMP_U32_MAX_F (= 2^32 - 256, float ulp 256 there) and
+     * 0 <= carry < 1, so carry + c rounds to at most RAMP_U32_MAX_F; the v0.8.5 clamp never fired */
     acc = r->carry + c;
-    if (acc > RAMP_U32_MAX_F) {
-        acc = RAMP_U32_MAX_F;
-    }
     n = (uint32_t)acc;
     r->carry = acc - (float)n;
     if (rem != 0u) {

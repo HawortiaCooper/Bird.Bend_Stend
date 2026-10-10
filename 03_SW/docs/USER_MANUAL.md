@@ -92,8 +92,8 @@ board watchdog (≤ 100 ms) and by the hardwired ENA cut. The PO accepted this r
 - The hardwired ENA cut is **not monitored** (KL-09): a broken wire is not detected. **Periodic check**
   (wiring.md C-25, by a trained person): hold the Nucleo in reset (black RESET button), press the E-stop → the motor
   shaft must turn freely by hand; release → it holds again only after the board runs and the driver is enabled.
-  Do this at the start of every test campaign and after any work on the operator panel (interval to be confirmed by
-  the PO, see open item OI-UM-04).
+  Do this at the start of every test campaign (confirmed by the PO, D-54 e) and after any work on the operator
+  panel.
 - To remove all energy from the motor, switch off the 48 V driver supply (mains switch of the PSU).
 
 ### 1.4 Automatic stops
@@ -208,7 +208,7 @@ Menus:
 | Menu | Items |
 |---|---|
 | File | **Open session…**, **Save session as…** (`*.bbsession.json`: limits, speeds, display unit; never tare or no-specimen mode), **Exit** (Ctrl+Q) |
-| View | **New plot window** (up to 4), **Save layout now**, **Units** ▸ **N** / **kgf**, show / hide **Plot 1**…, **Readouts**, **Event log** |
+| View | **New plot window** (up to 4), **Save layout now**, **Units** ▸ **N** / **kgf**, **OpenGL rendering**, show / hide **Plot 1**…, **Readouts**, **Event log** |
 | Tools | **Link statistics…**, **Test Pause/Break key…** |
 | Help | **Status indicators & clear procedures…**, **Keyboard…**, **About…** (SW, FW, protocol and dictionary versions) |
 
@@ -262,8 +262,8 @@ or enter the no-specimen mode` with the button **Enter no-specimen mode…**.
 
 ![First use: motion refused](img/03_first_use_banner.png)
 
-The **no-specimen mode** switches the PC load limits off **for this session only**, so you can home, run the travel
-calibration and the load calibration with hanging weights. The board load limit stays active at its default
+The **no-specimen mode** switches the PC load limits off **for this session only**, so you can home, jog and run the
+load calibration with hanging weights (the travel calibration does not need it, §8). The board load limit stays active at its default
 (±7 022 271 counts ≈ ±109 % FS), travel limits stay active.
 
 1. **Safety limits** tab → **Enter no-specimen mode…** (also on the banner and on the wizard start pages).
@@ -339,11 +339,16 @@ The big **STOP** at the bottom of the tab is the same as the toolbar STOP.
 
 ## 8. Travel calibration
 Measures the real steps/mm of the axis (nominal 800 steps/mm). Needed once after installation and after mechanical
-work. Requires: connected, driver enabled, homed, no latch, **no specimen**, room for 62 mm in + direction. Allowed in
-no-specimen mode. You need a caliper or dial gauge.
+work. Requires: connected, driver enabled, no latch, **no specimen**, room for 62 mm in + direction. It does **not**
+need a load calibration and the axis does not have to be homed (D-54 a). You need a caliper or dial gauge.
 
 1. **Calibration & Tare** tab → **Start travel calibration wizard…**. The start page lists what is missing and the
-   expected value. A missing load calibration asks you to confirm that no specimen is mounted.
+   expected value. Without a load calibration and tare, **Start** asks you to confirm that **no specimen is
+   mounted** (tick the box, click — Enter does not confirm). The wizard then runs with the PC load limits off for its
+   own moves only: the amber banner `NO SPECIMEN – travel calibration: …` and the **NOSPEC** chip show it; the board
+   load limit stays active; manual moves stay locked. Everything returns to normal when the wizard ends (accept,
+   cancel or abort).
+   If the axis is not homed, the wizard first shows **HOME** and homes the axis to the START switch by itself.
 
    ![Travel wizard start page](img/08_travel_wizard_start.png)
 2. **Start** → **Move +2 mm ▶** (backlash take-up).
@@ -514,6 +519,11 @@ Max and **State** (`OK`, `EXTRAPOLATED`, `STALE`, `SATURATED`, `INVALID`, `n/a`)
 
 **Units**: **View ▸ Units ▸ N / kgf** switches force display everywhere (stored in the session).
 
+**Rendering**: **View ▸ OpenGL rendering** draws the plot panes with the graphics card. It is **off** by default:
+on the development PC the normal (software) drawing was 3–5 × faster. Try it only if the plots are slow on your PC;
+if OpenGL does not work, the application switches back by itself and says so. The choice is remembered.
+Long windows (600 s) on several plot windows load the PC most; panes whose content does not change are not redrawn.
+
 **Event log** (**View ▸ Event log**): every stop with its cause, latch set / clear, move results, refusals, tare and
 calibration results, file names. Use it to find out why something stopped.
 
@@ -643,8 +653,10 @@ result table per step and loop iteration (F mean / std / min / max, x mean, flag
 ![Report tab](img/33_report_tab.png)
 
 **Report** tab:
-- **Recordings folder**: where recordings and reports are written (read-only here) and **Open recordings folder**
-  (opens it in the Windows file browser; before the first recording the folder does not exist yet).
+- **Recordings folder**: where recordings and reports are written, **Open recordings folder** (opens it in the
+  Windows file browser; before the first recording the folder does not exist yet) and **Change…** (choose another
+  folder; disabled while a recording runs). The folder must be writable — otherwise a warning box says why and the
+  folder stays as it was. The choice is stored with the session.
 - **Recordings** list (newest first; **Refresh**): date / time, specimen, sequence, status (`PARTIAL` / `FAILED` in
   red), duration, report yes / no, folder.
 - **Selected recording**: marks, calibration, tare, warnings and the step results.
@@ -682,7 +694,7 @@ travel = deflection.
 | **AFE** red `AFE_SATURATED` | HX711 at its rail: overload, wrong gain or a broken cell wire | Unload; check the cell and the bridge wiring. |
 | **AFE** amber `AFE_RATE_MISMATCH` | the measured sample rate differs from `afe.rate_sps` (80 Hz expected) by more than 20 % | Sequences are refused. Check the RATE wire of the HX711 module (PB5) and `afe.rate_sps` on the Config tab. |
 | **AFE** amber `AFE_SETTLING` | HX711 settling after a configuration change | Wait a moment. |
-| **ALM** red `ALM – new motion blocked` | driver alarm (over-current, following error, supply); a running move continues, new motion is refused, a sequence stops (`DRIVER_ALARM`) | Recommended reset (OI-UM-02): 1. press the red **E-stop** (the axis becomes NOT homed, the load may spring back); 2. switch the 48 V driver supply **off**, wait until the driver LEDs are dark, find the cause (overload, jam, wiring); 3. supply **on**; 4. release the E-stop, **Clear stop… → Clear E-STOP**; 5. **Driver enabled**, **HOME**. |
+| **ALM** red `ALM – new motion blocked` | driver alarm (over-current, following error, supply); a running move continues, new motion is refused, a sequence stops (`DRIVER_ALARM`) | Reset procedure (confirmed, D-54 d): 1. press the red **E-stop** (the axis becomes NOT homed, the load may spring back); 2. switch the 48 V driver supply **off**, wait until the driver LEDs are dark, find the cause (overload, jam, wiring); 3. supply **on**; 4. release the E-stop, **Clear stop… → Clear E-STOP**; 5. **Driver enabled**, **HOME**. |
 | **LIM S** / **LIM E** red | limit switch reached | Move away from the switch (only that direction is accepted); the latch clears when released. |
 | both **LIM** chips red, `LIMIT_WIRING` | both limit inputs active at once. The switches are normally-closed: an unplugged connector or broken wire reads as "active" | Do not move. Check the START / END switch connectors and cables. **Clear faults** once the inputs are no longer both active. |
 | Load wizard: `weight not detected: …` | the raw signal did not change enough between two points | Hang the weight freely (nothing touching), check the mass, **Repeat** the point (§9). |

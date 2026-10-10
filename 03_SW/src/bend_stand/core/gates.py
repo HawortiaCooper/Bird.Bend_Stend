@@ -135,6 +135,7 @@ class GateSnapshot:
     recording_failed: bool = False
     estop_release_ms: int = ESTOP_RELEASE_MS_DEFAULT   # board ``io.estop_release_ms`` (clear-hint value, OI-UM-01)
     params_invalid: tuple[str, ...] = ()               # SWR-22: board values outside the dictionary range
+    wizard_no_specimen: bool = False                   # D-54 a: travel-wizard scoped no-specimen state active
 
 
 def _link_items(s: GateSnapshot) -> list[GateItem]:
@@ -320,7 +321,8 @@ def motion_items(s: GateSnapshot, kind: MotionKind, owner: str = "MANUAL") -> li
         why = s.thresholds_state if s.thresholds_state not in ("VERIFIED", "DEFAULT_ONLY") else "being rewritten"
         items.append(GateItem(GateCode.THRESHOLDS_UNVERIFIED, R, f"FW load thresholds not verified for the active "
                               f"calibration + tare ({why}) — Recheck thresholds"))
-    if not s.no_specimen and not s.load_input_valid:         # D-53 a: independent of the limit enables (SWR-03)
+    wizard_scope = s.wizard_no_specimen and owner == "TRAVEL_CAL"   # D-54 a: only the wizard's own moves
+    if not s.no_specimen and not s.load_input_valid and not wizard_scope:   # D-53 a (SWR-03)
         items.append(GateItem(GateCode.LOAD_INPUT_INVALID, R, f"no valid load input: {s.load_input_reason}",
                               "Calibrate + Tare, or enter the no-specimen mode"))
     if s.owner != owner:
@@ -334,9 +336,10 @@ def motion_items(s: GateSnapshot, kind: MotionKind, owner: str = "MANUAL") -> li
     if s.sw_trip is not None:
         items.append(GateItem(GateCode.SW_TRIP, W, f"SW limit {s.sw_trip} tripped — only motion that reduces the "
                               "violation", CLEAR_HINTS["SW_TRIP"]))
-    if s.no_specimen:
+    if s.no_specimen or wizard_scope:
         items.append(GateItem(GateCode.NO_SPECIMEN_MODE, W, "no-specimen mode: PC load limits off (FW load limit "
-                                                            "active)"))
+                                                            "active)" + (" — travel calibration only" if
+                                                                         wizard_scope and not s.no_specimen else "")))
     if s.travel_cal_differs:
         items.append(GateItem(GateCode.TRAVEL_CAL_DIFFERS, W, "board steps/mm differs from the active travel "
                                                               "calibration"))
@@ -452,13 +455,20 @@ def g_sample(s: GateSnapshot) -> GateResult:
 
 
 def g_cal_travel_start(s: GateSnapshot) -> GateResult:
-    """Travel calibration (SW-CAL-002): the ``move`` gate + room for 2 + 10 + 50 mm in the + direction."""
-    items = [i for i in motion_items(s, MotionKind.MOVE) if i.code != GateCode.OWNER_CONFLICT]
+    """Travel calibration (SW-CAL-002, D-54 a): the ``move`` gate without the load-input rule and without NOT_HOMED
+    (the wizard homes first) + room for 2 + 10 + 50 mm in the + direction. Without a valid load input outside the
+    no-specimen mode the start needs the CONFIRM "no specimen mounted" (SAF-SW-004): the wizard then runs in its own
+    no-specimen scope (PC load limits off for its moves only, FW load limit at its nominal defaults)."""
+    # Implements: SW-CAL-002, SW-LIM-004, SAF-SW-004 (D-54 a)
+    skip = {GateCode.OWNER_CONFLICT, GateCode.LOAD_INPUT_INVALID, "NOT_HOMED"}
+    items = [i for i in motion_items(s, MotionKind.MOVE) if i.code not in skip]
     items += _busy_items(s)
-    if not s.load_input_valid and not any(i.severity == R for i in items):
+    if not s.load_input_valid and not s.no_specimen and not any(i.severity == R for i in items):
         items.append(GateItem(GateCode.NO_SPECIMEN_MOUNTED, C, "load unknown: confirm that no specimen is mounted — the "
-                                                               "travel calibration moves 62 mm in the + direction"))
-    if s.travel_room_mm is not None and s.travel_room_mm < 62.0:
+                                                               "travel calibration moves 62 mm in the + direction with "
+                                                               "the PC load limits off for its own moves (the board "
+                                                               "load limit stays active)"))
+    if s.flags & DF.HOMED and s.travel_room_mm is not None and s.travel_room_mm < 62.0:
         items.append(GateItem(GateCode.TRAVEL_ROOM, R, f"only {s.travel_room_mm:.1f} mm of travel in + direction "
                                                 f"(62 mm needed) — move back first"))
     return GateResult(tuple(items))

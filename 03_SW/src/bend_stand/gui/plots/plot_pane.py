@@ -37,7 +37,7 @@ from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QLineF, QMimeData, QObject, QEvent, QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QTimer, QLineF, QMimeData, QObject, QEvent, QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QFontMetrics, QKeyEvent, QMouseEvent, QPen, QStaticText
 from PySide6.QtWidgets import (
     QApplication,
@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import Shiboken
 
+from bend_stand.gui.plots import render
 from bend_stand.gui.plots.autorange import AutoRange
 from bend_stand.gui.plots.time_view import (
     VSTATE_EXTRAPOLATED, VSTATE_INVALID, VSTATE_OK, interleave, split_vstate,
@@ -363,8 +364,22 @@ class FastCurve(pg.PlotCurveItem):
         super().__init__(pen=pen, name=name, connect="finite", antialias=False)
         self._rect = QRectF()
 
+    #: diagnostics (NFR-009): set_xy calls skipped because nothing changed (class-wide counter)
+    skipped = 0
+
     def set_xy(self, x: np.ndarray, y: np.ndarray, yr: tuple[float, float] | None = None) -> None:
-        """New data; ``yr`` = (min, max) of the finite ``y`` if the caller has it (None = computed here)."""
+        """New data; ``yr`` = (min, max) of the finite ``y`` if the caller has it (None = computed here). Identical
+        data under an unchanged view range is skipped: no geometry change, no repaint (NFR-009: static lanes and
+        slow channels in long windows — the time columns are fixed relative to the window end, §4.6 rule 2)."""
+        vb = self.getViewBox()
+        vr = None if vb is None else (tuple(vb.state["viewRange"][0]), tuple(vb.state["viewRange"][1]))
+        ox, oy = self.xData, self.yData
+        if (ox is not None and oy is not None and vr == getattr(self, "_last_vr", None) and len(x) == len(ox)
+                and len(y) == len(oy) and np.array_equal(x, ox) and np.array_equal(y, oy, equal_nan=True)):
+            FastCurve.skipped += 1
+            return
+        self._last_vr = vr
+        self.changed = True                     # OBS-F-NFR9-01: the pane repaints its viewport once (commit_view)
         self.prepareGeometryChange()
         self.xData = x
         self.yData = y
@@ -575,6 +590,8 @@ class PlotPane(QFrame):
         self.plot_widget.scene().setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self._click_filter = _ClickFilter(self)
         self.plot_widget.viewport().installEventFilter(self._click_filter)
+        self.render_mode = "raster"
+        self.set_render()                               # NFR-009: raster or OpenGL viewport (render.py)
         lay.addWidget(self.plot_widget, 1)
 
         pi: pg.PlotItem = self.plot_widget.getPlotItem()
@@ -596,6 +613,30 @@ class PlotPane(QFrame):
         pi.vb.sigRangeChangedManually.connect(self._on_manual_range)
         pi.vb.sigStateChanged.connect(self._on_vb_state)
         self.update_title()
+
+    def set_render(self) -> str:
+        """Apply the process render mode (``plots/render.py``) to this pane's view; the click filter / drop setting
+        follow a new viewport. Returns "opengl" or "raster"."""
+        before = self.plot_widget.viewport()
+        mode = render.apply(self.plot_widget)
+        vp = self.plot_widget.viewport()
+        if vp is not before:
+            vp.setAcceptDrops(False)
+            vp.installEventFilter(self._click_filter)
+        self.render_mode = mode
+        return mode
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        if self.render_mode == "opengl":                # GL context exists only after the first show → check then
+            QTimer.singleShot(0, self._check_render)
+
+    def _check_render(self) -> None:
+        try:
+            if not render.check(self.plot_widget):
+                self.set_render()
+        except RuntimeError:                             # pane deleted meanwhile
+            pass
 
     # ---------------------------------------------------------------- identity / title
     def quantities(self) -> list[str]:
@@ -984,9 +1025,19 @@ class PlotPane(QFrame):
         return float(lo), float(hi)
 
     def commit_view(self) -> None:
-        """Apply pending range / matrix changes now, outside the paint event (one paint per refresh)."""
+        """Apply pending range / matrix changes now, outside the paint event (one paint per refresh). If any curve of
+        the pane really changed (not skipped), the whole viewport is scheduled for repaint (OBS-F-NFR9-01: an
+        item-rect update of a thin curve — e.g. a constant lane whose gap pattern changes — did not always produce a
+        paint of the pane on the real display; up to 1.9 s late). Unchanged panes still paint nothing (§4.8)."""
         for vb in self._viewboxes():
             vb.prepareForPaint()
+        dirty = False
+        for it in self.plot_item.listDataItems() + [it for vb in self._viewboxes() for it in vb.addedItems]:
+            if getattr(it, "changed", False):
+                it.changed = False
+                dirty = True
+        if dirty:
+            self.plot_widget.viewport().update()
 
     def x_range(self) -> tuple[float, float]:
         lo, hi = self.plot_item.getViewBox().viewRange()[0]

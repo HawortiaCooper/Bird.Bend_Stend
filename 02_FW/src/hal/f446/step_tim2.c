@@ -45,6 +45,20 @@
 #include "meas_dwt.h"
 #include "stepgen.h"
 
+/* step ISR result (NFR-007 v0.8.6): the target calls the core's step_isr_core(count) (register
+ * return, no hal_step_count() call); host harnesses of this file provide step_isr() only, so there
+ * the same packed form is built from it */
+#if defined(HOST_TEST)
+static inline uint64_t step_next_of(int32_t count)
+{
+    step_next_t r = step_isr();
+    (void)count;
+    return (uint64_t)r.period | (r.last ? STEP_NEXT_LAST : 0u) | (r.stop ? STEP_NEXT_STOP : 0u);
+}
+#else
+#define step_next_of(count) step_isr_core(count)
+#endif
+
 #ifndef RAMFUNC                                       /* host harness (test_impl_steptim) overrides */
 #define RAMFUNC __attribute__((section(".RamFunc"), noinline, long_call))
 #endif
@@ -54,19 +68,39 @@
 #define CCMR1_INACTIVE      (OC1M_FORCE_INACTIVE | TIM_CCMR1_OC1PE)   /* CC1 output, preload, forced off */
 #define CR1_STOPPED         (TIM_CR1_ARPE)                            /* CEN = OPM = 0, ARR preload */
 
-static volatile int32_t  s_count;
-static volatile int32_t  s_dir = 1;
-static volatile bool     s_running;
-static volatile uint32_t s_stop_gen;
-static volatile uint32_t s_cur;          /* running period (shadow), ticks */
-static volatile uint32_t s_pre;          /* preloaded period, ticks */
-static volatile bool     s_late;         /* an update is pending and the preload was rewritten: */
-static volatile uint32_t s_late_cur;     /* ... the period that update started (FWR-05) */
-static volatile uint32_t s_t_upd;        /* DWT at the previous update */
-static uint32_t s_pw = 900u, s_dir_setup = 1800u, s_guard = 135u, s_f = 90000000u;
-static bool     s_ena_inv;
-static uint32_t s_ena_off = 1u << PIN_ENA_BIT;   /* BSRR word "driver disabled" (motion.ena_invert) */
-static bool     s_init;
+/* the HAL state in ONE object, so the handlers reach every field from one base register (NFR-007,
+ * FW_design §9.8 v0.8.6: one literal load instead of one per variable); the former names stay as
+ * macros (host harnesses of this file use them) */
+static struct {
+    volatile int32_t  count;
+    volatile int32_t  dir;
+    volatile uint32_t stop_gen;
+    volatile uint32_t cur;         /* running period (shadow), ticks */
+    volatile uint32_t pre;         /* preloaded period, ticks */
+    volatile uint32_t late_cur;    /* ... the period that a pending update started (FWR-05) */
+    volatile uint32_t t_upd;       /* DWT at the previous update */
+    uint32_t          pw, dir_setup, guard, f;
+    uint32_t          ena_off;     /* BSRR word "driver disabled" (motion.ena_invert) */
+    volatile bool     running;
+    volatile bool     late;        /* an update is pending and the preload was rewritten */
+    bool              ena_inv, init;
+} s_t2 = {0, 1, 0u, 0u, 0u, 0u, 0u, 900u, 1800u, 135u, 90000000u, 1u << PIN_ENA_BIT, false, false, false, false};
+#define s_count     s_t2.count
+#define s_dir       s_t2.dir
+#define s_running   s_t2.running
+#define s_stop_gen  s_t2.stop_gen
+#define s_cur       s_t2.cur
+#define s_pre       s_t2.pre
+#define s_late      s_t2.late
+#define s_late_cur  s_t2.late_cur
+#define s_t_upd     s_t2.t_upd
+#define s_pw        s_t2.pw
+#define s_dir_setup s_t2.dir_setup
+#define s_guard     s_t2.guard
+#define s_f         s_t2.f
+#define s_ena_inv   s_t2.ena_inv
+#define s_ena_off   s_t2.ena_off
+#define s_init      s_t2.init
 /* HW_MEAS STATIC_LEVEL hold (meas_f4.c sets it; always 0 in the release image): released at the next
  * motion start / ENA change (ICD v0.6 Appendix C op 8) */
 volatile uint8_t g_meas_static;
@@ -346,9 +380,9 @@ uint32_t hal_step_stop_gen(void) { return s_stop_gen; }
 void TIM2_IRQHandler(void)
 {
     uint32_t now = dwt_cycles();
-    uint32_t el, cur, pm;
+    uint32_t el, cur, pm, per;
     int32_t d, cnt;
-    step_next_t r;
+    uint64_t r;
     if ((TIM2->SR & TIM_SR_UIF) == 0u) {
         return;                                      /* already counted by halt_hw() (DEF-M2-01) */
     }
@@ -371,20 +405,27 @@ void TIM2_IRQHandler(void)
             s_stop_gen++;
         }
     } else {
-        s_cur = s_late ? s_late_cur : s_pre;         /* the period this update started (FWR-05) */
+        {
+            bool late = s_late;                      /* the period this update started (FWR-05), */
+            uint32_t lc = s_late_cur, pre = s_pre;   /* selected without a branch */
+            s_cur = late ? lc : pre;
+        }
         s_late = false;
-        r = step_isr();                              /* period, last and stop are exclusive */
-        if (r.stop) {
+        r = step_next_of(cnt);                       /* precedence stop > last > period, as v0.8 */
+        per = (uint32_t)r;
+        if (__builtin_expect((r >> 32) == 0u, 1)) {
+            if (per != 0u) {
+                s_pre = per;                         /* hal_step_set_period() */
+                TIM2->ARR = per - 1u;
+                TIM2->CCR1 = per - s_pw;
+            }
+        } else if ((r & STEP_NEXT_STOP) != 0u) {
             halt_hw();
-        } else if (r.last) {
+        } else {                                     /* STEP_NEXT_LAST */
             pm = __get_PRIMASK();
             __disable_irq();                         /* a halt must not be undone by this RMW */
             TIM2->CR1 |= TIM_CR1_OPM;
             __set_PRIMASK(pm);
-        } else if (r.period != 0u) {
-            s_pre = r.period;                        /* hal_step_set_period() */
-            TIM2->ARR = r.period - 1u;
-            TIM2->CCR1 = r.period - s_pw;
         }
     }
     MDWT_VAL(MDWT_ISR_STEP, dwt_cycles() - now);      /* HW_MEAS_DWT only (OI-FW-37) */

@@ -343,7 +343,12 @@ def _eval_afe(chip: str, status: Any, ind: Any) -> ChipView:
 
 
 def _eval_nospec(chip: str, status: Any, ind: Any) -> ChipView:
-    on = bool(getattr(getattr(status, "safety", None), "no_specimen_mode", False))
+    safety = getattr(status, "safety", None)
+    scope = getattr(safety, "no_specimen_scope", None)          # D-54 a: wizard-scoped state
+    on = bool(getattr(safety, "no_specimen_mode", False)) or bool(scope)
+    if scope and not getattr(safety, "no_specimen_mode", False):
+        return _view(chip, "warn", "NO-SPECIMEN (wizard)", f"No specimen ({scope}): PC load limits OFF for the "
+                     "wizard's own moves; board load limit and travel limits active (D-54 a).")
     return _view(chip, "warn" if on else "neutral", "NO-SPECIMEN" if on else "off",
                  "No-specimen mode: PC load limits OFF for this session; board load limit and travel limits "
                  "active (SW-LIM-004).", visible=on)

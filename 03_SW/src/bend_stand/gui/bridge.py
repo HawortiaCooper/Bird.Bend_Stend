@@ -59,6 +59,7 @@ TOPIC_SIGNALS: Mapping[str, str] = {
     "report.ready": "reportReady",
     "log": "logMessage",
     "device.board_changed": "boardChanged",      # B6-33 (6), SWR-19: another board (UID) after a reconnect
+    "safety.no_specimen_scope": "safetyEvent",   # D-54 a: wizard-scoped no-specimen state (scope str | None)
 }
 
 if "safety.trip_cleared" in TOPICS:          # B6-15 (MC3-5): trip clear on its own topic
