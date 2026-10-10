@@ -35,9 +35,16 @@ def load(session: Path) -> tuple[dict, list[dict]]:
     meta = json.loads((session / "session.json").read_text(encoding="utf-8")) if (session / "session.json").exists() else {}
     order = meta.get("order", [])
     res = {}
+    sid = meta.get("session_id")
+    foreign = 0
     for f in sorted((session / "results").glob("*.json")):
         r = json.loads(f.read_text(encoding="utf-8"))
+        if sid and (r.get("session") or {}).get("session_id") != sid:
+            foreign += 1                                  # FWR-13: another session's result is not reported
+            continue
         res[r["id"]] = r
+    if foreign:
+        meta = dict(meta, foreign_results=f"{foreign} result file(s) of other sessions ignored")
     items = [res[i] for i in order if i in res] + [r for k, r in res.items() if k not in order]
     return meta, items
 
@@ -56,7 +63,8 @@ def render(session: Path) -> str:
                 "the twin's world model.", ""]
     out += ["| Field | Value |", "|---|---|"]
     for k in ("mode", "date", "approval", "port", "board_uid", "operator", "fw_build", "images_commit", "icd", "dict_hash",
-              "python", "host", "seed", "quick", "twin_exe", "cfg_overrides"):
+              "python", "host", "seed", "quick", "twin_exe", "cfg_overrides", "session_id",
+              "foreign_results"):
         if k in meta:
             out.append(f"| {k} | {_cell(_v(meta[k]))} |")
     out.append("")

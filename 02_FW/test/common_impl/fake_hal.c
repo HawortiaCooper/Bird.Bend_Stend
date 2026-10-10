@@ -121,6 +121,7 @@ bool hal_step_stop_now(void)
 {
     fake_stop_now_calls++;
     if (!S.running) {
+        S.stop_gen++;                                /* idle halt visible, like the target (FWR-01) */
         return false;
     }
     if (S.high) {
@@ -136,6 +137,7 @@ bool hal_step_abort(void)
     bool cut;
     fake_abort_calls++;
     if (!S.running) {
+        S.stop_gen++;                                /* idle halt visible, like the target (FWR-01) */
         return false;
     }
     cut = S.high;
@@ -307,9 +309,16 @@ size_t hal_uart_read(uint8_t *buf, size_t max)
     return n;
 }
 
+void (*fake_peek_hook)(void);                        /* called once at the next hal_uart_peek() (tick: link_tick) */
+
 size_t hal_uart_peek(uint8_t *buf, size_t max, uint32_t *cursor)
 {
     size_t n = 0u;
+    if (fake_peek_hook != NULL) {
+        void (*h)(void) = fake_peek_hook;
+        fake_peek_hook = NULL;
+        h();
+    }
     while (n < max && *cursor != s_rx_w) {
         buf[n++] = s_rx[*cursor % FAKE_RX_SIZE];
         (*cursor)++;
@@ -606,6 +615,7 @@ void fake_hal_reset(void)
     fake_set_now_calls = 0u;
     fake_stop_now_calls = 0u;
     fake_abort_calls = 0u;
+    fake_peek_hook = NULL;
     fake_step_inits = 0u;
     fake_rise_n = 0u;
     fake_step_skip_isr = false;

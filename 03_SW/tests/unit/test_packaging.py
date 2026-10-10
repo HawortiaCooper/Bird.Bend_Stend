@@ -66,9 +66,13 @@ def test_headless_requires_endpoint(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def _pins(path: Path) -> dict[str, str]:
+    """Direct pins; a line whose comment starts with ``transitive`` pins a transitive package to the verified venv
+    (SWR-34) and is not a direct dependency of pyproject."""
     out = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.split("#", 1)[0].strip()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if "#" in raw and raw.split("#", 1)[1].strip().lower().startswith("transitive"):
+            continue
+        line = raw.split("#", 1)[0].strip()
         if not line or line.startswith("-r"):
             continue
         name, ver = line.split("==")

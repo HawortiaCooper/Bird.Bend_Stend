@@ -16,6 +16,10 @@ slope of the window means; SW-REP-004, off by default).
 
 Report-tab support (GRQ-B-11): ``list_recordings(root)``, ``load_result(folder)``.
 
+Hardening (review SW_code_review v1.1): every sidecar value is type-coerced and HTML-escaped, the page carries a
+script-free Content-Security-Policy (SWR-11); a calibration to re-apply is schema / ``validate_load`` / finite-number
+checked and a non-PASS status is a report warning (SWR-24).
+
 Implements: SW-REP-001, SW-REP-002 (offline extraction), SW-REP-003, SW-REP-004
 """
 from __future__ import annotations
@@ -66,22 +70,74 @@ def result_to_dict(r: StepResult) -> dict[str, Any]:
 
 
 def _f(v: Any) -> float:
-    return NAN if v is None else float(v)
+    """Float field from a sidecar / report JSON; anything non-numeric → NaN (never raw text, SWR-11)."""
+    if v is None or isinstance(v, bool):
+        return NAN
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return NAN
+
+
+def _opt_f(v: Any) -> float | None:
+    return None if v is None else _f(v)
+
+
+def _int(v: Any) -> int | None:
+    """Integer field: int, integral float or digit string; anything else → None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float) and math.isfinite(v) and v.is_integer():
+        return int(v)
+    if isinstance(v, str) and v.strip().lstrip("+-").isdigit():
+        return int(v.strip())
+    return None
+
+
+#: StepResult fields by JSON type (everything not listed is float / NaN)
+_ID_INT = ("exec_idx", "step_idx")                      # identity: invalid → FileFormatError
+_COUNT_INT = ("n", "trim_iterations")                   # counters: invalid → 0
+_TEXT = ("uid", "label", "kind", "unit", "text")
+_OPT_FLOAT = ("target", "tol_n", "t_reached_s", "k_est_n_mm")
 
 
 def result_from_dict(d: Mapping[str, Any]) -> StepResult:
+    """``StepResult`` from a sidecar run log / ``report.json`` entry with every field coerced to its declared type
+    (review finding SWR-11: a recording may come from another PC; no raw JSON value reaches the HTML). Identity
+    fields that are not integers raise ``FileFormatError``; other malformed values become NaN / 0 / "" / ()."""
+    if not isinstance(d, Mapping):
+        raise FileFormatError(f"step result is not an object: {type(d).__name__}")
     kw: dict[str, Any] = {}
     for name, fld in StepResult.__dataclass_fields__.items():
         if name not in d:
             continue
         v = d[name]
-        if name in ("loop_iters", "flags"):
-            v = tuple(v or ())
+        if name in _ID_INT:
+            iv = _int(v)
+            if iv is None:
+                raise FileFormatError(f"step result {name} = {v!r} is not an integer")
+            v = iv
+        elif name in _COUNT_INT:
+            v = _int(v) or 0
+        elif name in _TEXT:
+            v = "" if v is None else str(v)
+        elif name == "loop_iters":
+            v = tuple(i for i in (_int(x) for x in (v if isinstance(v, (list, tuple)) else ())) if i is not None)
+        elif name == "flags":
+            v = tuple(str(x) for x in (v if isinstance(v, (list, tuple)) else ()))
         elif name == "window_s":
-            v = None if v is None else (float(v[0]), float(v[1]))
+            v = (_f(v[0]), _f(v[1])) if isinstance(v, (list, tuple)) and len(v) == 2 else None
+        elif name in _OPT_FLOAT:
+            v = _opt_f(v)
+        elif name in ("stats", "ramp"):
+            v = v if isinstance(v, Mapping) else ({} if name == "stats" else None)
         elif isinstance(fld.default, float):
             v = _f(v)
         kw[name] = v
+    for name in _ID_INT + ("uid", "label", "kind"):       # required by the dataclass
+        kw.setdefault(name, 0 if name in _ID_INT else "")
     return StepResult(**kw)
 
 
@@ -162,13 +218,82 @@ def _cal_k(cal: Mapping[str, Any]) -> float:
         raise FileFormatError(f"calibration record without fit.k_n_per_count ({exc})") from exc
 
 
+def _finite(v: Any, what: str) -> float:
+    if isinstance(v, bool) or v is None:
+        raise ValueError(f"{what} is not a number")
+    x = float(v)
+    if not math.isfinite(x):
+        raise ValueError(f"{what} is not finite")
+    return x
+
+
+def _check_cal_numbers(d: Mapping[str, Any], *, complete: bool = True) -> None:
+    """Types and finite numbers of a load-calibration record (beyond ``validate_load``). ``complete=False`` (an
+    in-process record): ``points`` / ``afe`` are checked only when present."""
+    fit = d.get("fit")
+    if not isinstance(fit, Mapping):
+        raise ValueError("fit is not an object")
+    if _finite(fit.get("k_n_per_count"), "fit.k_n_per_count") == 0:
+        raise ValueError("fit.k_n_per_count must be non-zero")
+    for key in ("offset_raw", "linearity_pct_span", "max_residual_n"):
+        if fit.get(key) is not None:
+            _finite(fit[key], f"fit.{key}")
+    pts = d.get("points")
+    if pts is None and not complete:
+        pts = []
+    if not isinstance(pts, list):
+        raise ValueError("points is not a list")
+    for i, p in enumerate(pts):
+        if not isinstance(p, Mapping):
+            raise ValueError(f"points[{i}] is not an object")
+        _finite(p.get("raw_mean"), f"points[{i}].raw_mean")
+        _finite(p.get("force_n"), f"points[{i}].force_n")
+    afe = d.get("afe")
+    if afe is not None or complete:
+        if not isinstance(afe, Mapping):
+            raise ValueError("afe is not an object")
+        if _finite(afe.get("rate_sps"), "afe.rate_sps") <= 0:
+            raise ValueError("afe.rate_sps must be > 0")
+    for key in ("created_utc", "file"):
+        if d.get(key) is not None and not isinstance(d[key], str):
+            raise ValueError(f"{key} is not a string")
+
+
 def _load_cal(cal: Any) -> Mapping[str, Any]:
+    """Calibration to re-apply (SW-REP-003). A **file** (offline ``--cal``, Report tab) — a ``bird.bend.cal.load``
+    store file, or a bare calibration record as in a recording's ``meta.json`` snapshot — is validated like an active
+    calibration: schema kind / version when the file has a ``schema`` header, ``validate_load`` (K finite and
+    non-zero, status PASS / WARN / UNVERIFIED_LINEARITY, >= 2 points, AFE fields) and finite numbers / types (review
+    finding SWR-24).
+    An in-process **record** (mapping) gets the number / type checks of the fields it has (K finite, non-zero).
+    ``FileFormatError`` otherwise. A status other than PASS is reported as a warning in the report."""
+    from bend_stand.core.calibration.store import LOAD_KIND, validate_load  # noqa: PLC0415
+    from bend_stand.core.calibration.store import VERSION as CAL_VERSION  # noqa: PLC0415
+    from bend_stand.core.schema import read_json  # noqa: PLC0415
+
+    complete = not isinstance(cal, Mapping)
     if isinstance(cal, Mapping):
-        return cal
+        d: Mapping[str, Any] = cal
+        src = "calibration record"
+    else:
+        try:
+            raw = json.loads(Path(cal).read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise FileFormatError("not a JSON object")
+            d = read_json(cal, LOAD_KIND, CAL_VERSION) if "schema" in raw else raw
+        except (OSError, ValueError, RecursionError, FileFormatError) as exc:
+            raise FileFormatError(f"calibration file {cal}: {exc}") from exc
+        src = f"calibration file {cal}"
+    _cal_k(d)                                             # "without fit.k_n_per_count" message first
     try:
-        return json.loads(Path(cal).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise FileFormatError(f"calibration file {cal}: {exc}") from exc
+        if complete:
+            validate_load(d)
+        _check_cal_numbers(d, complete=complete)
+    except FileFormatError as exc:
+        raise FileFormatError(f"{src}: {exc}") from exc
+    except (TypeError, ValueError) as exc:
+        raise FileFormatError(f"{src}: load calibration record invalid: {exc}") from exc
+    return d
 
 
 def force_column(rec: Recording, *, k_override: float | None = None, tare_override: float | None = None) -> np.ndarray:
@@ -341,6 +466,8 @@ def _warnings(rec: Recording, f: np.ndarray, results: Sequence[tuple[dict[str, A
             w.append(f"forces beyond 3 × the largest calibration force ({fmax:g} N): extrapolated")
     if cal_ov:
         w.append("re-calculated with another calibration")
+        if fit.get("status") != "PASS":                   # SWR-24: an applied calibration that is not PASS
+            w.append(f"applied calibration status {fit.get('status')!s} (not PASS)")
     if tare_ov:
         w.append("re-calculated with another tare")
     if rec.meta.get("no_specimen_mode"):
@@ -363,6 +490,12 @@ def _warnings(rec: Recording, f: np.ndarray, results: Sequence[tuple[dict[str, A
         if r.get("state") != "FINISHED":
             w.append(f"sequence {((r.get('sequence') or {}).get('name') or '')!s} ended {r.get('state')} "
                      f"({r.get('end_reason')}): partial run")
+        tr = r.get("truncated")
+        if isinstance(tr, Mapping) and any(isinstance(v, int) and v > 0 for v in tr.values()):
+            # Implements: SW-REP-001, SW-SEQ-002 (SWR-30): a bounded run log (endless loop, SWR-28) is named
+            parts = ", ".join(f"{int(v)} {k}" for k, v in sorted(tr.items()) if isinstance(v, int) and v > 0)
+            w.append(f"run log truncated: the oldest {parts} were dropped from the sidecar (endless loop); the "
+                     "table covers the newest steps only — data.csv keeps every row")
     return w
 
 
@@ -442,6 +575,16 @@ def svg_chart(x: np.ndarray, y: np.ndarray, *, title: str, x_label: str, y_label
     return "".join(parts)
 
 
+#: the report needs no script and no external resource: everything but inline style is refused (SWR-11)
+_CSP = ("<meta http-equiv='Content-Security-Policy' content=\"default-src 'none'; style-src 'unsafe-inline'\">")
+
+
+def _idx1(v: Any) -> str:
+    """1-based index cell: the integer + 1, anything else escaped as text (SWR-11)."""
+    iv = _int(v)
+    return str(iv + 1) if iv is not None else html.escape(str(v))
+
+
 def _fmt(v: Any, nd: int = 4) -> str:
     if v is None:
         return "–"
@@ -475,7 +618,7 @@ def render_html(doc: Mapping[str, Any], rec: Recording, f: np.ndarray,
     t_of = (lambda tu: float(np.interp(tu, rec.t, t)) if rec.t.size else NAN)
     shade_t = [(t_of(r.window_s[0] * 1e6), t_of(r.window_s[1] * 1e6)) for _run, r in results if r.window_s]
     pts_fx = [(r.x_mean_mm - float(run.get("x_off_mm") or 0.0), r.f_mean_n, r.label) for run, r in results]
-    out = [f"<!doctype html><html><head><meta charset='utf-8'><title>Bend test report – {e(title)}</title>"
+    out = [f"<!doctype html><html><head><meta charset='utf-8'>{_CSP}<title>Bend test report – {e(title)}</title>"
            f"<style>{_CSS}</style></head><body>", f"<h1>Bend test report – {e(title)}</h1>",
            f"<div>Recording {e(str(rec.folder.name))} · start {e(str(doc.get('start_utc') or ''))} · report "
            f"{e(str(doc.get('created_utc')))} · SW {e(str(doc.get('sw_version')))}</div>"]
@@ -520,21 +663,23 @@ def render_html(doc: Mapping[str, Any], rec: Recording, f: np.ndarray,
     for _run, r in results:
         bad = any(fl in r.flags for fl in ("NOT_REACHED", "BREAK_DETECTED", "SLIP", "TIMEOUT", "NOT_ON_TARGET",
                                             "INCOMPLETE", "DRIVER_ALARM", "BOUND_NOT_AHEAD"))
-        out.append(f"<tr><td>{r.exec_idx + 1}</td><td>{r.step_idx + 1}</td><td>{e('.'.join(map(str, r.loop_iters)))}"
-                   f"</td><td class='l'>{e(r.label)}</td><td>{_fmt(r.target, 3)} {e(r.unit)}</td><td>{r.n}</td>"
+        out.append(f"<tr><td>{_idx1(r.exec_idx)}</td><td>{_idx1(r.step_idx)}</td>"
+                   f"<td>{e('.'.join(map(str, r.loop_iters)))}</td><td class='l'>{e(str(r.label))}</td>"
+                   f"<td>{_fmt(r.target, 3)} {e(str(r.unit))}</td><td>{e(str(r.n))}</td>"
                    f"<td>{_fmt(r.f_mean_n)}</td><td>{_fmt(r.f_std_n)}</td><td>{_fmt(r.f_se_n)}</td>"
                    f"<td>{_fmt(r.f_drift_n)}</td><td>{_fmt(r.x_mean_mm)}</td><td>{_fmt(r.x_std_mm)}</td>"
                    f"<td>{_fmt(r.raw_mean, 1)}</td><td>{_fmt(r.k_est_n_mm, 3)}</td>"
-                   f"<td class='l {'bad' if bad else ''}'>{e(', '.join(r.flags) or '–')}"
-                   f"{(' — ' + e(r.text)) if r.text else ''}</td></tr>")
+                   f"<td class='l {'bad' if bad else ''}'>{e(', '.join(map(str, r.flags)) or '–')}"
+                   f"{(' — ' + e(str(r.text))) if r.text else ''}</td></tr>")
     out.append("</table>")
     b3 = doc.get("bend3p")
     if b3:
-        out.append(f"<h2>3-point bend</h2><p>L = {b3['span_mm']} mm, b = {b3['width_mm']} mm, h = "
-                   f"{b3['thickness_mm']} mm; E<sub>f</sub> = {_fmt(b3.get('e_f_mpa'), 1)} MPa</p><table><tr>"
+        out.append(f"<h2>3-point bend</h2><p>L = {_fmt(b3.get('span_mm'))} mm, b = {_fmt(b3.get('width_mm'))} mm, "
+                   f"h = {_fmt(b3.get('thickness_mm'))} mm; E<sub>f</sub> = {_fmt(b3.get('e_f_mpa'), 1)} MPa</p>"
+                   "<table><tr>"
                    "<th>exec</th><th class='l'>label</th><th>F [N]</th><th>δ [mm]</th><th>σ [MPa]</th><th>ε</th></tr>")
         for row in b3.get("rows") or []:
-            out.append(f"<tr><td>{row['exec_idx'] + 1}</td><td class='l'>{e(str(row['label']))}</td>"
+            out.append(f"<tr><td>{_idx1(row.get('exec_idx'))}</td><td class='l'>{e(str(row.get('label')))}</td>"
                        f"<td>{_fmt(row['f_n'])}</td><td>{_fmt(row['deflection_mm'])}</td>"
                        f"<td>{_fmt(row['sigma_mpa'])}</td><td>{_fmt(row['eps'], 6)}</td></tr>")
         out.append("</table>")

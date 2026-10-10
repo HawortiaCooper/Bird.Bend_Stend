@@ -87,6 +87,16 @@ class DictError(Exception):
     """Validation error in params.yaml."""
 
 
+def _text(v: Any, where: str) -> str:
+    """Free text that reaches generated C comments / Python literals (FWR-14, rule in gen_protocol.py)."""
+    return gen_protocol.safe_text(v, where, DictError)
+
+
+def _cc(s: str) -> str:
+    """C comment body (defence in depth; validated text never contains a comment delimiter)."""
+    return gen_protocol._c_comment(s)
+
+
 # --------------------------------------------------------------------------------------
 # model
 # --------------------------------------------------------------------------------------
@@ -214,7 +224,7 @@ def _parse_enum(raw: Any, where: str) -> tuple[EnumItem, ...]:
             raise DictError(f"{where}: bad enum name {name!r}")
         if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 255:
             raise DictError(f"{where}: enum value of {name} must be int 0..255")
-        items.append(EnumItem(name, value, str(e.get("label", name))))
+        items.append(EnumItem(name, value, _text(e.get("label", name), f"{where}.{name}.label")))
     names = [i.name for i in items]
     values = sorted(i.value for i in items)
     if len(set(names)) != len(names):
@@ -287,7 +297,7 @@ def _build_param(pd: dict[str, Any], g: GroupDef, id_base: int) -> Param:
             raise DictError(f"{where}: min > max")
         if not vmin <= vdef <= vmax:
             raise DictError(f"{where}: default outside [min, max]")
-    unit = str(pd.get("unit", ""))
+    unit = _text(pd.get("unit", ""), f"{where}.unit")
     if not unit.isascii():
         raise DictError(f"{where}: unit must be ASCII")
     if not isinstance(_req(pd, "moving_ok", where), bool):
@@ -298,6 +308,7 @@ def _build_param(pd: dict[str, Any], g: GroupDef, id_base: int) -> Param:
     srs = pd.get("srs", [])
     if not isinstance(srs, list) or not srs:
         raise DictError(f"{where}: srs must be a non-empty list")
+    srs = [_text(x, f"{where}.srs") for x in srs]
     decimals = pd.get("decimals")
     if decimals is not None and (t != "f32" or not isinstance(decimals, int) or not 0 <= decimals <= 9):
         raise DictError(f"{where}: decimals only for f32, 0..9")
@@ -305,11 +316,11 @@ def _build_param(pd: dict[str, Any], g: GroupDef, id_base: int) -> Param:
         decimals = 3
     return Param(
         id=pid, key=f"{g.group}.{name}", name=name, group=g.group, group_label=g.label,
-        label=str(pd.get("label", name)), type=t, unit=unit, min=vmin, max=vmax, default=vdef,
+        label=_text(pd.get("label", name), f"{where}.label"), type=t, unit=unit, min=vmin, max=vmax, default=vdef,
         enum=enum, moving_ok=bool(pd["moving_ok"]), nvm=bool(pd.get("nvm", True)),
         reboot_required=bool(pd.get("reboot_required", False)),
         advanced=bool(pd.get("advanced", False)), decimals=decimals,
-        description=" ".join(str(pd.get("description", "")).split()),
+        description=_text(" ".join(str(pd.get("description", "")).split()), f"{where}.description"),
         srs=tuple(str(s) for s in srs),
     )
 
@@ -320,7 +331,7 @@ def load(path: Path = YAML_PATH) -> Dictionary:
     sv = _req(doc, "schema_version", "top")
     if sv != SCHEMA_VERSION:
         raise DictError(f"unsupported schema_version {sv}")
-    dv = _req(doc, "dict_version", "top")
+    dv = gen_protocol.safe_int(_req(doc, "dict_version", "top"), "dict_version", 1, 0xFFFF, DictError)
     groups: list[GroupDef] = []
     params: list[Param] = []
     seen_members: set[str] = set()
@@ -329,7 +340,10 @@ def load(path: Path = YAML_PATH) -> Dictionary:
         gname = str(_req(gd, "group", "group"))
         if not NAME_RE.match(gname) or gname in RESERVED:
             raise DictError(f"bad group name {gname!r}")
-        member = str(_req(gd, "c_member", gname))
+        member = gen_protocol.safe_ident(_req(gd, "c_member", gname), f"group {gname}.c_member", DictError,
+                                         pattern=NAME_RE)
+        if member in RESERVED:
+            raise DictError(f"group {gname}: reserved c_member {member!r}")
         if member in seen_members:
             raise DictError(f"duplicate c_member {member}")
         seen_members.add(member)
@@ -342,7 +356,7 @@ def load(path: Path = YAML_PATH) -> Dictionary:
         offs = [p.get("id_off") for p in pl]
         if len(set(names)) != len(names) or len(set(offs)) != len(offs):
             raise DictError(f"group {gname}: duplicate name or id_off")
-        g = GroupDef(gname, str(gd.get("label", gname)), member, pl)
+        g = GroupDef(gname, _text(gd.get("label", gname), f"group {gname}.label"), member, pl)
         groups.append(g)
         for pd in pl:
             params.append(_build_param(pd, g, base))
@@ -417,7 +431,7 @@ def gen_c_header(d: Dictionary) -> str:
         tname = f"{p.group}_{p.name}"
         o.append("typedef enum {\n")
         for e in sorted(p.enum, key=lambda e: e.value):
-            o.append(f"    {c_ident(tname)}_{e.name} = {e.value}, /* {e.label} */\n")
+            o.append(f"    {c_ident(tname)}_{e.name} = {e.value}, /* {_cc(e.label)} */\n")
         o.append(f"}} {tname}_t;\n\n")
 
     o.append("/* Parameter storage (RAM image). Member order = params.yaml order. */\n")
@@ -425,7 +439,7 @@ def gen_c_header(d: Dictionary) -> str:
         o.append("typedef struct {\n")
         for pd in g.params_yaml:
             ctype = TYPES[pd["type"]][2]
-            comment = pd.get("unit", "")
+            comment = _cc(str(pd.get("unit", "")))
             o.append(f"    {ctype:<9} {pd['name']};" + (f" /* {comment} */" if comment else "") + "\n")
         o.append(f"}} params_{g.group}_t;\n\n")
     o.append("typedef struct {\n")
@@ -486,6 +500,7 @@ def gen_c_source(d: Dictionary) -> str:
              "      (uint16_t)offsetof(params_t, member), (uint8_t)(size), \\\n"
              "      (uint32_t)(mn), (uint32_t)(mx), (uint32_t)(df) PKEY(key) }\n\n")
     o.append("const param_meta_t PARAM_TABLE[PARAM_COUNT] = {\n")
+    member = {g.group: g.c_member for g in d.groups}
     for p in d.params:
         fl = []
         if p.moving_ok:
@@ -496,9 +511,9 @@ def gen_c_source(d: Dictionary) -> str:
             fl.append("PARAM_F_REBOOT")
         flags = "|".join(fl) or "0"
         o.append(f"    /* {p.key}: min {human_value(p, p.min)}, max {human_value(p, p.max)}, "
-                 f"default {human_value(p, p.default)} {p.unit} */\n")
+                 f"default {human_value(p, p.default)} {_cc(p.unit)} */\n")
         o.append(f"    PM(PID_{c_ident(p.key)}, PARAM_T_{p.type.upper()}, {flags}, "
-                 f"{p.group}.{p.name}, {p.size}, 0x{raw_u32(p, p.min):08X}u, "
+                 f"{member[p.group]}.{p.name}, {p.size}, 0x{raw_u32(p, p.min):08X}u, "
                  f"0x{raw_u32(p, p.max):08X}u, 0x{raw_u32(p, p.default):08X}u, \"{p.key}\"),\n")
     o.append("};\n\n")
     o.append(r'''const param_meta_t *param_find(uint16_t id)

@@ -258,7 +258,7 @@ class SafetySupervisor:
     def reset(self) -> None:
         """Disconnect / new link: no latch, no warnings, no motion history."""
         self.latches: dict[str, SwTrip] = {}           # one latch per limit class (SWD-M3-01)
-        self.warnings: set[str] = set()
+        self.warnings: frozenset[str] = frozenset()      # SWR-17: swapped atomically (read by the GUI thread)
         self._prev: tuple[int, float, int] | None = None
         self._invalid_stop_sent = False
         self._last_restop_us: dict[str, int] = {}
@@ -414,7 +414,7 @@ class SafetySupervisor:
             was = code in self.warnings
             now = bool(en) and L.force_warning(f, trip, cfg.warn_pct, was)
             if now != was:
-                (self.warnings.add if now else self.warnings.discard)(code)
+                self.warnings = (self.warnings | {code}) if now else (self.warnings - {code})
                 level = cfg.warn_pct / 100.0 * trip
                 self._publish("safety.warning", SafetyWarning(code, now, None if math.isnan(f) else f, level,
                                                               f"{code}: F = {f:.1f} N (warning at {level:.1f} N)"

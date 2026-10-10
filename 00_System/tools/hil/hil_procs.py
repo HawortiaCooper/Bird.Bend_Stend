@@ -19,6 +19,7 @@ import random
 import statistics
 import time
 import traceback
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,7 @@ class ItemRec:
     t_start: str = ""
     t_end: str = ""
     operator: list[dict] = field(default_factory=list)
+    session: dict = field(default_factory=dict)   # FWR-13: session id / mode / board UID / image id at the item end
 
     @property
     def verdict(self) -> str:
@@ -61,7 +63,8 @@ class ItemRec:
     def to_json(self) -> dict:
         return {"id": self.id, "title": self.title, "req": self.req, "method": self.method, "verdict": self.verdict,
                 "checks": [c.to_dict() for c in self.checks], "notes": self.notes, "data": self.data,
-                "error": self.error, "t_start": self.t_start, "t_end": self.t_end, "operator": self.operator}
+                "error": self.error, "t_start": self.t_start, "t_end": self.t_end, "operator": self.operator,
+                "session": self.session}
 
 
 DEFAULT_CFG: dict[str, Any] = {
@@ -88,13 +91,29 @@ QUICK = {"n_estop_stim": 10, "n_estop_press": 3, "n_limit_stim": 10, "n_limit_re
          "rel_soak_s": 20.0}
 
 
+def new_session(mode: str, board_uid: str | None) -> dict:
+    """FWR-13: identity of one HG session. Results carry it; gates accept only results of the same session, mode and
+    board, produced with an image whose identity (GET_INFO build | dict hash) was verified in this session."""
+    return {"session_id": uuid.uuid4().hex, "mode": mode, "board_uid": (board_uid or "").upper() or None, "images": {}}
+
+
+def image_id(inf: dict) -> str:
+    """Image identity from GET_INFO: build string (date / -MEAS / -DWT, INFO.build) + parameter dictionary hash."""
+    return f"{inf.get('build', '')}|{inf.get('param_dict_hash', '')}"
+
+
 class Ctx:
-    def __init__(self, link: Link, op: Operator, cfg: dict, out: Path, seed: int = 1, image: str = "meas"):
+    def __init__(self, link: Link, op: Operator, cfg: dict, out: Path, seed: int = 1, image: str = "meas",
+                 session: dict | None = None):
         self.L, self.op, self.cfg, self.out = link, op, cfg, Path(out)
         self.rng = random.Random(seed)
         self.image = image
         self.item: ItemRec | None = None
         self.shared: dict[str, Any] = {}
+        self.session = session if session is not None else new_session("twin" if link.is_twin else "target",
+                                                                        cfg.get("board_uid"))
+        self.session.setdefault("images", {})
+        self.identified = False      # C-R3: True only after check_identity() passed for the device now on the port
         (self.out / "results").mkdir(parents=True, exist_ok=True)
 
     @property
@@ -116,6 +135,9 @@ class Ctx:
         assert it is not None
         it.t_end = time.strftime("%Y-%m-%d %H:%M:%S")
         it.operator = self.op.take_log(it.id)
+        it.session = {"session_id": self.session["session_id"], "mode": self.session["mode"],
+                      "board_uid": self.session.get("board_uid"), "image": self.image,
+                      "image_id": self.session["images"].get(self.image)}
         (self.out / "results" / f"{it.id}.json").write_text(json.dumps(it.to_json(), indent=1, default=str),
                                                             encoding="utf-8")
         return it
@@ -144,8 +166,24 @@ class Ctx:
         return self.check(c)
 
     def result_of(self, item_id: str) -> dict | None:
+        """Result of an item of THIS session only (FWR-13): same session id, mode and board UID, and produced with an
+        image verified in this session. Files of a twin dry run, an older session or another board are ignored."""
         f = self.out / "results" / f"{item_id}.json"
-        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+        if not f.exists():
+            return None
+        r = json.loads(f.read_text(encoding="utf-8"))
+        s = r.get("session") or {}
+        if (s.get("session_id") != self.session["session_id"] or s.get("mode") != self.session["mode"] or
+                (s.get("board_uid") or "") != (self.session.get("board_uid") or "")):
+            return None
+        if not s.get("image_id") or s["image_id"] not in self.session["images"].values():
+            return None
+        return r
+
+    def result_ok(self, item_id: str) -> bool:
+        """The item ran in this session without an error and without a FAIL / INCONCLUSIVE verdict."""
+        r = self.result_of(item_id)
+        return bool(r) and not r.get("error") and r.get("verdict") not in ("ERROR", hb.FAIL, hb.INCONCL)
 
     # ---------------------------------------------------------------- set-up helpers
     def jumpers(self, text: str) -> None:
@@ -362,14 +400,65 @@ def pwm_artifact_check(ctx: Ctx, pr: dict, tag: str) -> None:
 
 
 # ============================================================================================ image checks
+PROTO_EXPECTED = (1, 0, 1)                   # protocol major / minor, payload version (ICD v0.7.4)
+
+
+IDENTITY_ITEMS = ("S-00", "S-ID", "IMG-MEAS", "IMG-DWT", "IMG-MEAS2", "IMG-REL")
+
+
+def image_name_of(inf: dict, default: str = "unknown") -> str:
+    """Image kind from GET_INFO on the board (O-1): the build suffix (-DWT / -MEAS, CR-02) AND the feature bit
+    FEAT_HW_MEAS must agree - a measurement suffix needs HW_MEAS, a plain build must not have it. Anything else is
+    'unknown' (an inconsistent build is refused, never mapped to the requested image)."""
+    b = str(inf.get("build", ""))
+    hw = "HW_MEAS" in inf.get("features", [])
+    if b.endswith("-DWT"):
+        return "meas_dwt" if hw else "unknown"
+    if b.endswith("-MEAS"):
+        return "meas" if hw else "unknown"
+    return "unknown" if hw else "release"
+
+
+def check_identity(ctx: Ctx, inf: dict | None = None) -> dict:
+    """FWR-15: board and image identity, enforced (BenchRefused) - parameter dictionary hash, protocol / payload
+    version and, on the board, the PO-named UID (--board-uid, required for every port session). Records the image
+    identity of this session (FWR-13). Runs at every session start (also with --only / --from) and after each
+    re-flash."""
+    inf = inf if inf is not None else ctx.L.info()
+    ctx.data("info", inf)
+    proto = (inf["proto_major"], inf["proto_minor"], inf["payload_version"])
+    ctx.check(hb.check_eq("param dict hash", inf["param_dict_hash"], DICT_HASH, "params.yaml via gen_params (R-HIL-01)"))
+    ctx.check(hb.check_eq("protocol 1.0 / payload 1", proto, PROTO_EXPECTED))
+    if inf["param_dict_hash"] != DICT_HASH or proto != PROTO_EXPECTED:
+        raise BenchRefused(f"identity: dict hash {inf['param_dict_hash']} / protocol {proto} != {DICT_HASH} / "
+                           f"{PROTO_EXPECTED} - wrong device or image, session stopped")
+    if not ctx.twin:
+        want = ctx.session.get("board_uid")
+        if not want:
+            raise BenchRefused("identity: no PO-named board UID (--board-uid) - session stopped")
+        if str(inf["uid"]).upper() != want.upper():
+            raise BenchRefused(f"board UID {inf['uid']} != PO-named {want} - wrong board, session stopped")
+        ctx.check(hb.check_eq("board UID (PO-named)", str(inf["uid"]).upper(), want.upper()))
+        kind = image_name_of(inf)
+        if kind == "unknown":
+            raise BenchRefused(f"image identity: build {inf.get('build')!r} with features {inf.get('features')} is "
+                               "inconsistent (suffix vs FEAT_HW_MEAS) - session stopped (O-1)")
+        ctx.image = kind
+    ctx.session["images"][ctx.image] = image_id(inf)
+    ctx.check(hb.info("image identity", f"{ctx.image}: {image_id(inf)}"))
+    ctx.identified = True
+    return inf
+
+
 def verify_image(ctx: Ctx, image: str) -> None:
     """Session step: the image the PO flashed is the requested one (GET_INFO, DIAG_MEAS INFO)."""
     L = ctx.L
     inf = L.info()
-    ctx.data("info", inf)
     feats = inf["features"]
     ctx.check(hb.info("build", inf["build"]))
-    ctx.check(hb.check_eq("param dict hash", inf["param_dict_hash"], DICT_HASH, "params.yaml via gen_params (R-HIL-01)"))
+    check_identity(ctx, inf)
+    if not ctx.twin and ctx.image != image:
+        raise BenchRefused(f"image on the board is {ctx.image} ({inf['build']}), requested {image} - not flashed?")
     if image == "release":
         ctx.check(hb.check_true("FEAT_HW_MEAS = 0", "HW_MEAS" not in feats, "release: no HW_MEAS", feats))
         r = L.meas.raw("INFO")
@@ -769,9 +858,10 @@ def hg32(ctx: Ctx, repeat: bool = False) -> None:
 def hg06(ctx: Ctx, label: str = "") -> None:
     L, M, op = ctx.L, ctx.L.meas, ctx.op
     stop_motion(ctx)
+    L.ok("DISABLE")                              # FWR-09: always - NOT_ENABLED after boot keeps ENA holding (D-13)
     st = L.status()
-    if st["motion_state"] != "NOT_ENABLED":
-        L.ok("DISABLE")
+    if "ENA_DISABLED" not in st["io"]:
+        raise BenchRefused("HG-06: ENA not at the disabled level after DISABLE - no STATIC_LEVEL on PUL (FWR-09)")
     buf = ctx.cfg["buffer_fitted"] or label == "buffer"
     lo, hi = (10.0, 13.0) if buf else (6.0, 1e9)
     for pin in ("PUL", "DIR", "ENA"):
@@ -1847,17 +1937,48 @@ def sck_pulses(ctx: Ctx) -> None:
 
 
 # ---------------------------------------------------------------------------------------- HG-18
-DWT_BUDGETS = {0: 1000.0, 1: 2.0, 2: 1.0, 3: 1.0, 4: 1.0, 11: 1.0, 12: 1.0, 13: 1.0, 16: 1.0, 17: 1.0, 18: 1.0}
+# HG-18 pass criteria (D-51: the verdict is the DWT measurement; D-52: level-1 budget). Every handler section is
+# judged on its total = max - stamp overhead + EXC_CYCLES (exception entry / exit, not seen by the DWT section):
+#   1  step ISR <= 2 µs (NFR-007); step-generation CPU <= 15 % at 50 kHz
+#   2  E-stop reaction EXTI15_10 (level 0) <= 1 µs (NFR-007 "E-stop/STOP ISR", D-52)
+#   3/4, 5, 23  level-1 handlers (START / END, PAUSE, deferred E-stop callback EXTI3) <= 2.5 µs each (D-52 design budget)
+#   1 + largest level-1 handler <= 5 µs (D-52 derived check, HX711 timestamp latency FW-TIM-001)
+#   11-13, 16-18  CRIT_HALT / CRIT_AFE / CRIT_MOTION and the stop-primitive PRIMASK windows <= 1 µs (NFR-007)
+DWT_BUDGETS = {0: 1000.0, 1: 2.0, 2: 1.0, 3: 2.5, 4: 2.5, 5: 2.5, 23: 2.5, 11: 1.0, 12: 1.0, 13: 1.0, 16: 1.0,
+               17: 1.0, 18: 1.0}
+DWT_LEVEL1 = (3, 4, 5, 23)             # level-1 handlers (D-52)
+STEP_PLUS_L1_US = 5.0                  # D-52: step ISR + largest level-1 handler (FW-TIM-001)
+DWT_ISR = (1, 2, 3, 4, 5, 23)          # handler sections: + exception entry / exit (EXC_CYCLES) in the verdict
+EXC_CYCLES = 27.0                      # entry 12 + vector 5 + exit 10 (isr_wcet.py ENTRY / VEC / EXIT)
+DWT_N = 24                             # sections 0…23 (23 = EXTI3 deferred E-stop callback, FW v0.8)
+# isr_wcet.py v0.8 static figures (µs, total): (conservative bound, nominal) - informative, calibrated here (OI-FW-46)
+WCET_V08 = {1: (3.52, 2.29), 2: (1.33, 1.06), 3: (2.90, 2.09), 4: (2.90, 2.09), 5: (1.62, 1.08), 23: (1.88, 1.26)}
 DWT_NAMES = {0: "main-loop pass", 1: "TIM2 step ISR (F2)", 2: "E-stop handler EXTI15_10 (F2)", 3: "START limit EXTI0",
              4: "END limit EXTI1", 5: "PAUSE EXTI9_5", 6: "EXTI4 HX711", 7: "TIM5 1 kHz tick", 8: "USART2 error",
              9: "DMA1 S5 RX", 10: "DMA1 S6 TX", 11: "CRIT_HALT (PRIMASK)", 12: "CRIT_AFE (BASEPRI 0x20)",
              13: "CRIT_MOTION (BASEPRI 0x20)", 14: "CRIT_DATA (BASEPRI 0x30)", 15: "CRIT_TICK (BASEPRI 0x40)",
              16: "hal_step_stop_now (PRIMASK)", 17: "hal_step_abort (PRIMASK)", 18: "hal_step_set_period_now (PRIMASK)",
-             19: "SCK-high", 20: "HX711 shift-in", 21: "cal: empty stamp pair", 22: "cal: record call"}
+             19: "SCK-high", 20: "HX711 shift-in", 21: "cal: empty stamp pair", 22: "cal: record call",
+             23: "EXTI3 deferred E-stop callback (level 1)"}
+
+
+def step_plus_level1(secs: dict[int, hb.DwtSection], ov: tuple[float, float]) -> hb.Check:
+    """D-52 derived check (FW-TIM-001): total of the step ISR (section 1) + the largest level-1 handler total
+    (sections 3, 4, 5, 23) <= 5 µs; u = the two stamp-overhead uncertainties."""
+    name = "step ISR + largest level-1 handler (D-52, FW-TIM-001)"
+    have = [s for s in (1,) + DWT_LEVEL1 if secs.get(s) is not None and secs[s].valid and secs[s].count]
+    if 1 not in have or not any(s in have for s in DWT_LEVEL1):
+        return hb.not_measured(name, f"≤ {STEP_PLUS_L1_US} µs", "section 1 or every level-1 section not executed")
+
+    def tot(s: int) -> float:
+        return hb.cycles_us(max(secs[s].max_cycles - ov[0], 0.0) + EXC_CYCLES)
+    l1 = max((s for s in DWT_LEVEL1 if s in have), key=tot)
+    return hb.check_le(name, [tot(1) + tot(l1)], STEP_PLUS_L1_US, 2 * hb.cycles_us(ov[1]), "µs",
+                       note=f"section 1 {tot(1):.3f} µs + section {l1} {tot(l1):.3f} µs (totals incl. entry / exit)")
 
 
 def read_dwt(ctx: Ctx) -> dict[int, hb.DwtSection]:
-    return {s: hb.DwtSection.from_words(s, ctx.L.meas.dwt(s)) for s in range(23)}
+    return {s: hb.DwtSection.from_words(s, ctx.L.meas.dwt(s)) for s in range(DWT_N)}
 
 
 def merge_dwt(a: dict[int, hb.DwtSection], b: dict[int, hb.DwtSection]) -> dict[int, hb.DwtSection]:
@@ -1878,7 +1999,7 @@ def merge_dwt(a: dict[int, hb.DwtSection], b: dict[int, hb.DwtSection]) -> dict[
 def hg18(ctx: Ctx) -> None:
     L, M, op = ctx.L, ctx.L.meas, ctx.op
     dwt = "DWT" in ctx.shared.get("meas_info", {}).get("variant", [])
-    for s in range(23):
+    for s in range(DWT_N):
         M.dwt(s, reset=True)
     # part A: 50 kHz stepping (PSU off, OI-E-HG-03) + 80 Hz stream + 20 cmd/s
     with psu_off_pulses(ctx, spm_val=2500.0, v_unhomed=20000, psu_back_on=True, timing=EXPLICIT_50K):
@@ -1896,8 +2017,8 @@ def hg18(ctx: Ctx) -> None:
         part_a = read_dwt(ctx)
         jog_stop(ctx)
     ctx.data("loop_max_us_50k", st_a["loop_max_us"])
-    # part B: safety handlers exercised (real E-stop presses moving / idle, limits, PAUSE), PSU on
-    for s in range(23):
+    # part B: safety handlers exercised (real E-stop presses moving / idle -> sections 2 and 23, limits 3/4, PAUSE)
+    for s in range(DWT_N):
         M.dwt(s, reset=True)
     for i in range(5):
         estop_trial(ctx, True, i)
@@ -1937,24 +2058,38 @@ def hg18(ctx: Ctx) -> None:
     if dwt:
         ov = hb.dwt_overhead(secs[21])
         ctx.check(hb.info("stamp-pair overhead", f"{ov[0]:.1f} ± {ov[1]:.1f} cycles", note="section 21 / INFO w6"))
+        cal = {}
         for s, b in DWT_BUDGETS.items():
-            ctx.check(hb.check_dwt(f"{DWT_NAMES[s]} (section {s})", secs[s], b, ov,
-                                   "F2 static bound 1.15 µs all-branch" if s == 2 else
-                                   "F2 static bound 2.4 µs" if s == 1 else ""))
+            w = WCET_V08.get(s)
+            note = (f"isr_wcet.py v0.8: conservative {w[0]} µs, nominal {w[1]} µs (D-51: informative)" if w else "")
+            if s in DWT_LEVEL1:
+                note += ("; " if note else "") + "D-52 level-1 design budget"
+            ctx.check(hb.check_dwt(f"{DWT_NAMES[s]} (section {s})", secs[s], b, ov, note,
+                                   exc_cycles=EXC_CYCLES if s in DWT_ISR else 0.0))
+            if w and secs[s].count:
+                meas = hb.cycles_us(max(secs[s].max_cycles - ov[0], 0.0) + EXC_CYCLES)
+                cal[s] = {"measured_total_us": round(meas, 3), "nominal_us": w[1], "conservative_us": w[0],
+                          "measured_over_nominal": round(meas / w[1], 3)}
+        ctx.data("isr_wcet_calibration", cal)       # OI-FW-46: bus constants of isr_wcet.py vs the measurement
+        ctx.check(hb.info("isr_wcet.py calibration (OI-FW-46)", cal, note="measured total / nominal static figure"))
+        ctx.check(step_plus_level1(secs, ov))
         sa = part_a[1]
         if sa.count:
-            cpu = hb.cycles_us(sa.mean_cycles) * 50_000 / 1e6 * 100
+            cpu = hb.cycles_us(sa.mean_cycles + EXC_CYCLES) * 50_000 / 1e6 * 100
             ctx.check(hb.check_le("step CPU at 50 kHz", [cpu], 15.0, hb.cycles_us(ov[1]) * 50_000 / 1e6 * 100, "%",
                                   note="mean step-ISR cycles × 50 kHz / 180 MHz"))
-        for s in (5, 6, 7, 8, 9, 10, 14, 15, 19, 20):
+        for s in (6, 7, 8, 9, 10, 14, 15, 19, 20):
             x = secs[s]
             ctx.check(hb.info(f"{DWT_NAMES[s]} (section {s})", f"max {hb.cycles_us(x.max_cycles):.2f} µs, n {x.count}"))
-        ctx.check(hb.info("F2 E-stop handler coverage", "moving (jog 30 mm/s), idle-enabled; SAVE-time presses in HG-04",
-                          note="all-branch static bound 1.15 µs is confirmed only for the branches exercised"))
+        ctx.check(hb.info("E-stop handler / EXTI3 callback coverage",
+                          "moving (jog 30 mm/s), idle-enabled; SAVE-time presses in HG-04",
+                          note="a DWT maximum covers the paths exercised only; the DEF-M2-01 pending-update path "
+                               "is reached by chance (static bound decides that branch)"))
     else:
         why = "DWT not modelled in the twin (w0 = 0)" if ctx.twin else "image is not HW_MEAS_DWT"
         for s, b in DWT_BUDGETS.items():
             ctx.check(hb.not_measured(f"{DWT_NAMES[s]} (section {s})", f"≤ {b} µs", why))
+        ctx.check(hb.not_measured("step ISR + largest level-1 handler (D-52)", f"≤ {STEP_PLUS_L1_US} µs", why))
         ctx.check(hb.not_measured("step CPU at 50 kHz", "≤ 15 %", why))
     loop = max(st_a["loop_max_us"], st_b["loop_max_us"])
     ctx.check(hb.check_le("loop_max_us (FW self-report, NFR-006)", [loop], 1000.0, 1.0, "µs",
@@ -2442,9 +2577,13 @@ def run_item(ctx: Ctx, item_id: str, title: str, fn: Callable[[Ctx], None], req:
     except Exception as e:  # noqa: BLE001
         it.error = f"{type(e).__name__}: {e}"
         it.notes.append(traceback.format_exc(limit=6))
-        try:
-            ctx.L.cmd("HALT", timeout_ms=500)            # any error inside a procedure: holding stop first
-            ctx.L.cmd("HALT_CLEAR", timeout_ms=500)
-        except Exception:  # noqa: BLE001
-            pass
+        if item_id in IDENTITY_ITEMS or not ctx.identified:
+            # C-R3: the device on the port is not (or no longer) identified - send nothing, the session stops
+            it.notes.append("no HALT / HALT_CLEAR sent: device not identified (C-R3)")
+        else:
+            try:
+                ctx.L.cmd("HALT", timeout_ms=500)        # any error inside a procedure: holding stop first
+                ctx.L.cmd("HALT_CLEAR", timeout_ms=500)
+            except Exception:  # noqa: BLE001
+                pass
     return ctx.end()

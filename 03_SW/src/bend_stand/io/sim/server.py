@@ -98,6 +98,11 @@ class SimServer:
         self._threads: list[threading.Thread] = []
 
     def start(self) -> None:
+        # OBS-P3-01: 1 ms timer resolution for the out-of-process simulator (otherwise Windows waits 15.6 ms per
+        # ``Event.wait(0.001)`` and DATA leaves in bursts); owned only if this server switched it on
+        from bend_stand.core import timing  # noqa: PLC0415
+
+        self._timing_owned = not timing.is_active() and timing.init()
         self.board.start()
         for fn, name in ((self._accept_data, "sim-data"), (self._accept_ctl, "sim-ctl")):
             t = threading.Thread(target=fn, name=name, daemon=True)
@@ -115,6 +120,11 @@ class SimServer:
         self.board.stop()
         for t in self._threads:
             t.join(1.0)
+        if getattr(self, "_timing_owned", False):
+            from bend_stand.core import timing  # noqa: PLC0415
+
+            timing.shutdown()
+            self._timing_owned = False
 
     def _accept_data(self) -> None:
         while not self._stop.is_set():

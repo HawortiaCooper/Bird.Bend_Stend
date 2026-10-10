@@ -284,7 +284,9 @@ static vt_t next_event(void)
         if (T.next_sample == VT_NEVER) T.next_sample = T.now + sample_period();
         t = min_t(t, T.next_sample);
     }
-    if (T.step_running) t = min_t(t, T.step_high ? T.step_end : T.step_rise);
+    tw_step_stall_sync();                              /* inject step_stall: freeze / resume at T.now */
+    if (T.sstall_frozen) t = min_t(t, T.sstall_until);   /* VT_NEVER: until a halt */
+    else if (T.step_running) t = min_t(t, T.step_high ? T.step_end : T.step_rise);
     if (T.wdg_armed) t = min_t(t, T.wdg_deadline);
     if (T.storm_until > T.now) t = min_t(t, T.storm_until);
     if (T.main_busy_until > T.now) t = min_t(t, T.main_busy_until);
@@ -296,7 +298,8 @@ static void dispatch_now(void)
 {
     if (T.wdg_armed && T.wdg_deadline <= T.now) tw_reset("iwdg");
     while (rxq_count && rxq[rxq_head].t <= T.now) { rx_byte(rxq[rxq_head].b); rxq_head = (rxq_head + 1u) % (1u << 16); rxq_count--; }
-    if (T.step_running && (T.step_high ? T.step_end : T.step_rise) <= T.now) {
+    tw_step_stall_sync();
+    if (T.step_running && !T.sstall_frozen && (T.step_high ? T.step_end : T.step_rise) <= T.now) {
         if (T.in_stall) { /* timer HW keeps pulsing; the ISR would be late: not modelled (idle-only flash ops) */ }
         twin_step_event();
     }
@@ -443,6 +446,10 @@ static void cmd_world(char *args)
         }
     }
     else if (!strcmp(key, "stepfault")) T.step_fault_next = true;
+    else if (!strcmp(key, "stepstall")) {               /* "W stepstall <duration_ns>" (ICD v0.7.5; 0 = until the move ends) */
+        unsigned long long u;
+        if (sscanf(a, "%llu", &u) == 1) tw_step_stall_inject((vt_t)u);
+    }
     else if (!strcmp(key, "fcut")) {
         char w[16]; long n;
         if (sscanf(a, "%15s %ld", w, &n) == 2) { if (!strcmp(w, "word")) T.cut_after_word = n; else if (!strcmp(w, "erase")) T.cut_in_erase = n; }
@@ -485,6 +492,8 @@ static void cmd_query(void)
     tw_out("Y world_steps %lld", (long long)T.wsteps);
     tw_out("Y dir_level %d", T.dir_level);
     tw_out("Y step_running %d", T.step_running);
+    tw_out("Y step_stalled %d", T.sstall_frozen);
+    tw_out("Y step_stall_armed %d", T.sstall_armed);
     tw_out("Y pos_uncertain %d", T.step_uncertain);
     tw_out("Y stop_gen %lu", (unsigned long)T.stop_gen);
     tw_out("Y inputs %u", hal_inputs_raw());

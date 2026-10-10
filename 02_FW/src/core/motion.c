@@ -41,6 +41,8 @@
 
 #define F_TICK_NOMINAL 90000000u   /* provisional for the first hal_step_init() (it returns f) */
 #define UNEXPLAINED_STOP_TICKS 3u  /* timer stopped short of the end with no recorded cause */
+#define RAMP_SYNC_SPIN 2000u       /* wait_step_isr() bound (> one 10 us step period at the 100 kHz cap;
+                                      races are lost only at short periods), ends when the timer stops */
 
 typedef struct {
     /* configuration derived from the parameters (idle only) */
@@ -61,6 +63,7 @@ typedef struct {
     bool     ctrl;                 /* ... as a controlled stop */
     uint8_t  stop_md;
     bool     last_armed;           /* the running period is the last one (OPM armed) */
+    uint32_t gate_gen;             /* hal_step_stop_gen() before the gate check (FWR-01) */
     uint8_t  unexplained;
     ramp_t   ramp;
     uint32_t v_um_s, a_um_s2;      /* current segment speed / accel (jog refresh compares) */
@@ -180,6 +183,18 @@ void motion_init(void)
 }
 
 bool motion_active(void) { return M.active; }
+bool motion_stopping(void) { return M.active && M.stopping; }
+
+/* FWR-01 (SAF-FW-002 / SAF-FW-005 a): the stop generation is captured BEFORE the decision to start
+ * (cmd_execute(): before the command check; motion_tick(): right after reading the timer state and
+ * before the segment-end decision, FWR-20 - a planned end or halt seen as "stopped" is accounted; a halt
+ * whose record is not folded yet is deferred by safety_edges_pending(), FWR-18; a later halt bumps the
+ * generation and hw_start() refuses the next segment, FWR-17).
+ * Every core-initiated halt in a tick puts the motion into "stopping", so no segment of that tick is
+ * started after it. A fixed reaction (E-stop / limit / load limit) after that
+ * point bumps the generation even while the timer is idle, and hw_start() then stops the timer it
+ * has just armed - before the first PUL edge. */
+void motion_gate_capture(void) { M.gate_gen = hal_step_stop_gen(); }
 int8_t motion_dir(void) { return (M.active && M.running) ? M.dir : 0; }
 
 int32_t motion_unhomed_origin_um(void) { return um_of(M.unhomed_origin); }
@@ -267,10 +282,9 @@ static uint32_t acc_or_max(uint32_t a) { return (a == 0u) ? g_fw.p.motion.a_max_
 
 static void hw_start(void)
 {
-    uint32_t gen = hal_step_stop_gen();
+    uint32_t gen = M.gate_gen;                         /* captured before the gate check (FWR-01) */
     uint32_t c1, c2 = 0u;
     bool mul = M.kind == (uint8_t)MS_MOVE_UNTIL_LOAD;
-    bool started = false;
     int dir_hw = g_fw.p.motion.dir_invert ? 2 * M.dir : M.dir;
     hal_step_set_dir(dir_hw);                          /* only while stopped (FW-MOT-001) */
     c1 = ramp_next(&M.ramp);
@@ -288,9 +302,12 @@ static void hw_start(void)
         M.isr_count = pos_now();
         M.last_armed = false;
         M.running = true;
-        started = true;
-        hal_step_start(c1);                            /* first edge >= dir_setup after this call */
-        if (c2 == 0u) {
+        hal_step_start(c1);                            /* atomic arm; first edge >= dir_setup after it */
+        if (hal_step_stop_gen() != gen) {
+            /* start-then-recheck (FW_design §5.3): a fixed reaction since the gate check; CNT is
+             * still far below the first compare, so this CLEAN halt emits no edge (FWR-01/02) */
+            (void)hal_step_stop_now();
+        } else if (c2 == 0u) {
             hal_step_arm_last();
             M.last_armed = true;
         } else {
@@ -298,9 +315,6 @@ static void hw_start(void)
         }
     }
     CRIT_END();
-    if (started && hal_step_stop_gen() != gen) {
-        (void)hal_step_stop_now();                     /* start-then-recheck: a fixed reaction raced it */
-    }
 }
 
 /* ---- ramp edits (NFR-007): computed on a copy outside CRIT_MOTION (double math, VSQRT), committed
@@ -317,14 +331,29 @@ typedef struct {
     uint32_t total;
     float    floor_c;
     uint32_t c1, c2;             /* RE_STOP_STRETCH results */
+    ramp_speed_k_t k;            /* position-independent constants, computed once (FWR-10) */
+    float    cd;
 } redit_t;
+
+/* FWR-10: the soft-double constants (ramp_c_of: sqrt + div) do not depend on the ramp position;
+ * they are computed once before the commit attempts, so neither an attempt nor the in-section
+ * fallback evaluates them (f and chw are fixed for the move; the step ISR does not write them) */
+static void redit_prep(redit_t *e)
+{
+    if (e->kind == RE_JOG && e->set_speed) {
+        ramp_speed_k(&M.ramp, e->v, e->a, e->d, &e->k);
+    }
+    if (e->kind == RE_STOP_ISR || e->kind == RE_STOP_STRETCH) {
+        e->cd = ramp_c_of(M.ramp.f, e->a);
+    }
+}
 
 static void redit_apply(ramp_t *r, redit_t *e)
 {
     switch (e->kind) {
     case RE_JOG:
         if (e->set_speed) {
-            ramp_set_speed(r, e->v, e->a, e->d);             /* on the fly (FW-MOT-005) */
+            ramp_set_speed_k(r, &e->k, e->d);                /* on the fly (FW-MOT-005) */
         }
         ramp_set_total(r, e->total);
         break;
@@ -332,13 +361,13 @@ static void redit_apply(ramp_t *r, redit_t *e)
         ramp_set_total(r, e->total);
         break;
     case RE_STOP_ISR:
-        (void)ramp_stop(r, e->a, 1u, e->floor_c);             /* next ISR preloads c_dec1 */
+        (void)ramp_stop_k(r, e->a, e->cd, 1u, e->floor_c);    /* next ISR preloads c_dec1 */
         break;
     default:
         /* stretch (OI-ICD-07): the running and the preloaded period are regenerated, extend-only */
         r->gen = (r->gen >= 2u) ? r->gen - 2u : 0u;
         r->rem += 2u;
-        (void)ramp_stop(r, e->a, 0u, e->floor_c);
+        (void)ramp_stop_k(r, e->a, e->cd, 0u, e->floor_c);
         e->c1 = ramp_next(r);
         e->c2 = (r->rem != 0u) ? ramp_next(r) : 0u;
         break;
@@ -358,14 +387,28 @@ static void redit_hw(const redit_t *e)       /* inside CRIT_MOTION */
     }
 }
 
+/* wait (bounded) until the step ISR has advanced the ramp past generation g: the next copy then
+ * starts right after an update and has a whole step period for the edit (FWR-10) */
+static void wait_step_isr(uint32_t g)
+{
+    const volatile uint32_t *gen = &M.ramp.gen;
+    uint32_t n;
+    for (n = 0u; n < RAMP_SYNC_SPIN && *gen == g && hal_step_running(); n++) {
+    }
+}
+
 static void ramp_commit(redit_t *e)
 {
     uint8_t k;
     bool done = false;
+    uint32_t g, g_lost = 0u;
+    redit_prep(e);
     for (k = 0u; k < 4u && !done; k++) {
         ramp_t c;
-        uint32_t g;
         bool la;
+        if (k != 0u) {
+            wait_step_isr(g_lost);                    /* lost a race: start right after the next ISR */
+        }
         CRIT_BEGIN(HAL_CRIT_MOTION);
         c = M.ramp;
         la = M.last_armed;
@@ -380,10 +423,12 @@ static void ramp_commit(redit_t *e)
             M.ramp = c;
             redit_hw(e);
             done = true;
+        } else {
+            g_lost = M.ramp.gen;
         }
         CRIT_END();
     }
-    if (!done) {
+    if (!done) {                                       /* rare: position-dependent part only */
         CRIT_BEGIN(HAL_CRIT_MOTION);
         if (!(e->kind == RE_STOP_STRETCH && M.last_armed)) {
             redit_apply(&M.ramp, e);
@@ -580,14 +625,16 @@ void motion_jog(int32_t v_um_s, uint32_t a_um_s2, int32_t bound_um, uint32_t now
             M.rev_v = v_um_s;
             M.rev_a = a;
             M.rev_bound = bound_um;
+            if (M.parked) {
+                /* FWR-07: a parked start emitted no pulse: re-plan it in the new direction (it
+                 * parks again while the sniffed-stop hold is active); the motion continues */
+                M.active = false;
+                jog_begin(v_um_s, a, bound_um);
+                return;
+            }
             if (!M.reversing) {
                 M.reversing = true;
-                if (M.parked) {
-                    M.parked = false;
-                    M.running = false;
-                } else {
-                    ctrl_stop_apply(sps(a));
-                }
+                ctrl_stop_apply(sps(a));
             }
             return;
         }
@@ -768,6 +815,7 @@ bool motion_home_edge(uint8_t lim_id, int32_t steps)
 }
 
 /* ------------------------------------------------------------------ step ISR (level 2) */
+/* NFR-007 (FW_design §9.8 v0.8): the ramp body is inlined here (ramp_next_inl, no call level) */
 step_next_t step_isr(void)
 {
     step_next_t n;
@@ -790,7 +838,7 @@ step_next_t step_isr(void)
         M.last_armed = true;
         return n;
     }
-    n.period = ramp_next(&M.ramp);
+    n.period = ramp_next_inl(&M.ramp);
     return n;
 }
 
@@ -946,10 +994,21 @@ void motion_tick(uint32_t now_ms)
         }
     }
     mul_fold();                                        /* FW-MOT-006 hit record (sample ISR) */
-    if (M.active && M.running && !hal_step_running()) {
-        segment_ended(now_ms);
-    } else {
-        M.unexplained = 0u;
+    {
+        /* FWR-20: read the timer state FIRST, then capture the stop generation, then look for pending
+         * records. A planned last-period end or a halt before the capture is accounted (a segment end
+         * seen here can never be killed by its own bump); a halt with a record between the take and
+         * the capture leaves the record pending -> FWR-18 deferral; a halt after the capture makes
+         * hw_start() refuse the next segment (FWR-01 / FWR-17) and its record folds next tick. */
+        bool stopped = M.active && M.running && !hal_step_running();
+        motion_gate_capture();
+        if (stopped && safety_edges_pending()) {
+            /* FWR-18: decide the segment end - homing edge, limit stop, restart - at the next tick */
+        } else if (stopped) {
+            segment_ended(now_ms);
+        } else {
+            M.unexplained = 0u;
+        }
     }
     if (g_fw.motion_state == (uint8_t)MS_ENABLING && motion_enabling_left_ms(now_ms) == 0u) {
         g_fw.motion_state = (uint8_t)MS_IDLE;          /* FW-MOT-008: no PUL/DIR edge before */

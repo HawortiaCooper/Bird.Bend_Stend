@@ -58,7 +58,9 @@ TOPICS: tuple[str, ...] = (
     "motion.dropped", "tare.state", "cal.travel.state", "cal.load.state", "cal.travel.restore",
     "channels.changed", "seq.status", "seq.step_result", "seq.window", "rec.state", "rec.failure",
     "sample.taken", "marks.edited", "resume.ignored", "hotkey.state", "hotkey.test", "report.ready", "log",
+    "device.board_changed",                                       # B6-33 (6), SWR-19: payload = new board UID
 )
+TOPICS_PENDING_GUI: tuple[str, ...] = ()                         # topics published before the GUI maps them
 
 
 @runtime_checkable
@@ -150,6 +152,8 @@ class MarksAPI(Protocol):
 
 @runtime_checkable
 class SessionAPI(Protocol):
+    load_issues: list[Issue]                                 # B6-33 (2): issues of the last load (start / File ▸ Open)
+
     def get(self) -> SessionSettings: ...
     def set(self, settings: SessionSettings) -> list[Issue]: ...
     def load(self, path: str) -> SessionSettings: ...
@@ -220,6 +224,7 @@ class ReportAPI(Protocol):
 
     def build_async(self, rec_dir: str, cal: Any = None, tare: float | None = None,
                     bend3p: Any = None) -> Future[ReportPaths]: ...
+    def root(self) -> str: ...                                   # GRQ-B-31 b (§15.5f B6-31)
     def list_recordings(self, root: str | None = None) -> list[RecordingInfo]: ...
     def load_result(self, rec_dir: str) -> ReportResult: ...
 

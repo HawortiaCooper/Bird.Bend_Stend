@@ -18,13 +18,14 @@ from bend_stand.io.transport import LINK_BYTES_PER_S, VirtualTransportPair
 class SimEndpoint:
     def __init__(self, clock: Clock, scenario: str | SimScenario | None = None, *,
                  bytes_per_s: float | None = LINK_BYTES_PER_S, latency_ns: int = 0,
-                 advance: Callable[[float], None] | None = None, nvm_path: str | None = None) -> None:
+                 advance: Callable[[float], None] | None = None, nvm_path: str | None = None,
+                 log_len: int = 200_000) -> None:
         self.clock = clock
         sc = (SimScenario.load(scenario) if isinstance(scenario, str) and scenario
               else scenario if isinstance(scenario, SimScenario) else default_scenario())
         self.scenario = sc
         self.pair = VirtualTransportPair(clock, bytes_per_s=bytes_per_s, latency_ns=latency_ns)
-        self.board = SimBoard(clock, self.pair.board, config=SimConfig(seed=sc.seed, nvm_path=nvm_path),
+        self.board = SimBoard(clock, self.pair.board, config=SimConfig(seed=sc.seed, nvm_path=nvm_path, log_len=log_len),
                               afe=Hx711Model(seed=sc.seed))
         self.control = SimControl(self.board, advance=advance)
         sc.apply(self.board, self.control)

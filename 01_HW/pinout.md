@@ -3,7 +3,7 @@
 | Item | Value |
 |---|---|
 | Doc | `01_HW/pinout.md` |
-| Version | **0.5** — M2 close-out, CR-03 (D-41 / D-42 / D-43): **no power-removal contactor** — the red E-stop is an MCU/FW stop (NC → PA10) plus the **hardwired ENA cut** (extra NO contact → ENA opto, wiring §7); PA7 DRV_PWR **optional** (48 V presence sense, `drv.pwr_sense_enable` default 0, K1_WELDED only with `drv.k1_check_enable`); PB9 TRIP retired (no hold path); PA4 ENA reaches ENA+ through a Schottky OR diode (no contention with the D-42 path); J-STIM series resistor **220 Ω** (REQ-A-M2-07). · 0.4 — M2: CR-01 (D-36) applied — PC7 STOP/BREAK input removed (PC7 = measurement-header input J-PUL-A, R-01 closed); measurement header MH for CR-02 / D-40 c (§1.5, REQ-A-M2-01/04); PC8/PC9 debug markers retired; MH pins digital input without pull in every build (never analog). · 0.3 — final P1: ALM polled instead of EXTI (OBS-P1-10). v0.2: aligned to SRS v0.3 / ICD v0.3 / D-29 / D-30 (DRV_PWR required, START-only homing, ALM scope, TX DMA one frame per transfer, CRIT_DATA). v0.1: The pin map follows **R5 §6.1** (checked by R5 against the F446 datasheet DocID027107 Rev 6, Table 10) and is **accepted by the PO (D-28, 2026-10-03)**: DOUT → PB4, RATE → PB5, END → PC1, STOP → PC7 (NC), PAUSE → PB6 (NO), DRV_PWR → PA7, TRIP → PB9 (provisioned, unused in release 1), PA6 reserved. |
+| Version | **0.6** — `EXTI3_IRQn` level 1 = deferred E-stop core callback (FW v0.8, §4). · 0.5 — M2 close-out, CR-03 (D-41 / D-42 / D-43): **no power-removal contactor** — the red E-stop is an MCU/FW stop (NC → PA10) plus the **hardwired ENA cut** (extra NO contact → ENA opto, wiring §7); PA7 DRV_PWR **optional** (48 V presence sense, `drv.pwr_sense_enable` default 0, K1_WELDED only with `drv.k1_check_enable`); PB9 TRIP retired (no hold path); PA4 ENA reaches ENA+ through a Schottky OR diode (no contention with the D-42 path); J-STIM series resistor **220 Ω** (REQ-A-M2-07). · 0.4 — M2: CR-01 (D-36) applied — PC7 STOP/BREAK input removed (PC7 = measurement-header input J-PUL-A, R-01 closed); measurement header MH for CR-02 / D-40 c (§1.5, REQ-A-M2-01/04); PC8/PC9 debug markers retired; MH pins digital input without pull in every build (never analog). · 0.3 — final P1: ALM polled instead of EXTI (OBS-P1-10). v0.2: aligned to SRS v0.3 / ICD v0.3 / D-29 / D-30 (DRV_PWR required, START-only homing, ALM scope, TX DMA one frame per transfer, CRIT_DATA). v0.1: The pin map follows **R5 §6.1** (checked by R5 against the F446 datasheet DocID027107 Rev 6, Table 10) and is **accepted by the PO (D-28, 2026-10-03)**: DOUT → PB4, RATE → PB5, END → PC1, STOP → PC7 (NC), PAUSE → PB6 (NO), DRV_PWR → PA7, TRIP → PB9 (provisioned, unused in release 1), PA6 reserved. |
 | Date | 2026-10-04 |
 | Owner | Implementer A (FW) |
 | Binding inputs | **v0.5: SRS v0.6, ICD v0.7, DECISIONS D-41, D-42, D-43 (CR-03), FW_test_plan v0.4 §6.8 / REQ-A-M2-07** · SRS v0.3 (SYS-007, FW-SW-005, SAF-FW-024/025/026, FW-PLT-001/002, FW-SW-001…004, FW-AFE-001/002, SAF-FW-002/005/007/018/019, NFR-007), DECISIONS D-08, D-09, D-11, D-13, D-16 (PFDE HBS86H clone), D-17, D-18, D-21, D-22, D-26, D-27, **D-28**, **D-29** (b, c), D-30, R1 §1–2, §6, §9, R2 §1.3–1.7, §5, R4 §1.4, §1.8, R5 §1.3, §5.2, §6 |
@@ -61,7 +61,7 @@ Conventions
 
 ### 1.3 EXTI line map (one port per line, unique — VERIFIED R5 §6.1)
 
-| Line | Pin | Signal | Vector | NVIC level | Edge | Handler action (≤ 1 µs except EXTI4) |
+| Line | Pin | Signal | Vector | NVIC level | Edge | Handler action (D-52: level-0 E-stop reaction ≤ 1 µs (NFR-007); level-1 handlers ≤ 2.5 µs each; EXTI4 §4) |
 |---|---|---|---|---|---|---|
 | 0 | PB0 | START limit | EXTI0 | 1 | both | active edge → immediate stop (CLEAN, done by the RAM-resident HAL handler), latch + t_us + position capture (homing edge), mask line until debounced release |
 | 1 | PC1 (fallback PB1) | END limit | EXTI1 | 1 | both | as line 0 (never a homing edge; END reached during HOME → HOME_WIRING) |
@@ -145,9 +145,9 @@ NVIC priority grouping 4 (16 pre-emption levels, 0 = highest; set by the core's 
 
 | Level | IRQ (vector) | Sources | Worst-case body | Rationale |
 |---|---|---|---|---|
-| **0** | `EXTI15_10_IRQn` | E-stop sense PA10 only | ≤ 0.5 µs (halt TRUNCATE + ENA write + latch) | SRS FW-SW-002: **highest** priority, alone on its level |
-| **1** | `EXTI0_IRQn`, `EXTI1_IRQn`, `EXTI9_5_IRQn` | START, END, PAUSE (STOP/BREAK retired, CR-01) | ≤ 1 µs each | SRS FW-SW-003: STOP/PAUSE "just below the E-stop"; limits share the level (≤ 200 µs budget, SAF-FW-002) |
-| **2** | `TIM2_IRQn` | step update | ≤ 1.2 µs (NFR-007: ≤ 2 µs) | must never miss an update; only ≤ 1 µs ISRs above it |
+| **0** | `EXTI15_10_IRQn` | E-stop sense PA10 only | fixed reaction only (TRUNCATE + ENA write + edge flag + pend EXTI3); static bounds FW_design §9.8 | SRS FW-SW-002: **highest** priority, alone on its level |
+| **1** | `EXTI0_IRQn`, `EXTI1_IRQn`, `EXTI9_5_IRQn`; `EXTI3_IRQn` (v0.6: no pin / EXTI line 3 never unmasked — software-pended by the E-stop handler for the deferred core callback) | START, END, PAUSE (STOP/BREAK retired, CR-01); E-stop core callback | **≤ 2.5 µs each, measured** (D-52; DWT sections 3/4, 5, 23); static bounds FW_design §9.8 | SRS FW-SW-003: STOP/PAUSE "just below the E-stop"; limits share the level (≤ 200 µs budget, SAF-FW-002) |
+| **2** | `TIM2_IRQn` | step update | NFR-007: ≤ 2 µs; D-52: step ISR + largest level-1 handler ≤ 5 µs (FW-TIM-001) | must never miss an update; above it only the E-stop reaction (≤ 1 µs) and level-1 handlers (≤ 2.5 µs each) |
 | **3** | `EXTI4_IRQn` | HX711 DOUT | ≈ 40–55 µs (bit-bang) | timestamp latency ≤ 5 µs (FW-TIM-001): only levels 0–2 (each ≤ 1.2 µs) can delay its entry |
 | **4** | `TIM5_IRQn` | 1 kHz control tick | ≤ 30 µs typ., ≤ 60 µs worst | ms-scale deadlines (controlled stops ≤ 2 ms, debounce, timeouts) |
 | **5** | `DMA1_Stream5_IRQn`, `DMA1_Stream6_IRQn`, `USART2_IRQn`, `SysTick_IRQn` | link RX lap count, TX chunk chaining, line errors, HAL tick | ≤ 2 µs each | `-DTICK_INT_PRIORITY=5` (R1 §6.2) |
@@ -159,14 +159,14 @@ Critical sections (`02_FW/src/hal/crit.h`):
 
 | Section | Implementation | Masks | Used for | Max length |
 |---|---|---|---|---|
-| `CRIT_HALT` | PRIMASK save/disable/restore | everything | the stop primitive `sg_halt()` itself (decide + 2–4 register writes), so two stop sources never interleave | ≤ 0.2 µs |
+| `CRIT_HALT` | PRIMASK save/disable/restore | everything | the stop primitives (decide + 2–4 register writes), so two stop sources never interleave; the tick's record-flag take (`take_halt_flags`, FWR-19) | ≤ 1 µs (NFR-007, binding); static bounds per window in FW_design §4.4 / §9.8 (up to 0.95 µs nominal, 1.79 µs conservative); DWT sections 11, 16–18 at HG-18 |
 | `CRIT_AFE` | BASEPRI = 0x20 | levels ≥ 2 (step, HX711, tick, link) | HX711 SCK-high phase only | ≤ 0.8 µs per bit |
 | `CRIT_MOTION` | BASEPRI = 0x20 | levels ≥ 2 | thread/tick writes of the step-generator descriptor (start, retarget, controlled-stop request) | ≤ 1 µs |
 | `CRIT_DATA` | BASEPRI = 0x30 | levels ≥ 3 (HX711, tick, link) | class-D DATA mailbox claim by the tick, VALID state publish, load-limit threshold copy (FW_design §4.4) | ≤ 2 µs |
 | `CRIT_TICK` | BASEPRI = 0x40 | levels ≥ 4 (tick, link) | thread ↔ tick shared state (motion requests, event ring, latch clears) | ≤ 5 µs |
 | `CRIT_NVM` | BASEPRI = 0x20 + EXTI4 masked | levels ≥ 2 | flash erase/program: only the RAM-resident level-0/1 ISRs can run (FW_design §5.11) | ≤ 0.5 s (erase) |
 
-Every IRQ-masked window that can delay the E-stop is `CRIT_HALT` (≤ 0.2 µs) — NFR-007 (≤ 1 µs) and SAF-FW-005 (≤ 100 µs) hold; the E-stop is never masked by an AFE section (FW-AFE-001, FW-SW-002).
+Every IRQ-masked window that can delay the E-stop is a `CRIT_HALT` window — NFR-007 requires ≤ 1 µs for each (static bounds FW_design §4.4 / §9.8: ≤ 0.95 µs nominal, ≤ 1.79 µs conservative, HG-18 measures them); SAF-FW-005 (≤ 100 µs) holds with a wide margin (E-stop edge → PUL inactive ≤ 2.3 µs conservative incl. the longest window); the E-stop is never masked by an AFE section (FW-AFE-001, FW-SW-002).
 
 ---
 
@@ -195,6 +195,7 @@ Factory defaults from UM1724 as quoted in R1 §9.2, R2 §5.2, R3 §4.3 and the v
 |---|---|---|
 | 0.1 | 2026-10-03 | First draft from R1 §9 / R5 §6.1 (pins verified by R5 against DS10693 Rev 6, accepted by the PO in D-28), NVIC plan split per SRS FW-SW-002/003, NJTRST release verified in the stm32duino core, clock + timer/DMA allocation, solder-bridge list; driver = PFDE HBS86H clone (D-16/D-27). |
 | 0.2 | 2026-10-03 | Aligned to SRS v0.3 / ICD v0.3 / D-29 / D-30:<br>• PA7 DRV_PWR required (20 ms filter, FW-SW-005, SAF-FW-024/025);<br>• PB0 START = only home reference, END never a homing edge (D-29 b);<br>• ALM scope (SAF-FW-026, no step-loss use, D-27);<br>• DMA1 S6 sends one frame per transfer;<br>• TIM5 CC2 synthetic AFE (M1);<br>• new `CRIT_DATA` (BASEPRI 0x30);<br>• level-0/1 fixed reactions in the RAM-resident HAL handler. |
+| 0.6 | 2026-10-08 | D-52 (2026-10-09): level-1 handlers ≤ 2.5 µs each (measured), step ISR + largest level-1 handler ≤ 5 µs; NFR-007 1 µs = the level-0 E-stop reaction. FW v0.8 (NFR-007 task): `EXTI3_IRQn` at level 1 is the software-pended deferred E-stop core callback (EXTI line 3 stays masked, no pin); the level-0 handler does the fixed reaction only. EXTI IMR bits are written through the bit-band alias (review FWR-08). |
 | 0.5 | 2026-10-04 | M2 close-out, CR-03 (D-41 / D-42 / D-43): PA10 = the red E-stop's NC contact (only MCU channel, no contactor); PA4 ENA through the D-42 diode OR (no contention with the hardwired ENA cut, PA4 never sees 5 V; the FW never reads ENA back); PA7 DRV_PWR optional (`drv.pwr_sense_enable` default 0; K1_WELDED only with `drv.k1_check_enable`, SRS OI-18); PB9 TRIP retired (driven low, nothing connected); J-STIM series resistor 220 Ω (REQ-A-M2-07, §6.8 P-4); SB46/52 note updated. |
 | 0.4 | 2026-10-04 | M2: CR-01 — PC7 STOP/BREAK row, EXTI line 7 and the level-1 STOP entries removed (`io.stop_active_level` retired in dict 4; R-01 closed: PC7 free → J-PUL-A); §1.5 measurement header MH (CR-02, D-40 c); PC8/PC9 debug markers retired; MH pins digital input without pull in every build (REQ-A-M2-04). |
 | 0.3 | 2026-10-03 | Final P1 round: ALM (PA8) polled at 1 kHz, EXTI line 8 not enabled (OBS-P1-10); level 1 now serves START, END, STOP, PAUSE only. |

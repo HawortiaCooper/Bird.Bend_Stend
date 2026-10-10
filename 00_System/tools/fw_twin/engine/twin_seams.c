@@ -126,6 +126,10 @@ void hal_step_start(uint32_t first_period_ticks)
     tw_meas_release_static();
     T.step_running = true; T.step_last = false; T.step_stop_after = false; T.period_pre = 0;
     schedule_period(T.now, first_period_ticks, T.now + ticks_ns(T.dir_setup_ticks));
+    if (T.sstall_armed) {                                 /* inject step_stall armed while idle (ICD v0.7.5) */
+        T.sstall_armed = false; T.sstall_active = true;
+        T.sstall_until = T.sstall_armed_ns ? T.now + T.sstall_armed_ns : VT_NEVER;
+    }
 }
 
 void hal_step_set_period(uint32_t ticks) { tw_out("L %llu hal_step_set_period %u", (unsigned long long)T.now, (unsigned)ticks); T.period_pre = ticks; }
@@ -135,17 +139,63 @@ void hal_step_set_period_now(uint32_t ticks)
     tw_out("L %llu hal_step_set_period_now %u", (unsigned long long)T.now, (unsigned)ticks);
     if (!T.step_running || T.step_high) return;             /* stretch only before the pulse */
     vt_t start = T.step_rise - ticks_ns(T.period_cur > T.pw_ticks ? T.period_cur - T.pw_ticks : 0u);
-    schedule_period(start, ticks, T.now);
+    schedule_period(start, ticks, T.sstall_frozen ? T.sstall_from : T.now);   /* frozen: the counter stopped
+                                                                                at sstall_from (step_stall) */
 }
 
 void hal_step_arm_last(void) { tw_out("L %llu hal_step_arm_last", (unsigned long long)T.now); T.step_last = true; }
 
-static void step_halt(void) { T.step_running = false; T.step_high = false; T.stop_gen++; }
+static void step_halt(void)
+{
+    if (T.sstall_active) {                                /* inject step_stall: any halt ends the stall (the move's
+                                                             step output ended; a frozen timer halts at once) */
+        if (T.sstall_frozen)
+            tw_out("L %llu step_stall_halted %.3f", (unsigned long long)T.now, (double)(T.now - T.sstall_from) / 1000.0);
+        T.sstall_active = false; T.sstall_frozen = false;
+    }
+    T.step_running = false; T.step_high = false; T.stop_gen++;
+}
+
+/* inject step_stall (ICD v0.7.5, tools/README "Move stall"): called by the scheduler before every event
+ * decision. The timer freezes only in its low phase (a high pulse completes first) and resumes with the
+ * running period's remaining time when the window ends: rise / end shifted by the frozen time. */
+void tw_step_stall_sync(void)
+{
+    if (!T.sstall_active) return;
+    if (T.sstall_frozen) {
+        if (T.now >= T.sstall_until) {
+            vt_t d = T.now - T.sstall_from;
+            T.step_rise += d; T.step_end += d;
+            T.sstall_frozen = false; T.sstall_active = false;
+            tw_out("L %llu step_stall_end %.3f", (unsigned long long)T.now, (double)d / 1000.0);
+        }
+    } else if (T.now >= T.sstall_until) {
+        T.sstall_active = false;                          /* window over before the pulse ended */
+    } else if (T.step_running && !T.step_high) {
+        T.sstall_frozen = true; T.sstall_from = T.now;
+        if (T.sstall_until == VT_NEVER) tw_out("L %llu step_stall_begin -1", (unsigned long long)T.now);
+        else tw_out("L %llu step_stall_begin %.3f", (unsigned long long)T.now, (double)T.sstall_until / 1000.0);
+    }
+}
+
+/* "W stepstall <duration_ns>" (0 = until the move ends): the running move's output, else armed for the next start */
+void tw_step_stall_inject(vt_t dur_ns)
+{
+    if (T.step_running) {
+        T.sstall_active = true; T.sstall_armed = false;
+        T.sstall_until = dur_ns ? T.now + dur_ns : VT_NEVER;
+        tw_step_stall_sync();
+    } else {
+        T.sstall_armed = true; T.sstall_armed_ns = dur_ns;
+        tw_out("L %llu step_stall_armed %.3f", (unsigned long long)T.now, (double)dur_ns / 1000.0);
+    }
+}
 
 bool hal_step_stop_now(void)
 {
     tw_out("L %llu hal_step_stop_now running=%d high=%d", (unsigned long long)T.now, T.step_running, T.step_high);
-    if (!T.step_running) return false;
+    if (!T.step_running) { T.stop_gen++; return false; }   /* OI-FW-48 (FW_design v0.8, FWR-01): an idle halt also
+                                                               bumps the generation (start-then-recheck sees it) */
     if (T.step_high) { T.step_stop_after = true; return true; }   /* CLEAN: the pulse completes */
     step_halt();
     return false;
@@ -154,7 +204,7 @@ bool hal_step_stop_now(void)
 bool hal_step_abort(void)
 {
     tw_out("L %llu hal_step_abort running=%d high=%d", (unsigned long long)T.now, T.step_running, T.step_high);
-    if (!T.step_running) return false;
+    if (!T.step_running) { T.stop_gen++; return false; }   /* OI-FW-48: idle halt bumps the generation */
     bool cut = T.step_high;
     if (cut) { set_pul(0); T.step_uncertain = true; }               /* TRUNCATE: pulse cut, not counted */
     step_halt();

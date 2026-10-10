@@ -116,8 +116,17 @@ static void test_sniff_hold_rules(void)
 static void test_halt_decisions_every_cnt(void)
 {
     static const uint32_t PW[3] = {225u, 900u, 9000u};
-    const uint32_t guard = 45u;                                      /* 0.5 us at 90 MHz (FW_design §5.3) */
-    uint32_t i, cnt, n = 0u;
+    /* guard: 0.5 us (FW <= v0.8.4) and 1.5 us at 90 MHz (FW v0.8.5, OBS-RC-7; FW_design §5.3) */
+    static const uint32_t GUARD[2] = {45u, 135u};
+    uint32_t i, cnt, n = 0u, gi, guard, ccr;
+    for (gi = 0u; gi < 2u; gi++) {
+    guard = GUARD[gi];
+    /* §14 / §15 (b): a counter stopped by OPM reads CNT = 0; with every compare >= pulse_low_min
+     * (2.5 us = 225 ticks) it must take the force-inactive path and report no cut */
+    for (ccr = 225u; ccr < 20000u; ccr++) {
+        TEST_ASSERT_FALSE_MESSAGE(stepgen_halt_complete(0u, ccr, guard), "CNT 0 must not choose OPM");
+        TEST_ASSERT_FALSE(stepgen_abort_cuts(0u, ccr));
+    }
     for (i = 0u; i < 3u; i++) {
         uint32_t arr = PW[i] * 3u - 1u;                              /* period = 3 PW */
         uint32_t ccr1 = arr + 1u - PW[i];                            /* PWM mode 2: pulse at the end */
@@ -133,13 +142,17 @@ static void test_halt_decisions_every_cnt(void)
             n++;
         }
     }
-    TEST_ASSERT_EQUAL_UINT32(3u * 0u + 225u * 3u + 900u * 3u + 9000u * 3u, n);
+    }
+    TEST_ASSERT_EQUAL_UINT32(2u * (225u * 3u + 900u * 3u + 9000u * 3u), n);
 }
 
 static void test_stretch_extend_only(void)
 {
-    const uint32_t pw = 900u, guard = 45u, arr = 9999u, ccr1 = arr + 1u - pw;
-    uint32_t cnt, nc;
+    const uint32_t pw = 900u, arr = 9999u, ccr1 = arr + 1u - pw;
+    static const uint32_t GUARD[2] = {45u, 135u};     /* 0.5 us (<= v0.8.4) / 1.5 us (v0.8.5) */
+    uint32_t cnt, nc, gi, guard;
+    for (gi = 0u; gi < 2u; gi++) {
+    guard = GUARD[gi];
     for (cnt = 0u; cnt <= arr; cnt += 7u) {
         for (nc = 5000u; nc < 30000u; nc += 997u) {
             bool ok = stepgen_stretch_ok(cnt, ccr1, arr, pw, guard, nc);
@@ -151,6 +164,7 @@ static void test_stretch_extend_only(void)
                 TEST_ASSERT_FALSE_MESSAGE(cnt + guard < nc - pw, "a safe stretch was refused");
             }
         }
+    }
     }
 }
 

@@ -199,9 +199,11 @@ static cmd_verdict_t check_motion(const cmd_ctx_t *c, const cmd_req_t *r, bool m
     return verdict(ST_OK, 0u);
 }
 
-/* DIAG_MEAS (ICD v0.6 Appendix C, D-40 c): not in build -> E_INTERNAL NOT_IN_BUILD (after LEN); then op /
- * sel / a / b in payload order (offsets 0 / 1 / 2 / 4); then MEAS_STATE (HANG needs a running motion,
- * STATIC_LEVEL needs NOT_ENABLED). Oracle: ref_cmdcheck._check_meas, check_vectors hw_meas_vectors. */
+/* DIAG_MEAS (ICD v0.7.5 §4.3 / §5.6 / Appendix C op 8, D-40 c): not in build -> E_INTERNAL NOT_IN_BUILD
+ * (after LEN); then op / sel / a / b in payload order (offsets 0 / 1 / 2 / 4); then MEAS_STATE: HANG needs
+ * a running motion; STATIC_LEVEL needs NOT_ENABLED and, for sel PUL, the ENA output at the disabled level
+ * (`ena_on` false = STATUS io ENA_DISABLED 1, e.g. after DISABLE or an E-stop; FWR-09, state_schema 4);
+ * DIR is not restricted further. Oracle: ref_cmdcheck._check_meas, check_vectors hw_meas_vectors. */
 static cmd_verdict_t check_meas(const cmd_ctx_t *c, const cmd_req_t *r, bool moving)
 {
     uint8_t op = r->u.meas.op, sel = r->u.meas.sel;
@@ -251,7 +253,8 @@ static cmd_verdict_t check_meas(const cmd_ctx_t *c, const cmd_req_t *r, bool mov
         return verdict(ST_E_RANGE, 4u);
     }
     if ((op == (uint8_t)MEAS_OP_HANG && !moving) ||
-        (op == (uint8_t)MEAS_OP_STATIC_LEVEL && c->motion_state != (uint8_t)MS_NOT_ENABLED)) {
+        (op == (uint8_t)MEAS_OP_STATIC_LEVEL &&
+         (c->motion_state != (uint8_t)MS_NOT_ENABLED || (sel == (uint8_t)MEAS_PIN_PUL && c->ena_on)))) {
         return verdict(ST_E_STATE, BLOCK_MEAS_STATE);
     }
     return verdict(ST_OK, 0u);

@@ -355,7 +355,9 @@ class FastCurve(pg.PlotCurveItem):
     without pyqtgraph's argument parsing / view-bounds notifications (the Y range is set explicitly by the pane)
     and the bounding rect is the data rect padded by 1 % of the view (computed from the min / max the pane needs
     for its autoscale anyway), instead of pyqtgraph's per-curve bounds scan with pixel padding in every dirty-item
-    pass of the scene. Drawing is unchanged (``connect="finite"``: NaN = gap)."""
+    pass of the scene. Drawing is unchanged (NaN = gap): data without a NaN / inf uses pyqtgraph's fast path
+    (``connect="all"`` + ``skipFiniteCheck``), data with a gap ``connect="finite"`` (OBS-P3-02: the backfill pass of
+    "finite" was ~20 % of the path build on every paint)."""
 
     def __init__(self, *, pen: Any, name: str) -> None:
         super().__init__(pen=pen, name=name, connect="finite", antialias=False)
@@ -366,6 +368,9 @@ class FastCurve(pg.PlotCurveItem):
         self.prepareGeometryChange()
         self.xData = x
         self.yData = y
+        finite = bool(len(y) == 0 or (np.isfinite(y).all() and np.isfinite(x).all()))
+        self.opts["connect"] = "all" if finite else "finite"
+        self.opts["skipFiniteCheck"] = finite
         self.invalidateBounds()
         self.path = None
         self.fillPath = None

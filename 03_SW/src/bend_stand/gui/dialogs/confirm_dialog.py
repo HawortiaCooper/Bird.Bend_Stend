@@ -1,4 +1,4 @@
-"""``ConfirmDialog``: the one confirmation dialog class for C-01…C-13 (SW_design_GUI §5.5).
+"""``ConfirmDialog``: the one confirmation dialog class for C-01…C-15 (SW_design_GUI §5.5).
 
 Keyboard rules (SAF-SW-004):
 
@@ -17,7 +17,7 @@ The dialog never decides anything: the caller repeats the backend call with ``co
 
 Implements: SAF-SW-004 (Enter/Space never confirm, STOP reachable; C-01 HOME under load, C-02 DISABLE, C-03 E-stop
 clear, C-10 no-specimen mode), SW-CFG-004 (C-04), SW-CFG-003 (C-11), SW-CAL-003 (C-05), SW-CAL-007 (C-06),
-SW-CAL-001 (C-08, C-12), SW-STOP-003 (C-13), SW-SEQ-005 / SAF-SW-006 (C-07), SW-SEQF-001 (C-08 discard)
+SW-CAL-001 (C-08, C-12), SW-CAL-007 (C-14 K implausible, D-50 a), SAF-SW-005 / SW-LIM-001 (C-15 different board), SW-STOP-003 (C-13), SW-SEQ-005 / SAF-SW-006 (C-07), SW-SEQF-001 (C-08 discard)
 """
 from __future__ import annotations
 
@@ -81,6 +81,15 @@ TEXTS: dict[str, tuple[str, str, str, str | None]] = {
     "C-13": ("Clear stop ends the paused sequence",
              "Clear stop ends the paused sequence (STOPPED, reason CLEARED) and clears HALT and PAUSE. No motion "
              "restarts. To continue the sequence use Resume instead.", "Clear stop", None),
+    # D-50 a / SRS v0.6.5 SW-CAL-007: the engine's text (K vs the nominal of the configured cell / AFE) is shown
+    "C-14": ("K implausible — accept anyway?",
+             "The calibration factor K is far from the nominal value of the configured cell / AFE (expected 0.5…2 ×). "
+             "Check the weights, the cell and the AFE gain.", "Accept calibration",
+             "I checked the weights, the cell and the AFE gain"),
+    # B6-33 (6) / SWR-19: acknowledgement after a reconnect to another board (topic device.board_changed)
+    "C-15": ("Different board connected",
+             "A different board is connected. The test travel zero was reset to the machine zero. Check the SW travel "
+             "limits, the travel and load calibration and tare again before the next test.", "Acknowledge", None),
 }
 
 

@@ -1,0 +1,16 @@
+# Bird Bend Stand — Windows distribution build dependencies (SW_design §24, packaging/README.md).
+# Owner: Implementer B. Supported runtime: Python 3.14 (D-33 i), project venv .venv; the frozen app embeds it.
+# Pins = the versions verified for the build; build_dist.ps1 refuses to build when the venv differs
+# (packaging/buildinfo.py check-env). pyproject.toml carries PyInstaller as the optional extra "build".
+# Install: .venv\Scripts\python -m pip install -r 03_SW\requirements-build.txt
+# Reproducible install (SWR-27): hash-pinned lock requirements-build.lock.txt (direct + transitive, SHA-256), install with
+#   .venv\Scripts\python -m pip install --require-hashes -r 03_SW\requirements-build.lock.txt
+# Re-lock after changing a pin: .venv\Scripts\python 03_SW\packaging\lock_requirements.py generate
+-r requirements.txt
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+altgraph==0.17.5
+pefile==2024.8.26
+pywin32-ctypes==0.2.3
+packaging==26.3
+setuptools==84.0.0

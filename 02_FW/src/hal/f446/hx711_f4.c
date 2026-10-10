@@ -62,13 +62,13 @@ void hal_hx711_powerdown(bool on)
 {
     s_pd = on;
     if (on) {
-        EXTI->IMR &= ~L_DOUT;
+        exti_imr_set(PIN_DOUT_BIT, false);
         PIN_SCK_PORT->BSRR = 1u << PIN_SCK_BIT;      /* SCK high > 60 us: power-down */
     } else {
         PIN_SCK_PORT->BSRR = 1u << (PIN_SCK_BIT + 16u);   /* SCK low: power-up (reset, A/128) */
         if (!s_hold) {
             EXTI->PR = L_DOUT;
-            EXTI->IMR |= L_DOUT;
+            exti_imr_set(PIN_DOUT_BIT, true);
         }
     }
 }
@@ -85,10 +85,10 @@ void hal_hx711_hold(bool on)
 {
     s_hold = on;
     if (on) {
-        EXTI->IMR &= ~L_DOUT;                        /* NVM: no read across the flash stall */
+        exti_imr_set(PIN_DOUT_BIT, false);                        /* NVM: no read across the flash stall */
     } else if (!s_pd) {
         EXTI->PR = L_DOUT;
-        EXTI->IMR |= L_DOUT;
+        exti_imr_set(PIN_DOUT_BIT, true);
         if (dout_low()) {
             s_kicked = true;                         /* conversions were missed during the hold */
             EXTI->SWIER = L_DOUT;
@@ -108,7 +108,7 @@ void hx711_init(void)
     SYSCFG->EXTICR[1] = (SYSCFG->EXTICR[1] & ~0xFu) | 1u;   /* line 4 -> PB4 */
     EXTI->FTSR |= L_DOUT;
     EXTI->RTSR &= ~L_DOUT;
-    EXTI->IMR &= ~L_DOUT;
+    exti_imr_set(PIN_DOUT_BIT, false);
     NVIC_SetPriority(EXTI4_IRQn, PRIO_AFE);
 }
 
@@ -119,7 +119,7 @@ void hx711_start(void)
     NVIC_ClearPendingIRQ(EXTI4_IRQn);
     NVIC_EnableIRQ(EXTI4_IRQn);
     if (!s_hold && !s_pd) {
-        EXTI->IMR |= L_DOUT;
+        exti_imr_set(PIN_DOUT_BIT, true);
         if (dout_low()) {
             EXTI->SWIER = L_DOUT;                    /* a conversion already waiting */
         }
@@ -138,7 +138,7 @@ void EXTI4_IRQHandler(void)
     if (s_hold || s_pd || !dout_low()) {
         return;                                      /* spurious / held */
     }
-    EXTI->IMR &= ~L_DOUT;                            /* DOUT toggles with the data during the read */
+    exti_imr_set(PIN_DOUT_BIT, false);                            /* DOUT toggles with the data during the read */
     s_max_hi = 0u;
     {
         MDWT_T0(t_rd);
@@ -147,7 +147,7 @@ void EXTI4_IRQHandler(void)
         MDWT_VAL(MDWT_HX_SCK_HIGH, s_max_hi);
     }
     EXTI->PR = L_DOUT;
-    EXTI->IMR |= L_DOUT;
+    exti_imr_set(PIN_DOUT_BIT, true);
     s.raw = hx711_sign_extend(raw24);
     s.status = 0u;
     if (!high || s_max_hi > HX711_SCK_HIGH_MAX_US * (SystemCoreClock / 1000000u)) {

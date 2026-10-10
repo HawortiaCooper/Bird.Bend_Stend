@@ -505,6 +505,7 @@ class FakeMarks:
 class FakeSession:
     def __init__(self) -> None:
         self._s = SessionSettings()
+        self.load_issues: list[Issue] = []         # B6-33 (2): issues of the last load (LOAD_LIMITS_RESTORED, FILE)
 
     def get(self) -> SessionSettings:
         return self._s

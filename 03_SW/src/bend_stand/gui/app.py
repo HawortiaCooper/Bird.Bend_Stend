@@ -44,6 +44,10 @@ def run(backend: Any, args: argparse.Namespace) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])          # (2)
     app.setApplicationName("Bird Bend Stand")
     app.setOrganizationName("BirdBendStand")
+    from bend_stand.gui.resources import app_icon
+    icon = app_icon()                                         # F-B-PKG-01: window + taskbar icon (SW-PLT-001)
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
     from bend_stand.gui.main_window import MainWindow
     from bend_stand.gui.plots.plot_dock import configure_pyqtgraph

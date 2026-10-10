@@ -6,5 +6,9 @@ pytest==9.1.1
 pytest-qt==4.5.0
 pytest-cov==7.1.0
 pytest-randomly==5.0.0
+iniconfig==2.3.0        # transitive (pytest), pinned to the verified .venv (SWR-34)
 # Integrator generators (00_System/tools/gen_params.py, gen_vectors.py)
+# Reproducible install (SWR-27): hash-pinned lock requirements-dev.lock.txt (direct + transitive, SHA-256), install with
+#   .venv\Scripts\python -m pip install --require-hashes -r 03_SW\requirements-dev.lock.txt
+# Re-lock after changing a pin: .venv\Scripts\python 03_SW\packaging\lock_requirements.py generate
 PyYAML==6.0.3

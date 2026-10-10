@@ -181,6 +181,7 @@ class Request:
     sent_ns: int = 0
     deadline_ns: int = 0
     generation: int = 0
+    written: threading.Event = field(default_factory=threading.Event)   # set once the frame is on the wire
 
     @property
     def name(self) -> str:
@@ -237,6 +238,11 @@ class CommandChannel:
         self.on_rtt: Callable[[int, int], None] | None = None     # (cmd, round-trip ns) of every response
         self.closed: Exception | None = None
         self._held: collections.deque[Request] = collections.deque()   # priority non-stop frames held (D-37 a)
+        # SWR-15: frames are reserved (SEQ, in-flight entry) under ``_lock`` and written outside it, in reservation
+        # order, by one writing thread at a time (``_tx_owner``); a priority frame is written by its submitter.
+        self._pending_tx: collections.deque[tuple[Request, bytes]] = collections.deque()
+        self._tx_owner = False
+        self._epoch_lock = threading.Lock()      # a motion frame's epoch check + write vs. ``bump_epoch``
 
     # ---- lifecycle ----------------------------------------------------------------------------------
     def close(self, exc: Exception | None = None) -> None:
@@ -248,12 +254,15 @@ class CommandChannel:
                 q.clear()
             self._inflight.clear()
             self._held.clear()
+            self._pending_tx.clear()
         for r in reqs:
             self._fail(r, exc)
 
     def bump_epoch(self) -> int:
-        """New motion epoch (STOP/HALT/PAUSE sent, FW stop indication): queued motion of older epochs is dropped."""
-        with self._lock:
+        """New motion epoch (STOP/HALT/PAUSE sent, FW stop indication): queued motion of older epochs is dropped.
+        Waits for a motion frame being written right now (at most one frame), so a reserved motion frame of the old
+        epoch is either on the wire before the following stop or never written (SWR-15)."""
+        with self._epoch_lock, self._lock:
             self.motion_epoch += 1
             stale = []
             for q in self._queues.values():
@@ -278,6 +287,15 @@ class CommandChannel:
     # ---- submit -------------------------------------------------------------------------------------
     def submit(self, cmd: int, payload: Payload = b"", *, lane: Lane | None = None, timeout_ns: int | None = None,
                epoch: int | None = None, key: str | None = None) -> ReleasingFuture:
+        direct: list[tuple[Request, bytes]] = []
+        fut = self._submit(cmd, payload, lane, timeout_ns, epoch, key, direct)
+        for req, frame_payload in direct:                 # the priority frame: written by the caller, no lock held
+            self._write(req, frame_payload)
+        self._flush_tx()
+        return fut
+
+    def _submit(self, cmd: int, payload: Payload, lane: Lane | None, timeout_ns: int | None, epoch: int | None,
+                key: str | None, direct: list[tuple[Request, bytes]]) -> ReleasingFuture:
         cmd = int(Cmd(cmd))
         fut = ReleasingFuture()
         if self.closed is not None:
@@ -302,7 +320,7 @@ class CommandChannel:
                             self._chain(fut, old.future)     # the replaced request resolves with the newer
                             self.stats.coalesced += 1
             if priority and (cmd in STOP_CLASS or not self._quiesced_locked()):
-                self._send_locked(req, self.clock.monotonic_ns())
+                self._send_locked(req, self.clock.monotonic_ns(), direct)
             elif priority:
                 self._held.append(req)                    # a clear during SAVE/LOAD/DEFAULTS waits (D-37 a)
             else:
@@ -324,9 +342,9 @@ class CommandChannel:
         fut = self.submit(cmd, payload)
         if fut.done() and fut.exception() is not None:
             return fut, None, str(fut.exception())
-        with self._lock:
-            req = next((r for r in self._inflight.values() if r.future is fut), None)
-        return fut, (req.sent_ns if req else None), None
+        # SWR-10: the write time travels with the future (set when the frame was written), so an ACK matched by the
+        # Reader before this line cannot turn a written STOP into "not written"
+        return fut, getattr(fut, "t_sent_ns", None), None
 
     # ---- slots / tokens -----------------------------------------------------------------------------
     def _counts(self) -> dict[Lane, int]:
@@ -374,7 +392,9 @@ class CommandChannel:
                 req = q.popleft()
                 self._send_locked(req, now)
 
-    def _send_locked(self, req: Request, now: int) -> None:
+    def _send_locked(self, req: Request, now: int, direct: list[tuple[Request, bytes]] | None = None) -> None:
+        """Reserve the frame (payload, SEQ, in-flight entry) under ``_lock``; the write happens after the lock is
+        released (``_write`` via ``_flush_tx`` or, for ``direct``, by the submitting thread) — SWR-15."""
         if req.epoch is not None and req.epoch != self.motion_epoch:
             self.stats.dropped_epoch += 1
             self._fail(req, CommandDropped(f"{req.name} dropped: a stop intervened"))
@@ -390,24 +410,87 @@ class CommandChannel:
             return
         req.seq = self._alloc_seq()
         req.attempts += 1
+        req.written = threading.Event()
+        req.sent_ns = now                                  # provisional until written (timeouts count from here)
+        req.deadline_ns = now + req.timeout_ns
+        self._inflight[(req.cmd | pg.RESP_BIT, req.seq)] = req
+        (direct if direct is not None else self._pending_tx).append((req, payload))
+
+    def _flush_tx(self) -> None:
+        """Write the reserved frames in reservation order without holding ``_lock`` (SWR-15); a thread that finds
+        another one writing leaves its frames to it."""
+        with self._lock:
+            if self._tx_owner:
+                return
+            self._tx_owner = True
         try:
-            t = self.writer.write(req.cmd, req.seq, payload, priority=req.priority)
-        except (TransportError, OSError) as exc:
-            self.stats.tx_errors += 1
-            self._fail(req, TransportError(str(exc)))
+            while True:
+                with self._lock:
+                    if self.closed is not None:
+                        self._pending_tx.clear()
+                    if not self._pending_tx:
+                        self._tx_owner = False
+                        return
+                    req, payload = self._pending_tx.popleft()
+                self._write(req, payload)
+        except BaseException:
+            with self._lock:
+                self._tx_owner = False
+            raise
+
+    def _write(self, req: Request, payload: bytes) -> None:
+        """Put one reserved frame on the wire (no channel lock held). A motion frame of an older epoch is dropped
+        here, atomically with ``bump_epoch`` (``_epoch_lock``), so it can never follow a STOP onto the wire."""
+        key = (req.cmd | pg.RESP_BIT, req.seq)
+        lock = self._epoch_lock if req.epoch is not None else None
+        dropped = False
+        tx_exc: BaseException | None = None
+        t = 0
+        if lock is not None:
+            lock.acquire()
+        try:                                     # only the epoch check and the write under the lock (SWR-32)
+            if req.epoch is not None and req.epoch != self.motion_epoch:
+                dropped = True
+            else:
+                try:
+                    t = self.writer.write(req.cmd, req.seq, payload, priority=req.priority)
+                except (TransportError, OSError) as exc:
+                    tx_exc = exc
+        finally:
+            if lock is not None:
+                lock.release()
+        # outcomes after the lock: future callbacks / on_tx_error may issue a STOP (bump_epoch) without deadlock
+        if dropped:
+            with self._lock:
+                self._inflight.pop(key, None)
+                self.stats.dropped_epoch += 1
+            req.written.set()
+            self._fail(req, CommandDropped(f"{req.name} dropped: a stop intervened"))
+            return
+        if tx_exc is not None:
+            with self._lock:
+                self._inflight.pop(key, None)
+                self.stats.tx_errors += 1
+            req.written.set()
+            self._fail(req, TransportError(str(tx_exc)))
             cb = self.on_tx_error
             if cb is not None:
-                cb(exc)
+                cb(tx_exc)
             return
         req.sent_ns = t
         req.deadline_ns = t + req.timeout_ns
-        self._inflight[(req.cmd | pg.RESP_BIT, req.seq)] = req
-        self.stats.sent += 1
-        if req.priority:
-            self.stats.priority_sent += 1
-        if req.attempts > 1:
-            self.stats.retries_sent += 1
-        self.stats.max_outstanding_seen = max(self.stats.max_outstanding_seen, self.outstanding())
+        try:
+            req.future.t_sent_ns = t                       # type: ignore[attr-defined]  # SWR-10
+        except AttributeError:  # pragma: no cover - futures always take attributes
+            pass
+        req.written.set()
+        with self._lock:
+            self.stats.sent += 1
+            if req.priority:
+                self.stats.priority_sent += 1
+            if req.attempts > 1:
+                self.stats.retries_sent += 1
+            self.stats.max_outstanding_seen = max(self.stats.max_outstanding_seen, self.outstanding())
 
     # ---- responses ----------------------------------------------------------------------------------
     def on_response(self, fr: Frame) -> None:
@@ -422,6 +505,8 @@ class CommandChannel:
                 return
             self.stats.responses += 1
             self.consecutive_timeouts = 0
+        if not req.written.is_set():                       # the writer is between write() and the bookkeeping
+            req.written.wait(0.05)
         try:
             r = P.split_response(fr.type, fr.seq, fr.payload)
         except ValueError as exc:
@@ -440,6 +525,7 @@ class CommandChannel:
                 req.future.set_result(resp)
         with self._lock:
             self._pump_locked()
+        self._flush_tx()
 
     # ---- timeouts ------------------------------------------------------------------------------------
     def tick(self, now: int | None = None) -> None:
@@ -456,6 +542,7 @@ class CommandChannel:
             for r in timed_out:
                 self._handle_timeout_locked(r)
             self._pump_locked()
+        self._flush_tx()
         for r in timed_out:
             if r.future.done() and isinstance(r.future.exception(), CommandTimeout):
                 cb = self.on_timeout

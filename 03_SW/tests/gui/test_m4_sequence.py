@@ -32,7 +32,12 @@ from bend_stand.gui.widgets.stop_button import StopButton
 def seq_tab(window):
     window.tabs.setCurrentWidget(window.sequence_tab)
     tick(window)
-    return window.sequence_tab
+    yield window.sequence_tab
+    for dlg in list(window.sequence_tab.dialogs.values()):     # e.g. a generator dialog left open by a test
+        try:
+            dlg.close()
+        except RuntimeError:                                    # already deleted (WA_DeleteOnClose)
+            pass
 
 
 def _toasts(win, monkeypatch):
@@ -611,6 +616,7 @@ def test_chart_live_marker_active_step_and_trace(seq_tab, window, connected_fake
     assert ch.active_exec == 1 and ch.active_point.data.size == 1
 
 
+@pytest.mark.rt                    # real-time, timing-sensitive: verdict on the reference PC (Orchestrator)
 @pytest.mark.req("SW-SCH-002")
 def test_chart_marker_rate_at_least_10_hz(make_window, connected_fake) -> None:
     """Verifies: SW-SCH-002 (timing part) — with the real refresh timer the live marker is repainted ≥ 10 Hz
@@ -673,3 +679,42 @@ def test_start_warn_only_needs_c07_too(seq_tab, window, connected_fake, qtbot) -
     qtbot.mouseClick(seq_tab.confirm_dialog.confirm_button, Qt.MouseButton.LeftButton)
     assert connected_fake.calls_of("sequencer.start")[-1].kwargs == {"confirmed": True}
     _ = StopResult
+
+
+@pytest.mark.req("SW-SEQ-003", "SW-SCH-002", "SW-STOP-004")
+def test_step_label_and_phase_follow_status_without_stale_label(seq_tab, window, connected_fake) -> None:
+    """Verifies: SW-SEQ-003, SW-SCH-002, SW-STOP-004 — B publishes phase COMMAND together with the new step's label
+    at every step start (also after Resume): the run line shows the label of the step it names (never the previous
+    step's), the active row moves in the same tick and is never cleared in between (no flicker), PAUSED keeps
+    the row, the re-run after Resume shows COMMAND with the same label; after the end no label is shown."""
+    _build(seq_tab, "load", "load")
+    s0, s1 = seq_tab.seq.steps[0], seq_tab.seq.steps[1]
+    sq = connected_fake.sequencer
+    rows: list[object] = []
+    lines: list[str] = []
+
+    def snap() -> None:
+        tick(window)
+        rows.append(seq_tab.model.active_row)
+        lines.append(seq_tab.run_label.text())
+    sq.set_status(state="RUNNING", exec_idx=0, step_uid=s0.uid, label="20 N", phase="CAPTURE", plan_len=2)
+    snap()
+    sq.set_status(exec_idx=1, step_uid=s1.uid, label="40 N", phase="COMMAND")           # step start (one snapshot)
+    snap()
+    sq.set_status(phase="APPROACH")
+    snap()
+    sq.set_status(state="PAUSED", phase="PAUSED", paused_source="PC")
+    snap()
+    sq.set_status(state="RUNNING", phase="COMMAND", paused_source=None)                  # Resume: step re-run
+    snap()
+    assert rows == [0, 1, 1, 1, 1], rows
+    assert '"20 N"' in lines[0] and "step 1/2" in lines[0] and "phase CAPTURE" in lines[0]
+    for ln in lines[1:]:
+        assert "step 2/2" in ln and '"40 N"' in ln and '"20 N"' not in ln, ln
+    assert "phase COMMAND" in lines[1] and "phase COMMAND" in lines[4] and "PAUSED (PC)" in lines[3]
+    n_set = seq_tab.run_label.text()
+    tick(window)
+    assert seq_tab.run_label.text() == n_set                                             # stable between ticks
+    sq.set_status(state="FINISHED", end_reason="COMPLETED", phase=None)
+    tick(window)
+    assert '"40 N"' not in seq_tab.run_label.text() and seq_tab.model.active_row is None

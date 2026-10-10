@@ -283,8 +283,12 @@ def test_motion_gate_items_and_d37b_invalid_bits() -> None:
     base = GateSnapshot(link=LinkState.CONNECTED, stream_on=True, data_fresh=True,
                         flags=int(pg.DataFlags.ENABLED | pg.DataFlags.HOMED), features=frozenset(pg.FEATURES_BITS),
                         thresholds_state="DEFAULT_ONLY", motion_state="IDLE", status=int(pg.DataStatus.DRV_PWR),
-                        thresholds_match=True, load_limits_on=False)
+                        thresholds_match=True, load_limits_on=False, load_input_valid=True)
     assert g_motion(base, MotionKind.MOVE).ok
+    # D-53 a (SWR-03): the limit enables do not bypass the load-input rule; only the no-specimen mode does
+    noinput = replace(base, load_input_valid=False)
+    assert "LOAD_INPUT_INVALID" in g_motion(noinput, MotionKind.MOVE).codes()
+    assert g_motion(replace(noinput, no_specimen=True), MotionKind.MOVE).ok
     cases = {"DRV_UNPOWERED": replace(base, status=0),
              "DRIVER_ALARM": replace(base, status=int(pg.DataStatus.ALM | pg.DataStatus.DRV_PWR)),
              "PAUSED": replace(base, status=int(pg.DataStatus.PAUSED | pg.DataStatus.DRV_PWR)),

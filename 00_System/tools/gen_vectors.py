@@ -867,8 +867,9 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
         {"op": 7, "sel": 2, "a": 100, "b": 0}, srs=MS, hw_meas=True)
     add("meas_static_enabled", "HW_MEAS: STATIC_LEVEL while IDLE (enabled) -> E_STATE MEAS_STATE", {}, "DIAG_MEAS",
         {"op": 8, "sel": 0, "a": 1, "b": 0}, srs=MS, hw_meas=True)
-    add("meas_static_not_enabled", "HW_MEAS: STATIC_LEVEL while NOT_ENABLED (E-stop latched) -> OK",
-        dict(boot, estop_latched=True), "DIAG_MEAS", {"op": 8, "sel": 0, "a": 1, "b": 0}, srs=MS, hw_meas=True)
+    add("meas_static_not_enabled", "HW_MEAS: STATIC_LEVEL while NOT_ENABLED (E-stop latched, ENA disabled) -> OK",
+        dict(boot, estop_latched=True, ena_on=False), "DIAG_MEAS", {"op": 8, "sel": 0, "a": 1, "b": 0}, srs=MS,
+        hw_meas=True)
     add("meas_read_during_estop", "HW_MEAS: read ops are accepted in every state (E-stop, HALT, fault)",
         dict(boot, estop_latched=True, halt_latched=True, faults=["STEP_FAULT"]), "DIAG_MEAS",
         {"op": 3, "sel": 0, "a": 0, "b": 0}, srs=MS, hw_meas=True)
@@ -998,10 +999,31 @@ def make_check(pd: gen_params.Dictionary) -> dict[str, Any]:
     add("load_limit_moving", "load_raw_max while moving -> OK (effective next sample)", moving,
         "SET_PARAM", payload=spk("safety.load_raw_max", 3000000), srs=("SAF-FW-010",))
 
+    # appended last (schema 4) so the SEQ numbers of all earlier check vectors stay unchanged
+    # schema 4 (D-50 c, FWR-09): PUL STATIC_LEVEL needs ENA at the disabled level; DIR does not
+    add("meas_static_pul_ena_holding", "HW_MEAS: STATIC_LEVEL PUL in NOT_ENABLED after boot (ENA holding, D-13) -> "
+        "E_STATE MEAS_STATE (FWR-09)", dict(boot, ena_on=True), "DIAG_MEAS", {"op": 8, "sel": 0, "a": 1, "b": 0},
+        srs=MS, hw_meas=True)
+    add("meas_static_dir_ena_holding", "HW_MEAS: STATIC_LEVEL DIR in NOT_ENABLED with ENA holding -> OK (DIR alone "
+        "never steps)", dict(boot, ena_on=True), "DIAG_MEAS", {"op": 8, "sel": 1, "a": 1, "b": 0}, srs=MS,
+        hw_meas=True)
+    add("meas_static_pul_after_disable", "HW_MEAS: STATIC_LEVEL PUL in NOT_ENABLED after DISABLE (ENA disabled) -> OK",
+        dict(boot, ena_on=False), "DIAG_MEAS", {"op": 8, "sel": 0, "a": 0, "b": 0}, srs=MS, hw_meas=True)
+
     names = [v["name"] for v in vecs]
     assert len(names) == len(set(names)), "duplicate check-vector names"
     # ICD v0.5: the retired STOP-button keys are never set (D-36); keys unchanged -> state_schema stays 2
     assert not any({"stop_btn_active", "stop_btn_released_ms"} & set(v["state"]) for v in vecs)
+    # schema 4 (D-50 c): ENA is at the enabled level in every state except NOT_ENABLED or an E-stop (latched or
+    # input open: the fixed reaction disabled it, also in a transient IDLE state) -> such states carry ena_on = false explicitly
+    for v in vecs + meas_vecs:
+        s_ = v["state"]
+        if s_.get("estop_latched") or s_.get("estop_input_open"):
+            s_.setdefault("ena_on", False)
+        st_ = cc.FwState.from_dict(s_)
+        e_stop = st_.estop_latched or st_.estop_input_open     # the HAL fixed reaction disabled ENA at once
+        assert st_.ena_on or e_stop or st_.motion_state == "NOT_ENABLED", f"{v['name']}: ena_on false outside NOT_ENABLED"
+        assert not ((st_.estop_latched or st_.estop_input_open) and st_.ena_on), f"{v['name']}: ENA on with E-stop"
     # every vector state is a valid configuration (all hard rules hold for its parameter overrides)
     for v in vecs:
         st0 = cc.FwState.from_dict(v["state"])

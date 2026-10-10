@@ -661,6 +661,9 @@ class PlotDock(SafeDock):
         """Visible and not covered (a tabified dock behind another one is hidden by Qt)."""
         if not self.isVisible():
             return False
+        w = self.window()                       # OBS-P3-02: a minimised window (main or floating) paints nothing
+        if w is not None and w.isMinimized():
+            return False
         return self.isFloating() or not self.visibleRegion().isEmpty()
 
     def wants_snapshot(self) -> bool:

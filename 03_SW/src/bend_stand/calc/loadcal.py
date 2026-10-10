@@ -10,6 +10,15 @@
 * ``low_span`` / ``extrapolated`` (SW-CAL-008): LOW_SPAN when the largest reference force < 20 % FS; forces beyond
   3 × the largest calibration force are marked extrapolated.
 * ``afe_block`` / ``afe_matches`` (SW-CAL-009, D-29 l): the AFE configuration recorded with a calibration.
+* **Plausibility (D-50 a, SRS v0.6.5 SW-CAL-007)**, for any number of points: ``weight_detected`` — a weight point
+  whose raw change from the zero point **and** from the previous point is < 10 × std_zero (min 50 counts) is refused
+  ("weight not detected", re-take); ``nominal_k`` — the nominal |K| of the configured cell / AFE:
+  ``|K_nom| = FS_N / (S/1000 · gain · 2^24)`` N/count (S = cell sensitivity mV/V, SRS A-02 3.0 mV/V; FS_N = rated
+  capacity 200 kg · g0; gain = HX711 PGA gain of ``afe.gain_channel``; the HX711 is ratiometric — bridge excitation
+  = its reference — so the reference voltage cancels: full scale ±0.5·VREF/gain = ±2^23 counts). At gain 128:
+  3284.7 counts/N. ``k_plausibility`` — |K| outside 0.5…2 × |K_nom| → ``IMPLAUSIBLE`` (explicit operator
+  confirmation, recorded); no derivable nominal (unknown gain) → ``NOMINAL_UNKNOWN`` (check skipped, recorded).
+  No sign check: a negative K stays legal (wiring polarity).
 * ``fw_raw_limits`` (R4 TV-T): ``a = tare + f_hi/k``, ``b = tare + f_lo/k`` → ``(ceil(min(a, b)), floor(max(a, b)))``,
   rounded toward the tare (the FW trips no later than the force level); ``clamp_raw_limits`` clamps inward to the
   dictionary range (D-29 g, SAF-SW-002: safe side, earlier trip).
@@ -26,7 +35,7 @@ from typing import Any
 
 import numpy as np
 
-from bend_stand.calc.units import FS_N, G0
+from bend_stand.calc.units import CELL_SENS_MV_V, FS_N, G0, HX711_FULL_RANGE_COUNTS
 
 PASS_PCT = 0.1
 WARN_PCT = 0.5
@@ -35,6 +44,9 @@ EXTRAPOLATION_FACTOR = 3.0
 M1_MIN_FRAC_FS = 0.02
 MASS_RATIO_MIN = 1.5
 K_ZERO_FRAC = 0.01            # fit explains < 1 % of the force span → "K ≈ 0"
+WEIGHT_DETECT_STD = 10.0      # D-50 a: a weight point must move the raw value by ≥ 10 × std_zero …
+WEIGHT_DETECT_MIN_COUNTS = 50.0   # … and by at least 50 counts
+K_PLAUSIBLE_LO, K_PLAUSIBLE_HI = 0.5, 2.0   # D-50 a: |K| / |K_nom| outside → "K implausible" (confirmation)
 
 #: ``afe.gain_channel`` code → (channel, gain); ``afe.rate_sps`` code → SPS (params dict 5)
 AFE_GAIN = {0: ("A", 128), 2: ("A", 64), 1: ("B", 32)}
@@ -142,6 +154,68 @@ def load_calibration(raw_means: Sequence[float], masses_kg: Sequence[float], *, 
                          tuple(texts), pts)
 
 
+def weight_threshold_counts(std_zero_counts: float | None) -> float:
+    """D-50 a: minimum raw change of a weight point = max(10 × std_zero, 50 counts) (std unknown → 50)."""
+    s = float(std_zero_counts) if std_zero_counts is not None and math.isfinite(float(std_zero_counts)) else 0.0
+    return max(WEIGHT_DETECT_STD * abs(s), WEIGHT_DETECT_MIN_COUNTS)
+
+
+def weight_detected(raw_point: float, raw_zero: float, raw_prev: float | None,
+                    std_zero_counts: float | None) -> tuple[bool, str]:
+    """D-50 a (SW-CAL-006/007): ``(ok, text)`` — the weight point must differ from the zero point and from the
+    previous point (``raw_prev``; None or the zero point itself for the first weight) by ≥ the threshold."""
+    # Implements: SW-CAL-006, SW-CAL-007 (plausibility, D-50 a)
+    thr = weight_threshold_counts(std_zero_counts)
+    d_zero = abs(float(raw_point) - float(raw_zero))
+    d_prev = d_zero if raw_prev is None else abs(float(raw_point) - float(raw_prev))
+    if d_zero < thr or d_prev < thr:
+        which = "the zero point" if d_zero < thr else "the previous point"
+        return False, (f"weight not detected: raw change {min(d_zero, d_prev):.0f} counts from {which} < "
+                       f"{thr:.0f} counts (10 × std_zero, min 50) — hang the weight and re-take the point")
+    return True, ""
+
+
+def nominal_k(gain: int | float | None, *, sens_mv_v: float = CELL_SENS_MV_V, fs_n: float = FS_N) -> float | None:
+    """Nominal |K| (N/count) of the configured cell + HX711: ``fs_n / (sens/1000 · gain · 2^24)``; None when the
+    gain (or sensitivity / capacity) is unknown."""
+    try:
+        g, s, f = float(gain), float(sens_mv_v), float(fs_n)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(g) and g > 0 and math.isfinite(s) and s > 0 and math.isfinite(f) and f > 0):
+        return None
+    return f / (s / 1000.0 * g * HX711_FULL_RANGE_COUNTS)
+
+
+@dataclass(frozen=True)
+class KPlausibility:
+    status: str                    # OK | IMPLAUSIBLE | NOMINAL_UNKNOWN
+    k_nominal: float | None        # |K_nom| N/count
+    ratio: float | None            # |K| / |K_nom|
+    text: str = ""
+
+    def as_dict(self, confirmed: bool = False) -> dict[str, Any]:
+        """``plausibility`` block of the calibration file (D-50 a: the confirmation is recorded)."""
+        return {"k_status": self.status, "k_nominal_n_per_count": self.k_nominal, "k_ratio": self.ratio,
+                "k_range": [K_PLAUSIBLE_LO, K_PLAUSIBLE_HI], "confirmed": bool(confirmed),
+                "nominal_formula": "FS_N / (S_mV_V/1000 * gain * 2^24)", "text": self.text}
+
+
+def k_plausibility(k: float, k_nominal: float | None) -> KPlausibility:
+    """D-50 a (SW-CAL-007): |K| within 0.5…2 × |K_nom| → OK, else IMPLAUSIBLE (operator confirmation); no nominal →
+    NOMINAL_UNKNOWN ("nominal unknown", check skipped). The sign of K is not checked."""
+    # Implements: SW-CAL-007 (K plausibility, D-50 a)
+    if k_nominal is None or not math.isfinite(k_nominal) or k_nominal == 0:
+        return KPlausibility("NOMINAL_UNKNOWN", None, None, "nominal unknown: K plausibility not checked")
+    r = abs(float(k)) / abs(float(k_nominal))
+    if not math.isfinite(r) or not K_PLAUSIBLE_LO <= r <= K_PLAUSIBLE_HI:
+        return KPlausibility("IMPLAUSIBLE", abs(float(k_nominal)), r,
+                             f"K implausible: |K| = {abs(k):.6g} N/count is {r:.3g} × the nominal "
+                             f"{abs(k_nominal):.6g} N/count of the configured cell / AFE (expected 0.5…2 ×) — "
+                             "check the weights, the cell and the AFE gain")
+    return KPlausibility("OK", abs(float(k_nominal)), r)
+
+
 def mass_rules(masses_kg: Sequence[float]) -> tuple[list[str], list[str]]:
     """Weight masses of the points after the zero point → ``(errors, warnings)`` (SW-CAL-006, D-22)."""
     errors: list[str] = []
@@ -215,4 +289,5 @@ def effective_force_n(raw: int, k: float, tare_raw: float) -> float:
 
 
 __all__ = ["LoadCalResult", "load_calibration", "mass_rules", "low_span", "extrapolated", "afe_block", "afe_matches",
-           "fw_raw_limits", "clamp_raw_limits", "effective_force_n", "PASS_PCT", "WARN_PCT", "AFE_GAIN", "AFE_RATE"]
+           "fw_raw_limits", "clamp_raw_limits", "effective_force_n", "PASS_PCT", "WARN_PCT", "AFE_GAIN", "AFE_RATE",
+           "weight_threshold_counts", "weight_detected", "nominal_k", "k_plausibility", "KPlausibility"]

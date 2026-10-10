@@ -52,6 +52,16 @@ RAW_STATE_OK, RAW_STATE_SATURATED, RAW_STATE_NO_DATA, RAW_STATE_SETTLING = 0, 1,
 VSTATE_OK, VSTATE_EXTRAPOLATED, VSTATE_INVALID, VSTATE_NO_DATA = 0, 1, 2, 3
 
 
+
+def _median(values: collections.deque[int]) -> float:
+    """Median of the last ≤ 16 sample periods in pure Python (OBS-P3-04: ``np.median`` on every DATA frame left
+    numpy allocations behind — ≈ 0.6 MB/min in a 10 min tracemalloc diff — and costs ≈ 10 × more)."""
+    v = sorted(values)
+    n = len(v)
+    m = n // 2
+    return float(v[m]) if n % 2 else (v[m - 1] + v[m]) / 2.0
+
+
 @dataclass
 class PipelineCounters:
     data_frames: int = 0
@@ -65,6 +75,7 @@ class PipelineCounters:
     bad_payload: int = 0
     async_overflow: int = 0
     epochs: int = 0
+    dispatch_errors: int = 0                    # SWR-02: frames / handlers that raised (each one also a liveness fault)
 
     def as_linkstats(self) -> LinkStats:
         return LinkStats(**{f.name: getattr(self, f.name) for f in fields(self)
@@ -180,6 +191,21 @@ class Pipeline:
         with self._cv:
             return len(self._q)
 
+    def oldest_unprocessed_age_ns(self, now_ns: int) -> int:
+        """SWR-01 (SW_design §4.6): age of the oldest received but not yet evaluated frame (0 = queue empty)."""
+        with self._cv:
+            if not self._q:
+                return 0
+            t = self._q[0].t_ns
+        return max(0, now_ns - int(t)) if t is not None else 0
+
+    def _dispatch_failed(self, what: str, exc: BaseException) -> None:
+        """SWR-02: one failing frame / handler never drops the rest of the batch; counted and reported as a liveness
+        fault (the backend's reaction stops motion, SWR-01)."""
+        self.counters.dispatch_errors += 1
+        log.error("pipeline %s failed: %s", what, exc, exc_info=exc)
+        self.liveness.record_fault("pipeline", f"{what} failed: {type(exc).__name__}: {exc}")
+
     # ---- thread -------------------------------------------------------------------------------------------
     def start(self) -> None:
         if self._thread is not None or self.clock.is_lockstep:
@@ -216,11 +242,14 @@ class Pipeline:
                 batch = []
                 while self._q and len(batch) < 64:
                     batch.append(self._q.popleft())
-            for fr in batch:
-                if fr.type == pg.AsyncType.DATA:
-                    self._data(fr)
-                elif fr.type == pg.AsyncType.EVENT:
-                    self._event(fr)
+            for fr in batch:                      # Implements: IF-006, SAF-SW-001 (SWR-02: per-frame isolation)
+                try:
+                    if fr.type == pg.AsyncType.DATA:
+                        self._data(fr)
+                    elif fr.type == pg.AsyncType.EVENT:
+                        self._event(fr)
+                except Exception as exc:  # noqa: BLE001 — the next frames of the batch are still processed
+                    self._dispatch_failed(f"frame type 0x{fr.type:02X}", exc)
                 n += 1
         self.liveness.beat("pipeline", self.clock.monotonic_ns() if now_ns is None else now_ns)
         return n
@@ -236,6 +265,8 @@ class Pipeline:
             gap = (fr.seq - self.prev_event_seq - 1) & 0xFF
             if gap and ev.code != pg.Event.BOOT:
                 self.counters.events_lost += gap
+                self.events.log(f"{gap} FW EVENT(s) lost (EVENT SEQ {self.prev_event_seq} → {fr.seq})",
+                                logging.WARNING, kind="FW_EVENTS_LOST")      # SWR-36: incident log
                 cb = self.on_events_lost
                 if cb is not None:
                     cb()
@@ -244,12 +275,21 @@ class Pipeline:
             self.new_epoch()
         cb2 = self.on_fw_event
         if cb2 is not None:
-            cb2(ev)
+            try:
+                cb2(ev)
+            except Exception as exc:  # noqa: BLE001 — sinks and the bus still get the EVENT (SWR-02)
+                self._dispatch_failed(f"EVENT {ev.name} handler", exc)
         fe = FwEvent(fr.seq, ev.t_us, ev.code, ev.name, ev.arg, P.event_arg_name(ev.code, ev.arg), ev.value,
                      ev.value2, fr.t_ns)
         for s in self.event_sinks:
-            s(fe)
-        self.events.publish("fw.event", fe)
+            try:
+                s(fe)
+            except Exception as exc:  # noqa: BLE001
+                self._dispatch_failed(f"EVENT {ev.name} sink", exc)
+        try:
+            self.events.publish("fw.event", fe)
+        except Exception as exc:  # noqa: BLE001
+            self._dispatch_failed(f"EVENT {ev.name} publish", exc)
 
     def _data(self, fr: Frame) -> None:
         p = fr.payload
@@ -286,7 +326,7 @@ class Pipeline:
                 self.t0_us = u.t_u
                 self.dev_offset_us = -u.t_u
             else:
-                med = int(np.median(self.periods)) if self.periods else 12_500
+                med = int(_median(self.periods)) if self.periods else 12_500
                 self.dev_offset_us = self.last_dev_us + med - u.t_u
         self.prev_t_raw, self.prev_t_u = s.t_us, u.t_u
         dev_us = u.t_u + self.dev_offset_us
@@ -307,12 +347,12 @@ class Pipeline:
         if not no_data:
             if self.prev_sample_t_u is not None and g.kind in ("next", "lost"):
                 dt = u.t_u - self.prev_sample_t_u
-                if g.kind == "next" and self.periods and dt > 1.5 * float(np.median(self.periods)):
-                    self.counters.afe_missed += max(1, round(dt / float(np.median(self.periods))) - 1)
+                if g.kind == "next" and self.periods and dt > 1.5 * _median(self.periods):
+                    self.counters.afe_missed += max(1, round(dt / _median(self.periods)) - 1)
                 elif g.kind == "next" and dt > 0:
                     self.periods.append(dt)
             self.prev_sample_t_u = u.t_u
-        rate = 1e6 / float(np.median(self.periods)) if len(self.periods) >= 4 else None
+        rate = 1e6 / _median(self.periods) if len(self.periods) >= 4 else None
         self.counters.data_frames += 1
         # scale + derived (M3)
         missed = self.counters.afe_missed != missed0
@@ -324,8 +364,8 @@ class Pipeline:
         if sf is not None:                             # act first (may write STOP), publish after (KD-05)
             try:
                 sf(dr)
-            except Exception:  # noqa: BLE001 - the pipeline must survive
-                log.exception("safety stage failed")
+            except Exception as exc:  # noqa: BLE001 - the pipeline must survive; SAF-SW-001 not evaluated → fault
+                self._dispatch_failed("safety stage", exc)
         # ring row
         row = np.full(len(RING_KEYS), np.nan, np.float32)
         row[0] = np.nan if no_data else s.afe_raw
@@ -350,8 +390,8 @@ class Pipeline:
         for sink in self.sinks:
             try:
                 sink(dr)
-            except Exception:  # noqa: BLE001
-                log.exception("pipeline sink failed")
+            except Exception as exc:  # noqa: BLE001
+                self._dispatch_failed("DATA sink", exc)
 
     def latest_copy(self) -> Latest:
         with self._lock:

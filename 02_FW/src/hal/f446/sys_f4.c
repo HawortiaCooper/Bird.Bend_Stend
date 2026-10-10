@@ -33,6 +33,8 @@ extern uint32_t end;                 /* ldscript: start of ._user_heap_stack (he
 static uint8_t   s_cause;
 static uint32_t *s_lo;
 static uint32_t *s_hi;
+static const uint32_t *s_low;            /* lowest used (non-painted) word found so far (FWR-06) */
+#define STACK_SCAN_WORDS 256u            /* words checked per call below s_low (1 KB, ~15 us) */
 
 void sys_capture_reset_cause(void)
 {
@@ -62,19 +64,30 @@ void sys_stack_paint(void)
     for (p = s_lo; p < s_hi; p++) {
         *p = PAINT;
     }
+    s_low = s_hi;
 }
 
+/* NFR-005 / NFR-006 (review FWR-06): bounded high-water scan. The stack grows down from s_hi; the
+ * lowest non-painted word found so far (s_low) only moves down, so each call checks the
+ * STACK_SCAN_WORDS words below it (new usage appears there; an unwritten gap inside a frame is
+ * bridged up to 1 KB, more than any frame of this FW, worst-case stack ~3 KB, review OBS-R-2) and
+ * returns at most ~15 us later instead of scanning the whole ~120 KB painted area (~1.7 ms). The
+ * field saturates at 0xFFFF as before. */
 uint16_t hal_stack_free_min(void)
 {
-    const uint32_t *p = s_lo;
+    const uint32_t *p, *lim;
     uint32_t b;
     if (s_lo == NULL) {
         return 0u;
     }
-    while (p < s_hi && *p == PAINT) {
-        p++;
+    lim = ((uint32_t)(s_low - s_lo) > STACK_SCAN_WORDS) ? s_low - STACK_SCAN_WORDS : s_lo;
+    for (p = lim; p < s_low; p++) {
+        if (*p != PAINT) {
+            s_low = p;                       /* deepest use so far */
+            break;
+        }
     }
-    b = (uint32_t)((uintptr_t)p - (uintptr_t)s_lo);
+    b = (uint32_t)((uintptr_t)s_low - (uintptr_t)s_lo);
     return (b > 0xFFFFu) ? 0xFFFFu : (uint16_t)b;
 }
 

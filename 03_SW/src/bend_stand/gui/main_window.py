@@ -70,6 +70,7 @@ from bend_stand.gui.dialogs.tare_popup import TarePopup
 from bend_stand.gui.mode_state import no_specimen
 from bend_stand.gui.plots.plot_dock import PlotDock
 from bend_stand.gui.refresh import RefreshScheduler
+from bend_stand.gui.resources import app_icon
 from bend_stand.gui.stop import set_stop_handler
 from bend_stand.gui.settings import KEY_LAST_TAB, KEY_UNITS
 from bend_stand.gui.tabs.calibration_tab import CalibrationTab
@@ -97,6 +98,11 @@ log = logging.getLogger(__name__)
 
 TAB_NAMES = ("Connection & Config", "Safety limits", "Test marks", "Manual", "Calibration & Tare", "Sequence",
              "Report")
+
+
+def tab_label(name: str) -> str:
+    """Tab text with "&" escaped: a bare "&" is a Qt mnemonic and would show "Connection _Config"."""
+    return name.replace("&", "&&")
 PARAMS_EVERY = 10                    # board values for the K1 chip (drv.k1_check_enable) every 10th tick
 SAMPLE_WINDOWS_S = (0.1, 0.5, 1.0, 2.0, 5.0, 10.0)
 TOAST_MS = 6000
@@ -107,6 +113,17 @@ KEY_PLOT_LAYOUT = "plots/layout"     # SW-RT-006 / SW-RT-001: panes + curves per
 KEY_DOCK_STATE = "main/state"        # dock arrangement (QMainWindow.saveState)
 PLOT_LAYOUT_VERSION = 1
 LINK_LED = {"CONNECTED": "green", "CONNECTING": "yellow", "DEGRADED": "yellow", "LOST": "red"}
+#: link states in which a new recording may start (OI-UM-05 b): the backend's ``record_start`` gate only WARNs
+#: "stream off", so without a link it would create an empty folder without board info (SW-ACQ-002). A running
+#: recording can always be stopped (also after a link loss).
+RECORD_LINK_STATES = frozenset({"CONNECTED", "DEGRADED"})
+RECORD_NO_LINK_TEXT = "not connected — connect to the board first (a recording needs the data stream)"
+
+
+def link_state_of(status: Any) -> str:
+    link = getattr(status, "link", None)
+    st = getattr(link, "state", "DISCONNECTED")
+    return str(getattr(st, "value", st))
 
 
 SESSION_FILTER = "Sessions (*.bbsession.json);;All files (*)"
@@ -192,6 +209,9 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.setObjectName("mainWindow")
         self.setWindowTitle("Bird Bend Stand")
+        icon = app_icon()                                     # F-B-PKG-01 (also when no app-wide icon is set)
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.bridge = QtBridge(backend, self)
         self._closing = False
         self._force_close = False
@@ -232,6 +252,7 @@ class MainWindow(QMainWindow):
             self.connection_tab.update_link_line(st)
         except Exception:  # noqa: BLE001
             log.warning("initial status() failed", exc_info=True)
+        self.show_session_issues("Session at start")
         if start_refresh:
             self.refresh.start()
         self.resize(1500, 880)
@@ -361,7 +382,7 @@ class MainWindow(QMainWindow):
         self.tabs.setObjectName("mainTabs")
         self.connection_tab = ConnectionTab(self.backend, self.bridge, self.tabs)
         self.connection_tab.message.connect(self.toast)
-        self.tabs.addTab(self.connection_tab, TAB_NAMES[0])
+        self.tabs.addTab(self.connection_tab, tab_label(TAB_NAMES[0]))
         self.limits_tab = LimitsTab(self.backend, self.bridge, self.tabs)
         self.marks_tab = MarksTab(self.backend, self.bridge, self.tabs)
         self.manual_tab = ManualTab(self.backend, self.bridge, self.tabs)
@@ -369,12 +390,12 @@ class MainWindow(QMainWindow):
         for name, tab in zip(TAB_NAMES[1:5], (self.limits_tab, self.marks_tab, self.manual_tab,
                                                self.calibration_tab), strict=True):
             tab.message.connect(self.toast)
-            self.tabs.addTab(tab, name)
+            self.tabs.addTab(tab, tab_label(name))
         self.sequence_tab = SequenceTab(self.backend, self.bridge, self.tabs)
         self.report_tab = ReportTab(self.backend, self.bridge, self.tabs)
         for name, tab in zip(TAB_NAMES[5:], (self.sequence_tab, self.report_tab), strict=True):
             tab.message.connect(self.toast)
-            self.tabs.addTab(tab, name)
+            self.tabs.addTab(tab, tab_label(name))
         self.sequence_tab.stopResult.connect(self._show_stop_result)
         self.sequence_tab.resumeResult.connect(self._on_resume_result)
         self.manual_tab.resumeRequested.connect(lambda: self._on_resume_result(self.backend.resume("manual")))
@@ -460,6 +481,8 @@ class MainWindow(QMainWindow):
         b.channelsChanged.connect(lambda _r: self._reload_channels())
         b.recordingEvent.connect(self._on_recording_event)
         b.safetyEvent.connect(self._on_safety_event)
+        b.boardChanged.connect(self._on_board_changed)
+        b.hotkeyEvent.connect(self._on_hotkey_event)
 
     # ================================================================== refresh stages
     def _on_status(self, status: Any) -> None:
@@ -564,8 +587,13 @@ class MainWindow(QMainWindow):
             self.record_button.setChecked(rec)
         cs = gating.control_state(gating.gate_of(st, GateId.RECORD_STOP if rec else GateId.RECORD_START),
                                   motion=False, base_tooltip="Stop recording" if rec else "Start recording")
-        self.record_button.setEnabled(cs.enabled)
-        self.record_button.setToolTip(cs.tooltip)
+        enabled, tip = cs.enabled, cs.tooltip
+        if not rec and link_state_of(st) not in RECORD_LINK_STATES:      # Implements: SW-ACQ-002 (OI-UM-05 b)
+            enabled, tip = False, f"Start recording: {RECORD_NO_LINK_TEXT}"
+        if self.record_button.isEnabled() != enabled:
+            self.record_button.setEnabled(enabled)
+        if self.record_button.toolTip() != tip:
+            self.record_button.setToolTip(tip)
         # link widget
         state = str(getattr(st.link.state, "value", st.link.state))
         rate = st.stream.rate_sps
@@ -772,6 +800,47 @@ class MainWindow(QMainWindow):
                                                cleared=record.topic != "safety.trip")   # B's dedicated clear topic
             self.toast(text, severity)
 
+    def _on_board_changed(self, record: Any) -> None:
+        """Implements: SAF-SW-005, SW-LIM-001 (B6-33 (6), SWR-19) — another board after a reconnect: acknowledgement
+        C-15 (STOP in the dialog, Enter / Space never confirm; acknowledging only closes it — nothing is sent)."""
+        uid = str(getattr(record, "payload", "") or "?")
+        text = (f"A different board is connected (UID {uid}). The test travel zero was reset to the machine zero. "
+                "Check the SW travel limits, the travel and load calibration and tare again before the next test.")
+        self.toast(f"Different board connected (UID {uid}): test travel zero reset", "warn")
+        old = self.dialogs.get("board")
+        if old is not None and _alive(old) and old.isVisible():
+            old.text_label.setText(text)
+            old.raise_()
+            return
+        dlg = make_confirm(self, "C-15", text=text)
+        dlg.cancel_button.setText("Close")
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.dialogs["board"] = dlg
+        dlg.open()
+
+    def _on_hotkey_event(self, record: Any) -> None:
+        """Implements: SW-STOP-002 (B6-33 (5), SWR-09) — the global Pause/Break hotkey stopped responding: warn on the
+        edge; the KEY chip turns red "NOT RESPONDING" and the app-level shortcut takes over (§5.3)."""
+        if getattr(record, "topic", "") != "hotkey.state":
+            return
+        p = getattr(record, "payload", None)
+        if getattr(p, "mode", "") == "UNAVAILABLE" and "not responding" in str(getattr(p, "reason", "")):
+            self.toast("Pause/Break key not responding — it works only while this window is focused; use the "
+                       "on-screen STOP or the red E-stop", "error")
+
+    def show_session_issues(self, context: str = "Session") -> list[str]:
+        """Implements: SW-LIM-003 (B6-33 (2)) — issues of the last session load (``session.load_issues``: e.g.
+        LOAD_LIMITS_RESTORED, a broken file kept as ``.bad``) as a toast + Event-log rows; returns the texts."""
+        issues = list(getattr(getattr(self.backend, "session", None), "load_issues", None) or ())
+        texts = [str(getattr(i, "text", i)) for i in issues]
+        for i, t in zip(issues, texts, strict=True):
+            sev = "error" if str(getattr(i, "severity", "")) == "ERROR" else "warn"
+            self.event_log.add_text("GUI", str(getattr(i, "code", "") or "SESSION"), f"{context}: {t}", sev)
+        if texts:
+            worst = "error" if any(str(getattr(i, "severity", "")) == "ERROR" for i in issues) else "warn"
+            self.toast(f"{context}: " + "; ".join(texts), worst)
+        return texts
+
     def open_clear_stop(self) -> None:
         dlg = self.dialogs.get("clear")
         if dlg is None or not _reusable(dlg):
@@ -820,6 +889,9 @@ class MainWindow(QMainWindow):
         st = self.backend.status()
         rec = st.recording.state == "RECORDING"
         self.record_button.setChecked(rec)
+        if not rec and link_state_of(st) not in RECORD_LINK_STATES:      # Implements: SW-ACQ-002 (OI-UM-05 b)
+            self.toast(f"Record start refused: {RECORD_NO_LINK_TEXT}", "warn")
+            return
         gate = self.backend.record_stop() if rec else self.backend.record_start()
         if not gate.ok:
             self.toast(f"Record {'stop' if rec else 'start'} refused: {gating.refusal_text(gate)}", "warn")
@@ -928,10 +1000,12 @@ class MainWindow(QMainWindow):
             return
         self.limits_tab.revert()
         self.manual_tab._load_session_defaults()                         # noqa: SLF001
+        self.sequence_tab.mark_pull_dir(None)
         unit = getattr(s, "display_unit", None)
         if unit in FORCE_UNITS:
             self.set_force_unit(unit)
-        self.toast(f"Session loaded: {path}", "info")
+        if not self.show_session_issues(f"Session {path}"):
+            self.toast(f"Session loaded: {path}", "info")
 
     def save_session(self) -> None:
         """File ▸ Save session as… (SW-LIM-003): ``session.save(path)`` (limits, speeds, unit; never tare / mode)."""

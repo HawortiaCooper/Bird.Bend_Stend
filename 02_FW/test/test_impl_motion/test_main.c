@@ -5,11 +5,13 @@
  * Verifies: FW-MOT-001 (DIR before the first edge), FW-MOT-002, FW-MOT-003, FW-MOT-004, FW-MOT-005,
  *           FW-MOT-007, FW-MOT-008, SAF-FW-001, SAF-FW-002, SAF-FW-003, SAF-FW-004, SAF-FW-015,
  *           SAF-FW-016, SAF-FW-023, DEF-P1-04 (hold), DEF-M3-01 (no stale hold), D-47 a (link silence
- *           clears VALID in every state)
+ *           clears VALID in every state), SAF-FW-005 a / SAF-FW-013 (review FWR-01 / FWR-16 / FWR-17: no
+ *           start after a fixed reaction in the gate window, command and tick paths)
  */
 #include <unity.h>
 
 #include "hal_step.h"
+#include "hal_sys.h"
 #include "motion_util.h"
 #include "stepgen.h"
 
@@ -449,6 +451,80 @@ static void test_link_silence_clears_valid_idle(void)
     TEST_ASSERT_EQUAL_HEX8(0u, last_data()->payload[5] & DF_VALID);
 }
 
+/* FWR-01 / FWR-16 / FWR-17 (core level, review OBS-RC-2): an END edge whose fixed reaction (idle CLEAN
+ * halt, stop generation bumped) and record happened but which the tick has not folded yet: a JOG toward
+ * END is refused (the pending record counts as an active input), no pulse, the next tick latches it */
+static void test_gate_pending_edge_refuses_start(void)
+{
+    const fake_frame_t *r;
+    uint32_t rise0;
+    mu_enable();
+    g_fw.homed = true;
+    rise0 = fake_rise_n;
+    fake_input_set(2u, true);                         /* END: HAL reaction + record, no tick yet */
+    r = mu_jog(2000, 0u, PROTO_JOG_NO_BOUND);
+    TEST_ASSERT_EQUAL_UINT8(ST_E_STATE, h_status_of(r));
+    TEST_ASSERT_TRUE((h_detail_of(r) & BLOCK_LIMIT) != 0u);
+    mu_run(20u);
+    TEST_ASSERT_EQUAL_UINT32(rise0, fake_rise_n);
+    TEST_ASSERT_TRUE(g_fw.lat.limit_end);
+}
+
+/* FWR-01 (core level): a fixed reaction after the gate capture (here a bare idle halt without a record)
+ * makes hw_start() stop the timer it has just armed - before the first edge; with no record to fold the
+ * stopped segment ends as STEP_FAULT (fail-safe), never as pulses */
+static void test_gate_generation_refuses_start(void)
+{
+    uint32_t rise0;
+    mu_enable();
+    g_fw.homed = true;
+    rise0 = fake_rise_n;
+    CRIT_BEGIN(HAL_CRIT_TICK);
+    motion_gate_capture();                            /* the command's capture before its check */
+    (void)hal_step_stop_now();                        /* a level-0/1 halt in the window (idle) */
+    motion_move_abs(10000, 5000u, 0u);
+    CRIT_END();
+    TEST_ASSERT_FALSE(hal_step_running());            /* armed and stopped at once */
+    mu_run(10u);
+    TEST_ASSERT_EQUAL_UINT32(rise0, fake_rise_n);
+    TEST_ASSERT_TRUE((g_fw.lat.faults & FAULT_STEP_FAULT) != 0u);
+    TEST_ASSERT_FALSE(motion_active());
+}
+
+/* FWR-17: the jog reversal restarts in the tick after standstill; a START edge (the new direction's
+ * switch) arrives inside that tick after safety_tick() took the records (injected at the sniffer's
+ * hal_uart_peek() in link_tick()): the restart must not emit a pulse before the next tick folds it */
+static void inject_start_edge(void) { fake_input_set(1u, true); }
+
+static void test_tick_restart_after_edge_inside_tick(void)
+{
+    uint32_t k, rise0 = 0u;
+    bool armed = false;
+    h_set_param(PID_LIMITS_SOFT_MIN_UM, PARAM_T_I32, (uint32_t)-10000);
+    h_set_param(PID_MOTION_A_MAX_UM_S2, PARAM_T_U32, 10000000u);
+    mu_enable();
+    g_fw.homed = true;
+    h_expect_ok(mu_jog(2000, 0u, PROTO_JOG_NO_BOUND));
+    mu_run(50u);
+    h_expect_ok(mu_jog(-2000, 0u, PROTO_JOG_NO_BOUND));   /* decelerate, then restart toward START */
+    for (k = 0u; k < 500u && !armed; k++) {
+        fake_advance_tk(1000u * (uint64_t)FAKE_F_TICK / 1000000u);
+        if (!hal_step_running() && motion_active()) {
+            rise0 = fake_rise_n;
+            fake_peek_hook = inject_start_edge;       /* fires inside the restart tick */
+            armed = true;
+        }
+        core_tick_1ms();
+        app_loop();
+    }
+    TEST_ASSERT_TRUE_MESSAGE(armed, "standstill before the restart not reached");
+    TEST_ASSERT_NULL(fake_peek_hook);                 /* the hook ran in that tick */
+    mu_run(10u);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(rise0, fake_rise_n, "PUL edges after the START edge (FWR-17)");
+    TEST_ASSERT_TRUE(g_fw.lat.limit_start);
+    TEST_ASSERT_FALSE(motion_active());
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -467,5 +543,8 @@ int main(void)
     RUN_TEST(test_step_fault);
     RUN_TEST(test_link_watchdog);
     RUN_TEST(test_link_silence_clears_valid_idle);
+    RUN_TEST(test_gate_pending_edge_refuses_start);
+    RUN_TEST(test_gate_generation_refuses_start);
+    RUN_TEST(test_tick_restart_after_edge_inside_tick);
     return UNITY_END();
 }

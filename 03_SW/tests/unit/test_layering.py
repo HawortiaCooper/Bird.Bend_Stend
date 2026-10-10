@@ -20,7 +20,8 @@ PKG = Path(bend_stand.__file__).resolve().parent
 QT = ("PySide6", "shiboken6", "pyqtgraph", "PyQt5", "PyQt6")
 #: leaf modules of ``core`` that ``io`` and ``calc`` may import (generated name/param tables, exceptions)
 CORE_LEAVES = {"bend_stand.core.params_gen", "bend_stand.core.protocol_gen", "bend_stand.core.errors",
-               "bend_stand.core.model", "bend_stand.core.clock"}
+               "bend_stand.core.model", "bend_stand.core.clock",
+               "bend_stand.core.timing"}                      # OBS-P3-01: the sim server sets the timer resolution
 
 
 def _modules(sub: str) -> list[Path]:

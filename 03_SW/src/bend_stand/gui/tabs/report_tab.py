@@ -12,17 +12,22 @@
   SW-REP-001); the result paths are listed.
 * [Open HTML] opens the report in the **system browser** (``QDesktopServices.openUrl``, GQ-13); [Open folder] /
   [Open CSV] likewise. :data:`OPEN_URL_HOOK` is a test seam.
+* **Recordings folder** (OI-UM-05 c) — shown read-only (selectable text, no editing; changing the folder is a later
+  decision) with [Open recordings folder] (``QDesktopServices``). The path is ``reports.root()`` (GRQ-B-31 b) via
+  :func:`recordings_root_of` (local lookup only as a fallback).
 
 The GUI computes nothing: statistics, flags and files are the backend's (P1).
 
 Implements: SW-REP-001 (build CSV + JSON + HTML, open in the browser), SW-REP-002 (step result table, flags),
-SW-REP-003 (re-apply calibration / tare), SW-REP-004 (3-point-bend option), SW-ACQ-002 (recordings list)
+SW-REP-003 (re-apply calibration / tare), SW-REP-004 (3-point-bend option), SW-ACQ-002 (recordings list,
+recordings folder shown read-only)
 """
 from __future__ import annotations
 
 import logging
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -67,6 +72,35 @@ def _err_text(exc: BaseException) -> str:
     return str(getattr(exc, "user_text", "") or exc or type(exc).__name__)
 
 
+def default_recordings_root() -> Path:
+    """Mirror of ``core.paths.default_recordings_root`` (the GUI may not import ``core.paths``, layering rule G-01);
+    ``tests/gui/test_oi_um_05.py`` asserts both stay equal."""
+    return Path.home() / "Documents" / "BirdBendStand" / "recordings"
+
+
+def recordings_root_of(backend: Any) -> str:
+    """Folder the backend writes recordings to — display only (OI-UM-05 c): B's public ``reports.root()``
+    (GRQ-B-31 b, the folder ``record_start`` writes to). Fallback only when it is missing or fails (older backend,
+    fakes without it): the settings override, the session value, the default ``Documents/BirdBendStand/recordings``
+    (same precedence as the backend)."""
+    root_fn = getattr(getattr(backend, "reports", None), "root", None)
+    if callable(root_fn):
+        try:
+            r = root_fn()
+            if r:
+                return str(r)
+        except Exception:  # noqa: BLE001 - display only
+            log.debug("reports.root() failed", exc_info=True)
+    r = getattr(getattr(backend, "settings", None), "recordings_root", None)
+    if isinstance(r, (str, os.PathLike)) and str(r):
+        return str(r)
+    try:
+        r = backend.session.get().recordings_root
+    except Exception:  # noqa: BLE001 - display only
+        r = None
+    return str(r) if r else str(default_recordings_root())
+
+
 def open_url(path_or_url: str) -> bool:
     hook = OPEN_URL_HOOK[0]
     if hook is not None:
@@ -95,6 +129,7 @@ class ReportTab(QWidget):
             bridge.reportReady.connect(self._on_report_ready)
         force_unit().changed.connect(self._on_unit)
         self._shown_once = False
+        self.update_root()
 
     # ================================================================== construction
     def _build(self) -> None:
@@ -109,6 +144,19 @@ class ReportTab(QWidget):
         self.refresh_button.setObjectName("reportRefresh")
         self.refresh_button.clicked.connect(self.refresh_list)
         row.addWidget(self.refresh_button)
+        tl.addLayout(row)
+        row = QHBoxLayout()                                   # Implements: SW-ACQ-002 (folder shown, OI-UM-05 c)
+        row.addWidget(QLabel("Recordings folder:", top))
+        self.root_edit = QLineEdit(top)
+        self.root_edit.setObjectName("recordingsRoot")
+        self.root_edit.setReadOnly(True)
+        self.root_edit.setToolTip("Where recordings and reports are written (read-only here)")
+        row.addWidget(self.root_edit, 1)
+        self.root_button = QPushButton("Open recordings folder", top)
+        self.root_button.setObjectName("reportOpenRoot")
+        self.root_button.setAutoDefault(False)
+        self.root_button.clicked.connect(self.open_root)
+        row.addWidget(self.root_button)
         tl.addLayout(row)
         self.rec_table = QTableWidget(0, len(REC_COLUMNS), top)
         self.rec_table.setObjectName("recordingsTable")
@@ -214,7 +262,25 @@ class ReportTab(QWidget):
             self._shown_once = True
             self.refresh_list()
 
+    def update_root(self) -> str:
+        root = recordings_root_of(self._backend)
+        if self.root_edit.text() != root:
+            self.root_edit.setText(root)
+            self.root_edit.setCursorPosition(0)
+        return root
+
+    def open_root(self) -> None:
+        """[Open recordings folder] → system file browser (``QDesktopServices``); never creates or changes it."""
+        root = self.update_root()
+        if not os.path.isdir(root):
+            self.message.emit(f"Recordings folder {root} does not exist yet — it is created with the first recording",
+                              "info")
+            return
+        if not open_url(root):
+            self.message.emit(f"Could not open {root}", "warn")
+
     def refresh_list(self) -> None:
+        self.update_root()
         keep = self.selected_folder()
         try:
             items = self._backend.reports.list_recordings(None)

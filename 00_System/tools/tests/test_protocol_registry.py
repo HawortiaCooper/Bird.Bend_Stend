@@ -328,11 +328,29 @@ def test_mul_bound_at_position() -> None:
 
 def test_state_schema() -> None:
     """F-B-25: state keys versioned and stable (v0.5: stop_btn_* kept but never set, D-36)."""
-    assert CHECK["state_schema"] == cc.STATE_SCHEMA == 3                   # v0.7: + unhomed_origin_um (D-43 b)
-    assert list(CHECK["state_defaults"])[-2:] == ["paused", "unhomed_origin_um"]
-    assert len(CHECK["state_defaults"]) == 23 and CHECK["state_defaults"]["unhomed_origin_um"] == 0
-    for v in CHECK["vectors"]:
+    assert CHECK["state_schema"] == cc.STATE_SCHEMA == 4                   # v0.7.5: + ena_on (D-50 c, OI-FW-50)
+    assert list(CHECK["state_defaults"])[-3:] == ["paused", "unhomed_origin_um", "ena_on"]
+    assert len(CHECK["state_defaults"]) == 24 and CHECK["state_defaults"]["unhomed_origin_um"] == 0
+    assert CHECK["state_defaults"]["ena_on"] is True
+    for v in CHECK["vectors"] + CHECK["hw_meas_vectors"]:
         assert set(v["state"]) <= set(CHECK["state_defaults"]), v["name"]
+        st = {**CHECK["state_defaults"], **v["state"]}
+        estop = st["estop_latched"] or st["estop_input_open"]
+        assert not (estop and st["ena_on"]), v["name"]                   # an E-stop always disables ENA
+        assert st["ena_on"] or estop or st["motion_state"] == "NOT_ENABLED", v["name"]
+
+
+def test_fwr09_static_level_pul_needs_ena_disabled() -> None:
+    """D-50 c / FWR-09 (ICD v0.7.5 App. C op 8): STATIC_LEVEL sel PUL refused while ENA holds; DIR allowed."""
+    hv = {v["name"]: v for v in CHECK["hw_meas_vectors"]}
+    meas_state = rc.names_to_bits(["MEAS_STATE"], rc.BLOCK)
+    exp = {"meas_static_pul_ena_holding": ("E_STATE", meas_state), "meas_static_dir_ena_holding": ("OK", 0),
+           "meas_static_pul_after_disable": ("OK", 0), "meas_static_not_enabled": ("OK", 0)}
+    for n, want in exp.items():
+        e = hv[n]["expect"]
+        assert (e["status"], e["detail"]) == want, n
+    assert list(hv)[-3:] == ["meas_static_pul_ena_holding", "meas_static_dir_ena_holding",
+                             "meas_static_pul_after_disable"]                  # appended last: earlier SEQs unchanged
 
 
 def test_units_vectors_r4_anchor() -> None:

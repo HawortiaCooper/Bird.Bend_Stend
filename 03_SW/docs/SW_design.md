@@ -2,7 +2,7 @@
 
 | Item | Value |
 |---|---|
-| Version | **0.6 — M4 (Sequencer) backend** (§22c work breakdown + as built, §15.5f API delta B6-01…B6-23 for D). **0.5.1 — M3 gate fix (SWD-M3-01, MC3-4)**. **0.5 — M3 (SW application) backend** (§22b work breakdown, §15.5e API delta B5-01…17 for D). **0.4.1 — M2 close-out** (SWD-M2-01…03, MC2-4, D-41…D-43; §22a). **0.4 — M2 (Sensor & motion) backend + M1 close-out** (ICD v0.5 / v0.6 decode, SRS v0.5.1, D-36…D-39; §22a, §15.5d). Earlier: **0.3.1 — DRAFT for the P1 gate** (aligned to **ICD v0.4 / v0.4.1** (D-34), SRS v0.3, D-29…D-34, SW_test_plan SWD-P1-01…18 / C1–C7; v0.2 answered GRQ-B-01…18) |
+| Version | **0.6.8 — review residuals SWR-29…36** (D-53 a no-specimen exit, §15.5f B6-34). **0.6.7 — P3 perf findings** (SWD-P3-01 recorder, OBS-P3-01 / 04, liveness filter, diagnostic log sizes). **0.6.6 — SW review fixes** (SW_code_review v1.1 SWR-01…28 except the packaging items, D-53, §15.5f B6-33, §22c). **0.6.5 — review fixes SWR-11/14/23/24/27** (§14 log file, §24 locks; B packaging share). **0.6.4 — load-calibration plausibility** (D-50 a, §9.4, §15.5f B6-32). **0.6.2 — coverage + M4 notes + manual items** (§22c post-gate revision, §15.5f B6-24…B6-31, §12.4 `inject step_stall`). **0.6.1 — Windows distribution** (§24, PyInstaller build for the lab PC). **0.6 — M4 (Sequencer) backend** (§22c work breakdown + as built, §15.5f API delta B6-01…B6-23 for D). **0.5.1 — M3 gate fix (SWD-M3-01, MC3-4)**. **0.5 — M3 (SW application) backend** (§22b work breakdown, §15.5e API delta B5-01…17 for D). **0.4.1 — M2 close-out** (SWD-M2-01…03, MC2-4, D-41…D-43; §22a). **0.4 — M2 (Sensor & motion) backend + M1 close-out** (ICD v0.5 / v0.6 decode, SRS v0.5.1, D-36…D-39; §22a, §15.5d). Earlier: **0.3.1 — DRAFT for the P1 gate** (aligned to **ICD v0.4 / v0.4.1** (D-34), SRS v0.3, D-29…D-34, SW_test_plan SWD-P1-01…18 / C1–C7; v0.2 answered GRQ-B-01…18) |
 | Date | 2026-10-03 |
 | Owner | Implementer B (SW backend): overall architecture + backend (`core`, `io`, `calc`), package root (`bend_stand/__init__.py`, `__main__.py`), launch scripts `03_SW/run*.bat`, `03_SW/tests/conftest.py` (D-29 n). GUI design: `03_SW/docs/SW_design_GUI.md` (Implementer D), which consumes §15 of this document. |
 | Binding inputs | `00_System/specs/SRS.md` **v0.3** (SAF-SW-, SW-, IF-, NFR-001..004, §3.2, §5.2; new SW-LIM-004; the v0.4 draft was cross-checked — same 82 SW-side IDs, traceability §20 unchanged), `DECISIONS.md` D-01…D-33, **`ICD_protocol.md` v0.4** (final P1 draft; PROTO 1.0, PAYLOAD 1; STATUS 86 B with `pause_src`; PAUSED latch with BLOCK bit PAUSED (D-30); RESUME 0x3C VERIFY class (D-31); hard rule H5 (D-33 a); homing at START only; `state_schema` 2; frozen sim/twin vocabulary v2 in tools/README; `units_vectors.json`) and its **v0.4.1** delta (D-34: HALT_CLEAR / ESTOP_CLEAR / FAULT_CLEAR become VERIFY class on the priority path), `03_SW/docs/SW_test_plan.md` (Validator F, verdict YES WITH CONDITIONS; SWD-P1-01…18), `protocol.yaml` + generated `core/protocol_gen.py` (names/codes), `params.yaml` **dict_version 3** (PARAM_DICT_HASH **0xF0376293**; since dict 2: `home.ref_switch` 0x0401 retired, `drv.k1_weld_ms` 0x0705 added; dict 3: `motion.steps_per_mm` default 800 (D-27 closed), `afe.timeout_ms` default 250 + H5 (D-33 a)) + generated `core/params_gen.py`, `00_System/tools/{ref_codec.py, ref_cmdcheck.py, README.md, vectors/}` (check vectors ICD v0.4: 509, `state_schema` 2; `units_vectors.json`), R3 (§1.6–1.7, §5, §6, §7), R4 (§2, §4–§12), R5 (§0, §5.5, §8), `SW_design_GUI.md` v0.1 §11.2 (GRQ-B-01…18), §14 (GF-04/05/07/10) |
@@ -43,11 +43,12 @@ inside `io.protocol` and `core.device` (SYS-003).
 ## 1. Technology stack and packaging
 
 - **Supported runtime: Python 3.14** (D-33 i; the application ships with its own venv, no separate 3.11 test). `requires-python = ">=3.11"` stays as the declared floor of SW-PLT-001, but only 3.14 is verified. Type hints everywhere, `from __future__ import annotations`.
-- **Requirements files** (owner B, D-31 / F-B-31): `03_SW/requirements.txt` (runtime, pinned to the verified versions: PySide6-Essentials 6.11.2, pyqtgraph 0.14.0, numpy 2.5.3, pyserial 3.5) and `03_SW/requirements-dev.txt` (`-r requirements.txt` + pytest 9.1.1, pytest-qt 4.5.0, pytest-cov 7.1.0, pytest-randomly 5.0.0, PyYAML 6.0.3 for the Integrator's generators). Install: `.venv\Scripts\python -m pip install -r 03_SW\requirements-dev.txt`. `pyproject.toml` keeps the same set as ranges; a unit test checks that both files agree.
+- **Requirements files** (owner B, D-31 / F-B-31): `03_SW/requirements.txt` (runtime, pinned to the verified versions: PySide6-Essentials 6.11.2, pyqtgraph 0.14.0, numpy 2.5.3, pyserial 3.5) and `03_SW/requirements-dev.txt` (`-r requirements.txt` + pytest 9.1.1, pytest-qt 4.5.0, pytest-cov 7.1.0, pytest-randomly 5.0.0, PyYAML 6.0.3 for the Integrator's generators). Install: `.venv\Scripts\python -m pip install -r 03_SW\requirements-dev.txt`. `pyproject.toml` keeps the same set as ranges; a unit test checks that both files agree. **Hash-pinned locks (v0.6.5, SWR-27):** `requirements.lock.txt`, `requirements-dev.lock.txt`, `requirements-build.lock.txt` — every direct and transitive package with the SHA-256 of the exact wheel for Windows x64 / CPython 3.14, generated by `packaging/lock_requirements.py` (pip's own resolution), installed with `pip install --require-hashes -r …` (§24.1); `pyproject.toml` ranges have upper bounds.
 - Runtime: `PySide6-Essentials` (GUI only), `pyqtgraph` (GUI only), `numpy` (pipeline, ring buffer, calc), `pyserial` (transport).
 - Test: `pytest`, `pytest-qt` (GUI, offscreen), `pytest-cov`, `pytest-randomly` (tests must be order-independent; seed printed and reproducible with `-p randomly -p "randomly_seed=…"`).
 - `03_SW/pyproject.toml` (written with this document): package `bend_stand` (src layout), extras `test`, pytest markers `req(*ids)`, `unit`, `component`, `integration`, `validation`, `gui`, `winint` (interactive Windows session: real display/keyboard, hotkey), `rt` (real-time clock, not lockstep), `perf`, `soak`, `hil`, `slow` — `--strict-markers` is on (SWD-P1-16); coverage omits the generated `core/params_gen.py`, `core/protocol_gen.py` and `gui/*` (D measures GUI coverage separately).
 - Entry points (`bend_stand/__main__.py`, owner B, D-29 n): `python -m bend_stand [--sim[=scenario.json]] [--port COM7 | --port tcp://127.0.0.1:5760] [--session file] [--headless [--duration s]]` and the script `bend-stand` (`bend_stand.__main__:main`). Without `--headless`, `main()` parses the arguments (the selected endpoint as **`args.endpoint: str | None`** — `"sim"`, `"sim:<scenario.json>"`, `"COM7"` or `"tcp://host:port"`; `None` = start disconnected), builds the `Backend` **without starting it** and returns `bend_stand.gui.app.run(backend, args)` (owner D), which calls `backend.start()` before showing the window, connects to `args.endpoint` if given, and calls `backend.shutdown()` on exit (GF-14); `--headless` connects, streams and prints link statistics (M1 smoke test, no Qt import). **No COM port is ever opened unless the operator selected it** (`--port COMx` or the GUI connect action, D-06); without `--port` the GUI starts disconnected and `--headless` requires `--sim` or `--port`. `python -m bend_stand.io.sim.server --port 5770 [--scenario f]` serves the simulator out of process over TCP (GUI perf runs, GRQ-B-16). Launch scripts: `03_SW/run.bat` (GUI, disconnected), `03_SW/run_sim.bat` (GUI + `--sim`), both via `.venv\Scripts\python`.
+- **Windows distribution** (lab PC without Python, DM-02): PyInstaller one-folder build `03_SW/dist/BirdBendStand-<ver>/` (+ zip, optional Inno Setup installer) from `03_SW/packaging/build_dist.ps1`, build pins `03_SW/requirements-build.txt` — §24. Entry-point additions for the installed app (v0.6.3): subcommand `report <recording> […]` (offline report rebuild = `core.report.main`), `--recordings DIR`, `--headless --record` — §24.2.
 - Windows timing: `core.timing.init()` calls `winmm.timeBeginPeriod(1)` (paired `timeEndPeriod`) and `sys.setswitchinterval(0.001)` at start-up (TS-SWD §3.1 "Timing primitives").
 
 ## 2. Package layout (`03_SW/src/bend_stand/`)
@@ -1189,6 +1190,23 @@ machine zero = step count; µm positions rescale), so a restore never invalidate
   "points are not linear", accept disabled; WARN → `needs_confirmation` (C-06: NL_span + residuals) and
   ACCEPT only with `continue_(confirmed=True)` (GRQ-B-10 c); negative K accepted; LOW_SPAN when the largest
   reference force < 20 % FS (SW-CAL-008); "linear within noise" note when `max|r| ≤ 3·u_r`.
+- **Plausibility (D-50 a, SRS v0.6.5 SW-CAL-007; v0.6.4)**, any number of points, pure functions in `calc.loadcal`:
+  - *Weight detection* (`weight_detected`): a weight point whose raw mean differs from the zero point **or** from the
+    previous captured weight point by less than `max(10 · std_zero, 50)` counts (std_zero = raw std of the zero point)
+    is refused at `EVALUATE` with "weight not detected: raw change … counts from the zero point / previous point <
+    … counts (10 × std_zero, min 50) — hang the weight and re-take the point" (`AWAIT_OPERATOR`, Repeat). Checked
+    again for every weight point before `FIT` (a re-taken zero point moves the base).
+  - *K range* (`nominal_k`, `k_plausibility`): `|K_nom| = FS_N / (S/1000 · gain · 2^24)` N/count with S = 3.0 mV/V
+    (SRS A-02, `calc.units.CELL_SENS_MV_V`), FS_N = 200 kg · g0 (rated capacity, D-19), gain = PGA gain of the
+    board's `afe.gain_channel` (128 / 64 / 32); the HX711 is ratiometric (bridge excitation = its reference), so
+    the reference voltage cancels (full scale ±0.5·VREF/gain = ±2^23 counts). Gain 128 → 3284.7 counts/N =
+    32 212 counts/kg (A-02). A fitted |K| outside 0.5…2 × |K_nom| → `needs_confirmation` **`K_IMPLAUSIBLE`** ("K
+    implausible: |K| = … N/count is … × the nominal … — check the weights, the cell and the AFE gain"; combined with
+    the FIT_WARN text when both apply) and ACCEPT only with `continue_(confirmed=True)`; refused otherwise with "K
+    implausible: confirm to accept". No nominal derivable (unknown gain) → no check, warning "nominal unknown: K
+    plausibility not checked". No sign check (negative K stays legal). The file records the block
+    `plausibility {k_status OK | IMPLAUSIBLE | NOMINAL_UNKNOWN, k_nominal_n_per_count, k_ratio, k_range [0.5, 2],
+    confirmed, nominal_formula, text}` and `confirmations [FIT_WARN?, K_IMPLAUSIBLE?]`.
 - GRQ-B-10 (a) `load_cal.finish_early()`: allowed in `AWAIT_OPERATOR` once the zero point and ≥ 1 weight
   are accepted → `FIT` with 2 points = UNVERIFIED_LINEARITY (accept allowed, report warning). (b)
   `load_cal.retake(point_index)`: from `FIT` (or any `AWAIT_OPERATOR`), discards that point and returns to
@@ -1254,8 +1272,7 @@ class Sequence:
     travel_ref: Literal["test", "machine"] = "test"  # targets relative to x_zero (frozen at start) or machine mm
     k_est_n_mm: float = 50.0; pull_dir: int = +1     # R4 §8.4, SRS §5.2
     defaults: StepDefaults                            # speed, accel, settle, capture, tol
-    on_trim_fail: Literal["stop", "continue"] = "stop"
-    notes: str = ""
+    notes: str = ""                                   # (no on_trim_fail since v0.6, B6-01: trim failure = NOT_REACHED)
     def validate(self, ctx: ValidationContext) -> list[Issue]   # editor flags (SW-SEQ-001)
 ```
 
@@ -1277,7 +1294,8 @@ range, SAF-SW-006 margin per moving step (WARN).
 - `calc.path.planned_path(plan, x0_mm, f0_n, k_est, pull_dir) -> list[PathPoint(x_mm, f_n, exec_idx, label,
   known: "x" | "F" | "both")]` (pure): TRAVEL → x known, `F_est = F_prev + pull_dir·k_est·(x − x_prev)`; LOAD →
   F known, `x_est = x_prev + pull_dir·(F − F_prev)/k_est`; HOLD/MARK/TARE → same point; HOME → break in the
-  polyline (unknown F). The chart (D) draws the polyline with step labels; during execution it overlays
+  polyline (unknown F). v0.6.2 (OI-UM-06, B6-29): the line goes through the specimen contact point and the force
+  is 0 on the unloaded side of it (no extrapolation to negative forces when a step travels back past contact). The chart (D) draws the polyline with step labels; during execution it overlays
   `DataView.sequence_trace()`, the live marker (latest x, F) and the active step from `SeqStatus`
   (SW-SCH-002, ≥ 10 Hz polling).
 
@@ -1314,6 +1332,14 @@ class SequenceExecutor:
 - Runs in the **Operation runner** thread: 20 ms `Ticker` plus event waits (MoveTicket, pipeline sample
   condition). **Phase boundaries use device time**: the executor waits until the newest sample's `t_us_u`
   reaches the boundary, so every boundary lies within ±1 frame of plan (SW-SEQ-003).
+- **Status consistency** (v0.6.2): step indices, label and phase change together under the executor lock and
+  `status()` is a snapshot under the same lock, so a published `SeqStatus` never pairs a new step's label with
+  the previous step's phase; every step (and every re-run after Resume) starts with phase `COMMAND`. Every
+  `_publish` is a publish (on each change + ≥ 20 Hz from the Supervisor tick).
+- **`t_reached` of a failed step** (v0.6.2): the run keeps the device time at which the current step reached
+  its target (TRAVEL / HOLD / LOAD, set when the dwell starts); a failed-step result (SLIP, BREAK_DETECTED,
+  TIMEOUT, DRIVER_ALARM in settle / capture / hold) carries it as `StepResult.t_reached_s`; it stays `None` for
+  a step that never reached its target (NOT_REACHED, a TIMEOUT while moving).
 - **Step timeline** (SW-SEQ-003; D-29 k, F-B-20 closed): command → reached (`t_reached` = `t_us` of
   MOVE_DONE, or of the last trim sample) → settle until `t_reached + settle_s` → capture → hold until
   `t_reached + max(step_time_s, settle_s + capture_s)` (TRAVEL/HOLD; dwell and settle are **measured from
@@ -1362,9 +1388,10 @@ class SequenceExecutor:
 4. **Trim**: wait until `t_done + 100 ms` (device time); `F̄` = mean of the last 4 samples; `|F_target − F̄| ≤
    tol` → reached; else `Δx = trim_step(F̄, F_target, k_est, kp=0.5, max_step=0.2 mm)` (sign by `pull_dir`),
    `MOVE_ABS(commanded + Δx)` at 0.2 mm/s (clipped to the same bound as the approach; at the bound →
-   NOT_REACHED), repeat ≤ 10 iterations (session trim parameters, SRS §5.2). Exhausted → `TRIM_FAILED`:
-   `on_trim_fail = "stop"` (default, SW-SEQ-006 v0.3) → step NOT_ON_TARGET, sequence STOPPED; `"continue"` →
-   capture anyway with the flag (pending PO, SRS OI-14 / F-B-14).
+   NOT_REACHED), repeat ≤ 10 iterations (session trim parameters, SRS §5.2). Exhausted → step **NOT_REACHED**
+   (flags `NOT_REACHED`, `TRIM_ITER_<n>`), sequence STOPPED with reason `NOT_REACHED` (SRS v0.6.2 SW-SEQ-006: no
+   continue option; `on_trim_fail` removed, B6-01, F-B-14 closed). If F̄ is already within the approach band at the
+   step start (no MOVE_UNTIL_LOAD), the trim starts at once from the current position.
 5. **Capture**: position frozen (no trim during settle/capture/hold).
 TV-C (R4 §12) is the unit vector for `trim_step`; the simulator scenario `k = 50 N/mm, k_est = 40` must reach
 tolerance within ≤ 10 iterations (SW-SEQ-006 acceptance).
@@ -1382,7 +1409,16 @@ tolerance within ≤ 10 iterations (SW-SEQ-006 acceptance).
   (same rule, one formula for all motion steps); `BOUND` → NOT_REACHED (§10.4, not a failure of the
   guard). Action for SLIP / BREAK_DETECTED / TIMEOUT: priority STOP, step failed, sequence STOPPED, event
   with values. **ALM 0→1** during the sequence → controlled STOP, sequence STOPPED `DRIVER_ALARM` (D-33 c,
-  §5.5.1).
+  §5.5.1). The TIMEOUT guard is tested end to end with the simulator stimulus `inject step_stall` (§12.4: the
+  pulse output of the running move freezes without any other stop cause). Waits without motion (settle, capture,
+  hold, trim settle) end TIMEOUT "no data while waiting for …" when the device-time sample does not arrive
+  before the host deadline (3 × planned + 10 s).
+- **Unexpected outcomes of a step command** (all end the sequence STOPPED, nothing more is sent): local gate
+  refusal or FW NACK → `STEP_REFUSED` (a local `PAUSED` refusal first waits ≤ 2 s for the pause indication);
+  MOVE_DONE `STOPPED` without a terminating stop event within 50 ms → `STEP_REFUSED`; TRAVEL ended other than
+  TARGET, approach ended other than LOAD_THRESHOLD / BOUND → `STEP_REFUSED`; homing ended other than TARGET →
+  `HOME_FAILED`; a `LinkError` → ABORTED `LINK_LOST`; any other exception → ERROR + controlled STOP; the
+  recording cannot start → ERROR `RECORDING`.
 - **Controls**: start, pause, resume, stop (STOP mode 1 = controlled, sequence ends), abort (HALT).
 - **Pause** (KD-15, D-29 a, D-30): GUI Pause sends **PAUSE 0x3B** (§5.5); the physical PAUSE button acts in
   the FW directly. Either way the FW performs a controlled stop if moving, sets the **motion-blocking**
@@ -1410,8 +1446,10 @@ tolerance within ≤ 10 iterations (SW-SEQ-006 acceptance).
      anew; LOAD → re-run approach + trim from the current force (new bound and timeout per §10.4/§10.5);
      HOLD → restart settle/capture; HOME/TARE/MARK → re-run. A re-issue refused with BLOCK **PAUSED** (the
      operator paused again in between) is an expected outcome: the sequence stays PAUSED, step and phase
-     unchanged (D-33 k). Any other refusal (gate or NACK) → the step fails and the sequence ends STOPPED with
-     the reason.
+     unchanged (D-33 k). The executor waits ≤ 2 s for that PAUSED indication; if none arrives (a refusal
+     without a pause the PC can see), the step ends `STEP_REFUSED` (v0.6.2 — before, the run could wait for a
+     Resume that the gate never accepts). Any other refusal (gate or NACK) → the step fails and the sequence
+     ends STOPPED with the reason.
 - **Clear stop while a sequence is PAUSED** (SWD-P1-02 c): allowed after the CONFIRM "ends the paused
   sequence"; the backend ends the sequence STOPPED (reason `CLEARED`) first and then sends HALT_CLEAR, which
   clears PAUSED (D-31). While HALT is latched no sequence can be PAUSED (HALT terminates it). An unexpected
@@ -1482,9 +1520,12 @@ atomic (temp file + `os.replace`); round trip is identical (fixed key order, `re
 - **3-point bend** (SW-REP-004, off by default): with L, b, h → σ = 3FL/(2bh²), ε = 6δh/L², E_f = L³·m/(4bh³)
   (m = OLS slope N/mm over a selected range) per window (TV-D).
 - **Offline** (SW-REP-003): `python -m bend_stand.core.report <recording_dir> [--cal file.json] [--tare-raw
-  value | --tare-window t0 t1] [--out dir]` recomputes F from raw and rebuilds windows from VALID + annotations;
-  unchanged inputs reproduce the original numbers exactly (test).
-- **Report tab support** (GRQ-B-11, M4): `reports.list_recordings(root=None) -> list[RecordingInfo(folder,
+  value] [--bend3p L b h] [--out dir]` (as built v0.6; `--cal` = a `bird.bend.cal.load` file) recomputes F from raw
+  with the run's scale log (or the overrides) and rebuilds the windows from the sidecar `sequence_runs[].windows`;
+  unchanged inputs reproduce the original numbers exactly (test); exit code 2 with a message for an unreadable
+  recording / calibration file (`FileFormatError`).
+- **Report tab support** (GRQ-B-11, M4): `reports.root() -> str` (v0.6.2, GRQ-B-31 b: the effective recordings
+  folder, default of `list_recordings`); `reports.list_recordings(root=None) -> list[RecordingInfo(folder,
   started_utc, marks summary, sequence_name, status COMPLETE | PARTIAL | FAILED, duration_s, has_report)]`
   (reads `meta.json` only, newest first); `reports.load_result(dir) -> ReportResult` (parsed `report.json`:
   marks, warnings, per-step/iteration results); `reports.build_async(dir, cal=None, tare=None, bend3p:
@@ -1570,7 +1611,8 @@ names, arguments and reply shape (`{"ok": true, ...}` / `{"ok": false, "error": 
 Side is "both" — `clock`, `reset`, `query` (`world`, `pulses`, `outputs`, `wire_log`, `sent`, `flash`;
 `edges`/`seam_log` return the model equivalent where defined), `estop`, `drv_power`, `button`, `limit`,
 `wire`, `alm`, `pend`, `specimen`, `load_offset`, `afe`, `world_shift`, `inject` (incl. `drop_next`,
-`duplicate_next`, `delay_next`, `corrupt_next` with `cmd`/`what`/`n`/`ms`), `rx_bytes`, `on_frame`,
+`duplicate_next`, `delay_next`, `corrupt_next` with `cmd`/`what`/`n`/`ms`; v0.6.2 `step_stall` with
+`duration_ms`, table below), `rx_bytes`, `on_frame`,
 `on_event` — plus `flash` at record level (S variant). Twin-only actions (`chatter`, `iwdg`, `clk`,
 `isr_storm`, `where`, `sck_overrun`) answer `{"ok": false, "error": "twin only"}`. Typed wrappers
 (`set_estop(open)`, `press/release(button)`, `set_specimen(...)`, …) call `act()`; a unit test runs the
@@ -1584,6 +1626,7 @@ JSON-lines control port (default 5771) as the twin's 5761.
 | every status flag / indicator | real causes via world actions (E-stop, buttons, limits, ALM/PEND, DRV_POWER, AFE stall/saturate/rate error, link silence, step fault, specimen load → LOAD_LIMIT, K1 = `estop` with `drv_power_follows: false`); for states without a cheap physical cause a **test-only** `SimControl.override_status(set_bits, clear_bits, duration_ms)` that marks the DATA/STATUS bits (flagged `sim_override` in the recording; never used by behavioural-equality tests) |
 | FW EVENTs incl. RESUME_REQUEST | `button pause` press while PAUSED; `SimControl.emit_event(code, arg, value, value2)` test-only for rare codes (NVM_ERROR, CLK_FALLBACK, NOT_SETTLED) |
 | link drop / stream gap | `inject link_silence`, `LinkModel` unplug/replug, `inject tx_congestion` |
+| stalled move without a stop cause (TIMEOUT guard, SW-SEQ-007) | **`inject` `fault: "step_stall"`, `duration_ms?: int`** (v0.6.2 = tools/README "Move stall", ICD v0.7.5 vocabulary, same action in the twin; 0 / absent = until the move ends, negative = refused): the step-pulse output of the running move is frozen — a pulse already in its high phase completes and counts, then no PUL pulse, step counter and world x unchanged, DATA MOVING stays 1 and the setpoint frozen, no EVENT, no status / fault bit; it ends after `duration_ms` (the pulse train then resumes one step period later, MOVE_DONE TARGET at the original target) or when a stop ends the move (immediate: MOVE_DONE STOPPED at the frozen count, no POS_UNCERTAIN from the stall; controlled: the simulator lifts the stall and ramps down from the frozen point — model-dependent, not compared with the twin); a reset drops it. A second call while stalled sets a new end from now. Without a running move the stall is armed for the next move start (duration counted from that start). Reply `{"ok": true, "armed": bool}`; `query pulses` adds `step_stalled`, `step_stall_armed` |
 | NACK / BUSY / MISMATCH on SET_PARAM | `SimControl.inject_nack(cmd, status, detail, count=1)`; `SimControl.inject_store_mismatch(key, stored_value)` (response "as stored" differs) |
 | recorder write failure, thread stall | backend-side test hooks `Backend.test_hooks` (`core.testing`, only with `BackendSettings(test_hooks=True)`): `fail_recorder(exc: OSError | Exception, after_rows=0)` — any `OSError` incl. `OSError(errno.ENOSPC)` raised from the next write/flush; `set_free_space(bytes | None)` overrides the free-space probe; `stall_thread(name, ms)` |
 | perf runs without GIL contention | out-of-process simulator `python -m bend_stand.io.sim.server` + endpoint `tcp://127.0.0.1:5770`; in-process: `SimScenario.realtime.max_cpu_pct` throttle |
@@ -1651,9 +1694,9 @@ sequences,logs}`; recordings under the session's `recordings_root`.
 | § | File | Schema | Content | Req |
 |---|---|---|---|---|
 | 13.1 | `*.bbboard.json` | `bird.bend.board` v1 | saved_utc, sw/fw version, board UID, `param_dict_hash`, `param_dict_version`, `params {key: value}` (enums by NAME, bool, f32 as float) | SW-CFG-002 |
-| 13.2 | `load_<serial>_<UTC>.json`, `active_load.json` | `bird.bend.cal.load` v1 | R4 §6.4 verbatim (sensor, afe, board, direction, `push_calibrated = false`, g_used, points with stats, fit with status, LOW_SPAN flag, notes) | SW-CAL-009 |
+| 13.2 | `load_<serial>_<UTC>.json`, `active_load.json` | `bird.bend.cal.load` v1 | R4 §6.4 verbatim (sensor, afe, board, direction, `push_calibrated = false`, g_used, points with stats, fit with status, LOW_SPAN flag, notes); v0.6.4 (D-50 a, additive keys, same version): `plausibility` (k_status, k_nominal_n_per_count, k_ratio, k_range, confirmed, nominal_formula, text), `confirmations` | SW-CAL-009, SW-CAL-007 |
 | 13.3 | `travel_<UTC>.json`, `active_travel.json` | `bird.bend.cal.travel` v1 | created_utc, operator, board UID/FW, spm0, N1, D1, spm1, N2, D_tot, spm2, spm2_inc, consistency, expected_spm, confirmations, notes | SW-CAL-004 |
-| 13.4 | `*.bbseq.json` | `bird.bend.sequence` v1 | name, travel_ref, k_est_n_mm, pull_dir, defaults, on_trim_fail, steps[] (all §10.1 fields), loops[], notes | SW-SEQF-001 |
+| 13.4 | `*.bbseq.json` | `bird.bend.sequence` **v2** (as built v0.6; v1 migrated on load: `on_trim_fail` dropped with a WARN unless "stop", `travel_bound_mm` ignored with a WARN) | name, travel_ref, k_est_n_mm, pull_dir, defaults (speed, accel, settle, capture, tol), steps[] (all §10.1 fields in a fixed order), loops[], notes | SW-SEQF-001 |
 | 13.5 | `*.bbsession.json` | `bird.bend.session` v1 | limits (travel/pull/push with enable + warn), fw_level_n, pull_dir, k_est default + k_min/k_max, trim (kp, max_step_mm, v_mm_s, max_iter), tare window, cal presettle/capture, sample window, display unit, g_local, expected_spm, 3-point-bend geometry, recordings_root, raw dump on/off, last files | SW-LIM-003, SRS §5.2 |
 | 13.6 | `*.bbmarks.json` (presets) | `bird.bend.marks` v1 | specimen, number, operator, notes, custom `[{key, value}]` | SW-META-001/002 |
 | 13.7 | `<rec>/meta.json` | `bird.bend.recording` v1 | marks, snapshot (board config, calibration object, tare, limits, thresholds, versions, dictionary hash, session), sequence JSON + plan summary, VALID window log, events, link stats, integrity | SW-ACQ-002/004, SW-META-002 |
@@ -1666,11 +1709,11 @@ sequences,logs}`; recordings under the session's `recordings_root`.
 additionally holds `marks_at_start`, `marks_final`, `mark_edits[]` (GRQ-B-07), `no_specimen_mode`,
 `thresholds.clamped`, `travel_cal_differs`.
 
-Example (sequence):
+Example (sequence; step objects abbreviated — the writer emits every step field of §10.1 in a fixed order):
 
 ```json
-{"schema": "bird.bend.sequence", "schema_version": 1, "name": "staircase 0-200 N",
- "travel_ref": "test", "k_est_n_mm": 50.0, "pull_dir": 1, "on_trim_fail": "stop",
+{"schema": "bird.bend.sequence", "schema_version": 2, "name": "staircase 0-200 N",
+ "travel_ref": "test", "k_est_n_mm": 50.0, "pull_dir": 1,
  "defaults": {"speed_mm_s": 1.0, "accel_mm_s2": 0.0, "settle_s": 2.0, "capture_s": 5.0, "tol_n": 2.0},
  "steps": [
    {"uid": "s1", "kind": "travel", "target": 0.0, "speed_mm_s": 2.0, "label": "start"},
@@ -1693,7 +1736,18 @@ Example (sequence):
 - Engines report errors through their state (`errors`, phase `ABORTED`/`ERROR`), never by raising into
   backend threads; futures carry exceptions to the GUI bridge.
 - Uncaught exceptions in any thread → liveness fault (§4.6): STOP if moving, `terminate_all`, event, log.
-- Logging: stdlib `logging`, rotating file `%APPDATA%\BirdBendStand\logs\bend_stand.log` (10 × 5 MB);
+- Logging (as built v0.6.5, SWR-14, `core.logfile`): one shared set-up in the entry point (`__main__.main`, GUI and
+  headless, source and frozen runs; not for `--version` / `report`): rotating file
+  `<data>\logs\bend_stand.log` (`<data>` = `BEND_STAND_DATA_DIR` or `%APPDATA%\BirdBendStand`), 5 MiB × (1 + 10
+  backups), level INFO (DEBUG with `--log-level DEBUG`), written by one `QueueListener` thread (backend threads never
+  wait for the disk); console handler at `--log-level` (default WARNING) — omitted when the frozen windowed exe's
+  runtime hook already redirected stderr (`sys._bend_stand_stdio_log`), so no record is written twice (OI-F-RV-04);
+  `sys.excepthook` / `threading.excepthook` (chained before the liveness hook) and `warnings` are logged; read-only
+  profile → console only. **Incident log** (`IncidentLogger` on `backend.events`): `link.state` (LOST / DEGRADED
+  WARNING), `stop.issued` (not written ERROR), `stop.confirmed` / `stop.unconfirmed` (ERROR), `fw.event` (latch set,
+  limits, faults, link watchdog, AFE / NVM / clock / driver alarms WARNING; clears, BOOT, MOVE_DONE INFO),
+  `safety.trip` (WARNING) / `trip_cleared`, `rec.failure` (ERROR), `seq.status` state changes (ABORTED / ERROR
+  WARNING), `hotkey.state`, `resume.ignored`, `link.compat`. Idempotent set-up / `shutdown_logging()` (atexit).
   `EventBus` keeps the last 10 000 events in RAM; every event of a recording is also written to it.
 - Defensive rules: the SW never re-asserts VALID after a FW auto-clear; never restarts motion after a clear,
   reconnect or resume without an explicit operator action (resume is one).
@@ -1996,6 +2050,17 @@ new members). Units: mm, mm/s, mm/s², N, s; **device times in the results are s
 | B6-21 | Simulator parity D-47 a: link silence ≥ `safety.link_timeout_ms` in **any** motion state clears VALID (EVENT VALID_CLEARED arg LINK_WDG once, only on a 1 → 0 change); while idle no stop and no LINK_WDG event / status bit (moving-only as before) | aligned | D-47, SW-SEQ-004 |
 | B6-22 | M4 gate fixes: **SWD-M4-01** a TRAVEL step with `capture_during_move` needs `capture_s > 0` (ERROR `RANGE` on `capture_s`; the window is still the move itself; `linear_ramp` sets `capture_s` = \|x1 − x0\| / speed); **OBS-M4-01** `generate("staircase", count=…)` without `by` infers `by = "count"` (count + increment without `by` → `ValueError`), and a conditional field given while its condition field is absent and defaults to another value → `ValueError` (with the condition given explicitly, fields of the other branch are ignored); **OBS-M4-03** sidecar `sequence_runs[].events` carry `t_us_u` from the first event on (device time of the newest sample at start) | fixed | SW-SEQ-001, SW-WIZ-001, SW-REP-003 |
 | B6-23 | **D-49 a** (SRS v0.6.4 SW-SEQ-007): BREAK_DETECTED also at standstill — during settle / capture / hold (no command changing \|F\|) a drop of \|F\| by more than 20 % of its running maximum **within 0.5 s** (`HoldBreakGuard`: max of the last 0.5 s − current) stops the sequence (priority STOP, STOPPED, flag BREAK_DETECTED, message "… at standstill …"); armed per D-48; samples before t_reached + 100 ms are ignored (HX711 filter lag after a fast unloading move); slow relaxation (e.g. 30 % over 60 s) never trips; the motion guards (BREAK before SLIP) are unchanged | changed | SW-SEQ-007, D-49 a |
+| B6-24 | **`SeqStatus` label and phase are consistent** (M4 report v1.1 §7.2): a new step is published with its own label **and** phase `COMMAND` (before: the new label with the previous step's SETTLE / CAPTURE / HOLD for one update); `COMMAND` also after a Resume re-runs the step. `status()` is a snapshot under the executor lock. GUI: show `COMMAND` like the other phases (e.g. "command sent") | changed (behaviour) | SW-SCH-002, SW-SEQ-003 |
+| B6-25 | `StepResult.t_reached_s` is set for a failed step that had reached its target (BREAK_DETECTED / SLIP / TIMEOUT / DRIVER_ALARM during settle, capture or hold); `None` only when the target was never reached (NOT_REACHED, TIMEOUT while moving) (M4 report v1.1 §7.2) | changed (value) | SW-REP-002 |
+| B6-26 | A move refused with BLOCK PAUSED (`REFUSED_PAUSED`) without a PAUSED indication within 2 s ends the sequence STOPPED `STEP_REFUSED` (before: the run stayed in phase PAUSED with state RUNNING, waiting for a Resume that the `resume` gate refuses). With the indication the D-33 k behaviour is unchanged (PAUSED, Resume re-issues) | fixed | SW-STOP-004, D-33 k |
+| B6-27 | Simulator stimulus `inject` `fault: "step_stall"`, `duration_ms?` (§12.4): frozen step output of the running move (TIMEOUT guard tests); reply `{"ok": true, "armed": bool}`. Test-side only (no GUI change) | new (sim) | SW-SEQ-007, SYS-008 |
+| B6-28 | **Clear hints (OI-UM-01)**: the E-stop hint carries the board's release time as a value (`wait ≥ 100 ms`, from `io.estop_release_ms`; gates: `GateSnapshot.estop_release_ms`, indicators: the board value; `gates.estop_hint(ms)`, `clear_procedure(code, estop_release_ms=None)`); the hints name the Clear stop window's buttons **Clear E-STOP** / **Clear faults** (before: "Clear E-stop" / "Fault clear"); guard texts never show "-0.0 N" | changed (texts) | SAF-SW-005, SW-SEQ-007 |
+| B6-29 | **Planned path below contact (OI-UM-06)**: the plan's specimen line goes through the contact point; a TRAVEL step beyond the contact on the unloaded side plans F = 0 (before: linear extrapolation, e.g. −100 N for a return to 0); the loaded side = sign of the start force, else of the first non-zero LOAD target, else of the first non-zero planned force; LOAD steps are placed from the contact point; TARE restarts the reference (`calc.path.advance(..., x_contact=, side=)`, `contact_x`) | changed (plan values) | SW-SCH-001 |
+| B6-30 | **`record_start` refused without a link (GRQ-B-31 a)**: gate `record_start` has the `LINK_DOWN` item (link not CONNECTED / DEGRADED) — no empty recording folder; `record_stop` stays possible after a link loss | changed (gate) | SW-ACQ-002 |
+| B6-31 | **`reports.root()` (GRQ-B-31 b)**: the effective recordings folder (`BackendSettings.recordings_root` → session `recordings_root` → `Documents/BirdBendStand/recordings`), the folder `record_start` writes to. Member of the `ReportAPI` class and (v0.6.4, D's fake has it) of the `api.ReportAPI` Protocol | new | SW-ACQ-002 |
+| B6-32 | **Load-calibration plausibility (D-50 a, SRS v0.6.5 SW-CAL-007; v0.6.4)** — GUI (load wizard): (1) a weight point can now come back from `EVALUATE` to `AWAIT_OPERATOR` (same index, `can_repeat`) with `errors[0]` starting **"weight not detected: raw change … counts from the zero point"** (or "… from the previous point") **"… < … counts (10 × std_zero, min 50) — hang the weight and re-take the point"** — show it like the other point rejections; it can also appear right after the last point / `finish_early()` (checked again before the fit). (2) In `FIT`, `needs_confirmation.code` can be **`K_IMPLAUSIBLE`** (text "K implausible: |K| = … N/count is … × the nominal … N/count of the configured cell / AFE (expected 0.5…2 ×) — check the weights, the cell and the AFE gain. Accept anyway?", which also carries the FIT_WARN text when both apply): show it as a confirmation item and accept with `continue_(confirmed=True)`; without it `errors = ("K implausible: confirm to accept",)`. (3) `warnings` can contain "nominal unknown: K plausibility not checked". The calibration file gains `plausibility{…}` and `confirmations[…]` (§9.4) | changed (engine) | SW-CAL-006, SW-CAL-007 |
+| B6-33 | **SW review fixes (SW_code_review v1.1, D-53; v0.6.6) — GUI-visible:** (1) motion gates: `LOAD_INPUT_INVALID` (text "no valid load input: …") whenever the load input is invalid outside the no-specimen mode, whatever the limit enables (D-53 a); new REFUSE `PARAM_INVALID` (board values outside the dictionary range, SWR-22). (2) `limits.set` refuses both PC load limits off outside the no-specimen mode (issue code `LOAD_LIMITS_BOTH_OFF`); a session file with both off is loaded with both on and the WARN issue `LOAD_LIMITS_RESTORED` in `session.load_issues`; a broken session file is moved to `<name>.bad` (issue `FILE`, text names the kept file). (3) gate `config_write`: REFUSE `SEQUENCE_RUNNING` (sequence running / paused) or `OPERATION_RUNNING` (wizard / tare / load calibration); every changing `ConfigAPI` call returns a failed future (`GateRefused`) then. (4) sequence start: REFUSE `PULL_DIR_MISMATCH` when the sequence's `pull_dir` differs from the session's (D-53 b). (5) hotkey status `UNAVAILABLE` with "Pause/Break key unavailable: hotkey thread not responding" when the 250 ms ping stays unanswered > 750 ms (published on `hotkey.state`). (6) new topic `device.board_changed` (payload: UID) — another board after a reconnect, test travel zero reset (published now, listed in `api.TOPICS_PENDING_GUI`; it moves into `api.TOPICS` once the bridge maps or ignores it — GUI layering test). (7) `meta.json`: `closed_during_sequence` when the application closed during a sequence (the run is ABORTED "shutdown", no report is built — rebuild offline); `sequence_runs[].truncated {events, windows, results}` counts entries dropped from the bounded run log (endless loops keep the newest 20 000 windows / results and 5 000 events). (8) Liveness faults (§4.6) now stop motion: priority STOP + `terminate_all("LIVENESS")` while moving, a warning event when idle | changed | SAF-SW-001, SAF-SW-003, SW-LIM-003, SW-CFG-003, SW-SEQF-001, SW-STOP-002, SW-ACQ-002 |
+| B6-34 | **v0.6.7 / v0.6.8 — GUI-visible:** (1) leaving the no-specimen mode for any reason (operator, link loss, disconnect) switches both PC load limits ON again at their configured levels, with the event `LIMITS_RESTORED` and a `log` warning (D-53 a, SWR-29). (2) `device.board_changed` is in `api.TOPICS` (D maps it to C-15); `api.SessionAPI` has `load_issues`. (3) `BackendSettings.test_logs` (None = with `test_hooks`): the Reader `rx_log` and the in-process simulator wire / sent logs hold 5 000 entries outside test runs (100 000 / 200 000 with test logs). (4) EventBus: `seq.status` keeps its own history of 2 000 records (the 10 000 shared records are no longer filled by status snapshots). (5) report warning "run log truncated: …" when `sequence_runs[].truncated` is set (SWR-30) | changed | SW-LIM-003, SW-LIM-004, NFR-004, SW-REP-001 |
 
 Unchanged: everything of §15.5e; `MotionAPI` Protocol unchanged (the backend's `MotionController` gains `move_until_load(...)` and an `owner=` argument on `home()` for the sequencer only).
 
@@ -2303,7 +2368,7 @@ Status after v0.2. "Closed" names the decision or document that closed the item.
 | F-B-11 | Orchestrator | Thrust_Stand pin vs HEAD. | **Closed**: D-29 m; §17 (hash read from `.git` files, no tool run in the reference). |
 | F-B-12 | Orchestrator | Ownership of package root, launch scripts, `tests/conftest.py`. | **Closed**: D-29 n. |
 | F-B-13 | Orchestrator | Tare session-only. | **Closed**: D-29 j; KD-13. |
-| F-B-14 | PO | Load-step trim not converged: stop vs continue. | **Open (PO Q26 / SRS OI-14)**: default "stop" implemented (SW-SEQ-006 v0.3); `on_trim_fail = "continue"` kept as an option until the PO decides. |
+| F-B-14 | PO | Load-step trim not converged: stop vs continue. | **Closed** (SRS v0.6.2 SW-SEQ-006): NOT_REACHED, the sequence stops; `on_trim_fail` removed (v0.6, B6-01), v1 files migrated with a WARN (§13.4). |
 | F-B-15 | Integrator | JOG bound for exact SW travel limits. | **Closed**: ICD §5.4 `bound_um`, `JOG_NO_BOUND`; §5.4. |
 | F-B-16 | Implementer D | GUI consumes §15. | **Closed**: §15.5 delta + §15.7 answers. |
 | F-B-17 | Validator F | Verification hooks. | **Closed by design (C3)**: all SWD-P1-09 hooks (a)–(h) are specified in §12.4 / §15.5a B3-09 and scheduled in WP-B4/B6/B7/B11 (M1 entry for the API, implementation within M1). |
@@ -2583,6 +2648,59 @@ against §15.5f from the start.
   as soon as the board answers (≤ 60 s), `Backend._on_synced` clears a left-over VALID at every reconnect.
 - *MC3-5*: `safety.trip_cleared` (`SwTripCleared`); `safety.trip` = new trips only.
 
+**SW review fixes v0.6.6 (SW_code_review v1.1, D-53, SRS v0.6.6):**
+- *SWR-01* liveness reactions (§4.6): `LivenessMonitor.on_fault` → `Backend._on_liveness_fault` (any thread): while
+  moving priority STOP + `terminate_all("LIVENESS")` + event, idle → warning event. Sources: the Supervisor check
+  "DATA received but not evaluated > 200 ms" (age of the oldest frame waiting in the Pipeline queue), the GUI thread
+  silent > 2 s while moving (real clock only; lock-step tests drive the GUI), uncaught thread exceptions (excepthook),
+  a full async queue and every failing frame handler (SWR-02). One fault per condition episode. Not used: the Reader
+  100 ms / runner 300 ms beats — a silent Reader is the DATA-loss STOP, the runner has no beat.
+- *SWR-02* `Pipeline.step` isolates every frame; `_event` guards the FW-event handler, each sink and the publish;
+  `Backend._on_fw_event` guards device / motion / operations reactions separately; `PipelineCounters.dispatch_errors`.
+- *SWR-03* D-53 a (above, B6-33). *SWR-04* `_finish` clears a VALID that may be 1 at every end (SET_VALID 0 at once;
+  after a link failure when the board answers). *SWR-05* `Recorder.stop`: rows up to the end instant (after the first
+  sidecar write) are written, the sidecar is rewritten when the final drain changed the counts; rows after the end are
+  not part of the recording (`rows_after_end`); `start` clears the queue. *SWR-07/26* `shutdown`: operations first
+  (`terminate_all("shutdown")`, the executor skips the recording tail and the report), STOP if moving, wait ≤ 3 s for
+  the sequencer's `_finish` (run log into the sidecar), then the recording, then disconnect.
+- *SWR-06/12/25* `session.from_dict` typed (bool / int / finite number / text / null per field → `FileFormatError`),
+  travel values checked at load; `schema.parse_json_text` (size cap 20 MB, `RecursionError` → `FileFormatError`) for
+  every settings / calibration / sequence file; `load_default` and the active calibration catch any exception;
+  broken session file kept as `.bad`.
+- *SWR-08* `config_write` gate + enforcement; *SWR-16* D-53 b; *SWR-09* hotkey ping evaluation; *SWR-10* the write
+  time travels with the future (`fut.t_sent_ns`); *SWR-15* `CommandChannel` reserves frames under its lock and writes
+  outside it in reservation order (one writing thread at a time), priority frames are written by their submitter; a
+  motion frame's epoch check and write are atomic with `bump_epoch` (`_epoch_lock`), so a reserved MOVE can never
+  follow a STOP onto the wire.
+- *S4:* SWR-13 (non-finite values refused, `move_to` / `move_by` never raise), SWR-17 (safety warnings = immutable
+  `frozenset`, swapped), SWR-18 (undecodable STATUS resolves the ClearResult / MoveTicket), SWR-19 (board UID change →
+  test zero reset + event + topic), SWR-20 (stall hook runs the whole Supervisor body), SWR-21 (reports on their own
+  worker thread), SWR-22 (received values checked, `PARAM_INVALID`, invalid values replaced by the dictionary default in
+  motion computations; NaN metadata → recording / calibration accept refused), SWR-28 (bounded run log). Left:
+  SWR-17 second part (Device indication record) — see SW_code_review §7.2.
+- *Check vectors* state_schema 4 (ICD v0.7.5 (h), D-50 c): `SimCheckState.ena_on`, exported from the simulator's
+  driver-enable model and applied by `load_check_state`.
+
+**Post-gate revision v0.6.2 (P3 tasks 4 + 7, PO-approved: coverage + M4 notes):**
+- *Status / results*: label + phase published together (phase `COMMAND` at every step start / re-run, `status()` under
+  the executor lock, B6-24); `t_reached_s` for a failed step that had reached its target (B6-25); every `_publish` is
+  a publish (the never-used "publish only on change" branch removed).
+- *Fix*: `REFUSED_PAUSED` without a PAUSED indication within 2 s → STOPPED `STEP_REFUSED` (B6-26; the run could wait
+  for a Resume the gate refuses). Dead code removed (`replace_result`, `_cap_planned_s`, the unused last-move scan of
+  the TARE step); the HOLD step always takes the newest sample as `t_reached` (one wait path).
+- *Simulator*: `inject step_stall` (§12.4, B6-27) = the tools/README "Move stall" (ICD v0.7.5), so the TIMEOUT guard
+  is tested end to end (`test_m4_executor_paths.py::test_step_timeout_guard_end_to_end_with_a_stalled_move`) and
+  differentially against the twin (Integrator's `test_sim_vs_twin_stall.py`).
+- *Docs*: §10.1 / §10.4 / §13.4 without `on_trim_fail` (file format v2 as built), §11 offline CLI as built,
+  F-B-14 closed.
+- *Tests* (unit, branch coverage of the unit suite alone): `test_m4_executor_paths.py` (timeout via stall, link /
+  internal errors, NACK / local refusals, unexpected MOVE_DONE reasons in travel / approach / homing, stop / abort /
+  terminate before the first step, while paused and while resuming, pause in SETTLE, RESUME lost / not confirmed,
+  PAUSE cleared by another client, load-step refusals, trim at the travel bound, k_est fallback, TARE / MARK step
+  failures, report failure, trace decimation, VALID clear after link loss), `test_m4_report_paths.py` (synthetic
+  recordings: input errors, warnings, report-tab classification, rendering edge cases), `test_m3_calibration_paths.py`
+  (store checks, load / travel wizard error and restore paths, tare engine), `tests/unit/sim/test_sim_stall.py`.
+
 ---
 
 ## 23. Change history
@@ -2600,3 +2718,88 @@ against §15.5f from the start.
 | 0.5.1 | 2026-10-05 | Implementer B | M3 gate fix: **SWD-M3-01** one latch per limit class (PULL / PUSH / TRAVEL_MIN / TRAVEL_MAX), every class supervised on every frame; **MC3-4** LINK LOST diagnostics (tick gaps per thread, GC pauses); B5-25 (`SafetyStatus.trips`, Protocol members `LimitsAPI.check`, `MarksAPI.delete_preset`). |
 | 0.5 | 2026-10-05 | Implementer B | **M3 backend (§22b, §15.5e B5-01…B5-24).** calc M3 (robust statistics, load / travel calibration, tare, limits, derived channels — R4 §12 vectors), calibration store + session + marks files, pipeline scaling + derived channels, SafetySupervisor (SAF-SW-001 every frame, STOP first; 100 injected violations ≤ 50 ms), ThresholdManager calibrated path with automatic rewrite + identity check (SAF-SW-002, MC2-3: `core.safety` 96 % branch coverage), no-specimen mode (SW-LIM-004), SAF-SW-006 margin warning, CaptureHub, tare / load-calibration / travel-calibration engines incl. the restore rule §9.3.1, take-sample, recorder complete (derived columns, SW event rows, snapshot sidecar, free-space / failure handling, REC_GAP), simulator load model + ICD v0.7.2 alignment (weight, cell terms, world mechanics SWC-M3-03, E-stop POS_UNCERTAIN SWC-M3-01, MOVE_UNTIL_LOAD rules OI-FW-43). D's requests GRQ-B-23…27 answered (B5-18…22). |
 | 0.4.1 | 2026-10-04 | Implementer B | M2 close-out, aligned to ICD v0.7 (dict 5, state_schema 3) (§22a "M2 close-out"): SWD-M2-01 D-41/D-42 texts, SWD-M2-02 round half away, SWD-M2-03 finished-move resolution, MC2-4 simulator flash stall, D-43 b un-homed origin window, CR-03 boot-latched power sense + D-42 hardwired ENA cut in the world model. No GUI API change (only texts of `CLEAR_HINTS` / gate items). |
+| 0.6.1 | 2026-10-08 | Implementer B | **Windows distribution (P3 task 2a, PO-approved)**: §24 — PyInstaller 6.22.3 one-folder build of `bend_stand` (Python 3.14 runtime, PySide6, pyqtgraph, numpy, pyserial, generated dictionaries, simulator) with two executables (`BirdBendStand.exe` windowed, `BirdBendStand-cli.exe` console), version = pyproject version + git hash via a generated dist-info, Windows version resource + icon, runtime hook (windowed log file, `BEND_STAND_D06_GUARD` for test runs of the exe), `build_dist.ps1` (pin check, build, BUILD_INFO, smoke, deterministic zip, optional Inno Setup), `smoke_dist.py` S1–S7, `requirements-build.txt`, pyproject extra `build`; unit tests `tests/unit/test_dist_packaging.py`. No change to `src`. Findings F-B-PKG-01…05. |
+| 0.6.2 | 2026-10-08 | Implementer B | **Coverage + M4 notes (P3 tasks 4 + 7, PO-approved)**, §22c "Post-gate revision v0.6.2": SeqStatus label + phase atomic (B6-24), `t_reached_s` of a step failed after reaching (B6-25), REFUSED_PAUSED without a pause indication → STEP_REFUSED (B6-26), simulator `inject step_stall` = tools/README "Move stall" ICD v0.7.5 (§12.4, B6-27); §10.3 / §10.5 unexpected-outcome rules written down; stale `on_trim_fail` / file v1 text removed (§10.1, §10.4, §13.4), §11 offline CLI as built, F-B-14 closed; new unit tests for the executor, report, calibration and tare error / stop / restore paths. Manual items from D: clear-hint wording (OI-UM-01, B6-28), plan force clamp below contact (OI-UM-06, B6-29), `record_start` link gate (GRQ-B-31 a, B6-30), `reports.root()` (GRQ-B-31 b, B6-31); `SimBoard.inject_step_stall` aligned to tools/README "Move stall" (OI-C-075-01). |
+| 0.6.3 | 2026-10-08 | Implementer B | **Packaging follow-up (OI-UM-03, GRQ-B-31 c)**, §24: operator docs installed under `docs\` of the distribution (`USER_MANUAL` / `QUICK_REFERENCE` `.md` + rendered `.html` + `img\`, `packaging/docs_html.py`), Start-menu entries; entry point `report <recording> […]` subcommand (= public `core.report.main`, offline rebuild in the installed app, SW-REP-003), `--recordings DIR`, `--headless --record` (§1); GUI icon resource `bend_stand/gui/resources/BirdBendStand.ico` in the spec datas and pyproject `package-data`; smoke S7 extended (docs, icon), new S8 (record + offline report); `build_dist.ps1 -BuildDir/-DistDir`, `smoke_dist.py --work`; USER_MANUAL "Offline rebuild" paragraph; unit tests `test_cli_report.py`. F-B-PKG-01 closed (D), F-B-PKG-04 partly (CLI option). |
+| 0.6.4 | 2026-10-08 | Implementer B | **D-50 a / SRS v0.6.5 SW-CAL-007** (F-B-COV-01): load-calibration plausibility — weight detection (≥ max(10 × std_zero, 50 counts) from the zero and the previous point, refused "weight not detected", re-checked before the fit) and |K| within 0.5…2 × the nominal |K| of the configured cell / AFE (`calc.loadcal.nominal_k`: FS_N / (S/1000 · gain · 2^24)), else the confirmation `K_IMPLAUSIBLE`, recorded in the file (`plausibility`, `confirmations`); "nominal unknown" recorded when no nominal is derivable; no sign check (§9.4, B6-32). `reports.root()` added to the `api.ReportAPI` Protocol (B6-31). |
+| 0.6.5 | 2026-10-09 | Implementer B | **Review fixes (SW_code_review v1.1, B packaging share)**: SWR-14 log file + incident log for every run (`core.logfile`, §14; frozen hook marks its stdio redirect, no double handlers — OI-F-RV-04; smoke S9); SWR-11 report HTML: `result_from_dict` type coercion, every sidecar value escaped, script-free CSP; SWR-23 `samples.csv` formula injection neutralised (`recorder.csv_cell`); SWR-24 offline `--cal` validated (schema / version when the file has a header, else a bare record as in a recording snapshot; `validate_load`, finite numbers, types; non-PASS warned); SWR-27 hash-pinned locks + `--require-hashes` in the build, pyproject upper bounds. Tests `tests/unit/test_review_hardening.py`, lock tests; xfail of `test_swr11_…` removed. |
+| 0.6.6 | 2026-10-09 | Implementer B | **SW review fixes** (SW_code_review v1.1, D-53, SRS v0.6.6): SWR-01/02 liveness reactions + per-frame isolation, SWR-03 (D-53 a) load-input rule independent of the limit enables, SWR-04/05/07/26 test-record integrity, SWR-06/12/25 robust loaders, SWR-08 config gate, SWR-16 (D-53 b) pull_dir mismatch refused, SWR-09 hotkey liveness, SWR-10/15 priority path without the channel lock, S4 SWR-13/17/18/19/20/21/22/28; check-vector state_schema 4 (`ena_on`); §15.5f B6-33, §22c. |
+| 0.6.7 | 2026-10-10 | Implementer B | **P3 perf findings (SW_perf_report_devpc):** SWD-P3-01 — `Recorder._enqueue` decides (end instant, state, stale row) and appends in one lock hold with the state changes of `start` / `stop`; a row stamped at or before the previous recording's newest receive time is rejected (`rows_stale`), reproducers `test_rec_boundary.py`. OBS-P3-01 — the out-of-process simulator server owns the 1 ms timer resolution while it runs (`timing.init()` / `shutdown()` in `SimServer.start/stop`). OBS-P3-04 — the per-frame `np.median` of the pipeline (≈ 0.6 MB/min of numpy allocations, tracemalloc diff) replaced by a pure-Python median; diagnostic logs small outside test runs (`BackendSettings.test_logs`: Reader `rx_log` / in-process simulator wire + sent logs 5 000 entries, test runs 100 000 / 200 000); `seq.status` with its own 2 000-record EventBus history. Liveness filter (SWR-01, OBS-P3-05): the "DATA not evaluated" check ignores the tick after a whole-process stall (Supervisor silent > 100 ms) and needs 30 ms persistence; a genuine Pipeline stall stops in ≤ 240 ms. **SWR-37 (S3, Orchestrator):** plus a hard ceiling that ignores the filter — unevaluated DATA older than 1000 ms (`PIPELINE_CEILING_MS`) while moving is a liveness fault (repeated > 100 ms Supervisor gaps can no longer hide a real Pipeline stall). |
+| 0.6.8 | 2026-10-10 | Implementer B | **Review residuals (SW_code_review v1.2 / v1.3):** SWR-29 (D-53 a) any exit from the no-specimen mode switches both PC load limits on again (event `LIMITS_RESTORED`); SWR-30 report warning for a truncated run log; SWR-31 a log set-up failure of any kind falls back to the console, `main()` calls it inside its `try`; SWR-32 `CommandChannel._write` runs future callbacks / `on_tx_error` after releasing `_epoch_lock`; SWR-33 closed by v0.6.7 (SWD-P3-01); SWR-34 `iniconfig` pinned to the verified `.venv` (2.3.0) in `requirements-dev.txt`, dev lock regenerated; SWR-35 shutdown STOP also for a just-started jog; SWR-36 incident log records FW-threshold FAILED / INVALID and lost FW EVENTs (`log` kind `FW_EVENTS_LOST`). API: `device.board_changed` in `api.TOPICS`, `SessionAPI.load_issues` (B6-34). |
+
+## 24. Windows distribution (packaging) — SW-PLT-001, SYS-008, D-06
+
+Task 2a (PO-approved): the lab PC gets the application **without a Python installation** (fresh-install demo DM-02).
+The development route (project venv from `requirements*.txt`, `run*.bat`) is unchanged; the distribution freezes the
+same verified set (D-33 i: Python 3.14; the frozen folder is "the application's own runtime"). Build and install
+instructions with measured numbers: `03_SW/packaging/README.md`.
+
+### 24.1 Build
+
+| Element | Design |
+|---|---|
+| Tool | PyInstaller **6.22.3** + hooks-contrib 2026.8, one-folder mode (no one-file: no unpacking to `%TEMP%` at every start, faster start, AV-friendlier); UPX off; `optimize=0` (asserts as in the tested tree) |
+| Pins | `03_SW/requirements-build.txt` = `-r requirements.txt` + PyInstaller and its dependencies (exact); `pyproject.toml` extra `build` (ranges). **v0.6.5 (SWR-27):** hash-pinned `requirements-build.lock.txt` (13 packages incl. transitive, SHA-256 of the exact wheel; `packaging/lock_requirements.py generate / check`); `build_dist.ps1 -InstallDeps` installs it with `--require-hashes`, `buildinfo.py check-env` compares the venv with the lock (direct + transitive); the build stops on a mismatch (reproducibility) |
+| Spec | `packaging/BirdBendStand.spec`: entry `entry_birdbendstand.py` (= `bend_stand.__main__.main`); `collect_submodules("bend_stand")` (the GUI is imported dynamically by `__main__`; `io.sim` incl. the out-of-process server is included — `--sim` works on the target, SYS-008); package data `bend_stand/gui/resources/BirdBendStand.ico` at the same relative path (`gui.resources.app_icon()`: window / taskbar icon, GRQ-B-31 c; also pyproject `package-data`); excludes: test/build tools, `numpy.f2py`, `ssl`, unused Qt modules, pyqtgraph examples/OpenGL/Jupyter; Qt translations dropped (English UI) |
+| Executables | `BirdBendStand.exe` (GUI subsystem, operator use) and `BirdBendStand-cli.exe` (console, unbuffered stdout: `--headless`, `--version`, diagnostics), one shared `_internal/` |
+| Version | `[project].version` + git short hash → PEP 440 `0.1.0+g<hash>` (`.dirty` if `03_SW/src`, `packaging`, `pyproject.toml` or requirements differ from HEAD). The spec writes `bend_stand-<version>.dist-info/METADATA` into the bundle → `bend_stand.__version__` (importlib.metadata, unchanged code) reports the build in `--version`, About and every `sw_version` field; Windows version resource (file version 0.1.0.0, product version string, git hash + build time in *Comments*); icon `packaging/assets/BirdBendStand.ico` (generated by `make_icon.py`, stdlib) |
+| Docs | `packaging/docs_html.py` (stdlib Markdown subset → HTML, GitHub heading ids): `03_SW/docs/USER_MANUAL.md`, `QUICK_REFERENCE.md` and `img/` → `<dist>/docs/` as `.md` + `.html` (Windows 10 has no `.md` handler; shortcuts open the HTML); a missing referenced screenshot stops the build (OI-UM-03) |
+| Script | `packaging/build_dist.ps1` (PS 5.1; `build_dist.bat` wrapper; `-BuildDir` / `-DistDir` for private folders): env check → version → PyInstaller → docs + `BUILD_INFO.txt` (incl. the frozen `--version` output) → smoke (§24.3) → deterministic zip (sorted entries, HEAD commit time) → Inno Setup if `-Installer` and ISCC is installed |
+| Outputs | `03_SW/dist/BirdBendStand-<ver>/`, `…zip`, `…-setup.exe`; work files `03_SW/build/` — both git-ignored |
+| Installer | `packaging/BirdBendStand.iss` (Inno Setup 6): per-user by default (no admin), Start-menu entries normal / `--sim` / *Operator manual* / *Quick reference card* / build info, optional desktop icon, previous `_internal` and `docs` replaced on update, user data never removed. Inno Setup is not installed on the dev PC (no system software installed) → the zip is the DM-02 deliverable |
+
+### 24.2 Frozen-app runtime (`packaging/rthook_bend_stand.py`, runs before `__main__`)
+
+- **Windowed output**: in `BirdBendStand.exe` `sys.stdout`/`sys.stderr` are `None`; they are redirected (line-buffered)
+  to `<data>/logs/BirdBendStand.log` (`<data>` = `BEND_STAND_DATA_DIR` or `%APPDATA%\BirdBendStand`, same rule as
+  `core.paths`; rotated to `.log.1` above 2 MiB) and `faulthandler` writes hard crashes there. Read-only profile →
+  no log, the app still starts. With a console or redirected handles nothing changes. The application log proper is
+  `core.logfile` (§14) in every run; the hook sets `sys._bend_stand_stdio_log`, so that set-up installs no console
+  handler on top of the redirect — log records go to `bend_stand.log` only, stdio / faulthandler output to
+  `BirdBendStand.log` (SWR-14, OI-F-RV-04; smoke S9).
+- **D-06 guard for test runs of the exe**: `BEND_STAND_D06_GUARD=1` (not `0`/empty) replaces `serial.Serial.open` and
+  `serial.serial_for_url` with a function raising `HardwareAccessForbidden` (as `tests/conftest.py` does in-process).
+  The shipped exe without the variable opens exactly the port the operator selected (`--port COMx` or Connect) and
+  starts disconnected otherwise — the D-06 rule of §1 holds unchanged in the frozen app.
+- Data locations are those of the source app (§13, `core.paths`): `%APPDATA%\BirdBendStand\{calibration, sessions,
+  presets, gui.ini, logs}`; recordings `Documents\BirdBendStand\recordings`, configurable through `recordings_root`
+  in the default session file (`sessions/default.bbsession.json`, loaded at start), `--session`, or per run
+  `--recordings DIR` (→ `BackendSettings.recordings_root`, takes precedence).
+- **Offline report** in the installed app (OI-UM-03, SW-REP-003): `BirdBendStand-cli.exe report <recording> [--cal F]
+  [--tare-raw N] [--bend3p L b h] [--out DIR]` — `__main__.main` dispatches a first argument `report` to the public
+  `bend_stand.core.report.main` (same options and exit codes as `python -m bend_stand.core.report`; no Backend, no
+  port). `--headless --record` records the stream for `--duration` and prints the folder (smoke S8, demo data).
+- The real exe registers the system-wide Pause/Break hotkey like the source app (smoke runs set
+  `BEND_STAND_HOTKEY=off`).
+
+### 24.3 Verification
+
+`packaging/smoke_dist.py --dist <folder>` (run by the build script; every run with a private data folder, private
+`gui.ini`, hotkey off and the D-06 guard on): **S1** `cli --version` = stamped version; **S2/S3** `--headless --sim`
+(console and windowed exe) rc 0, CONNECTED, stream on, DATA > 0; **S4** GUI `--sim` offscreen with
+`BEND_STAND_GUI_QUIT_AFTER_MS` rc 0, exit summary CONNECTED / stream on / DATA > 0; **S5** GUI without endpoint
+starts disconnected; **S6** `--headless --port COM250` with the guard → `HardwareAccessForbidden`, rc ≠ 0 (the OS is
+never asked); **S7** layout (qwindows plugin, dist-info, GUI icon resource, `docs/` manuals `.md` + `.html` with every
+referenced screenshot, no pytest / PyInstaller / yaml); **S8** `--headless --sim --record --recordings <tmp>` then
+`cli report <recording> --out <tmp>` → rc 0, `report.json` (bird.bend.report, rows > 0) + `report.html`, missing
+folder → rc 2; **S9** (v0.6.5) windowed exe started without console handles: stdio in `BirdBendStand.log`, the GUI
+exit line exactly once in `bend_stand.log` and not in `BirdBendStand.log`; S2 / S3 also require `bend_stand.log`
+with the start and incident lines. Unit tests `tests/unit/test_dist_packaging.py` (version / dist name, pin parsing, version resource,
+dist-info, deterministic zip, icon + GUI icon resource, rthook guard and log redirect, spec excludes, git-ignore, docs
+renderer and installed manuals) and `tests/unit/test_cli_report.py` (`report` subcommand, `--recordings`, `--record`).
+
+Evidence 2026-10-08 (`0.1.0+ge600169.dirty`): folder 134.4 MiB / 202 files, zip 59.3 MiB, PyInstaller ≈ 80 s;
+smoke 7/7 PASS offscreen and 7/7 PASS from the extracted zip with a Python-free `PATH` and the native `qwindows`
+platform; `--headless --sim` start → connected 1.1–1.4 s; GUI start → quit 2.0 s warm / 3.1 s cold. v0.6.3 build:
+folder 137.5 MiB / 247 files (incl. `docs/` 3.1 MiB), zip 62.2 MiB; smoke **8/8 PASS** in the build run and 8/8 from
+the extracted zip with a Python-free `PATH`.
+
+### 24.4 Findings / open items (packaging)
+
+| ID | To | Item |
+|---|---|---|
+| F-B-PKG-01 | D | **Closed** (GRQ-B-31 c): the GUI loads `gui/resources/BirdBendStand.ico`; bundled by the spec, checked by S7. |
+| F-B-PKG-02 | Orchestrator / PO | Code signing (SmartScreen "unknown publisher" on first start; AV heuristics) needs a certificate — decision. |
+| F-B-PKG-03 | Orchestrator | SRS SW-PLT-001 describes the venv + requirements route only; add the frozen distribution (or a DM-02 note) if it becomes the delivery form. |
+| F-B-PKG-04 | D | B part done (v0.6.3: `--recordings DIR`); open for D: a GUI folder picker (the Report tab shows the folder read-only). |
+| F-B-PKG-05 | Orchestrator | Installer not built: Inno Setup 6 is not installed on the dev PC; `.iss` ready (`build_dist.ps1 -Installer`). |

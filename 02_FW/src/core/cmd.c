@@ -4,13 +4,23 @@
  * motion executor (under CRIT_TICK: serialised with the control tick); so does MOVE_UNTIL_LOAD
  * (FW-MOT-006, D-44: M4 scope pulled forward, FEAT_MOVE_UNTIL_LOAD = 1).
  * EVENT order of a stop (FW_design §5.3): latch EVENT -> STOPPED -> VALID_CLEARED -> MOVE_DONE.
+ * Check and execution are atomic with respect to the control tick (review FWR-03, FW_design §5.4.2
+ * v0.8): a state-changing command is executed under CRIT_TICK, and if a tick ran between its check
+ * and that section (it may have folded a limit / PAUSE / fault / E-stop record into a latch), the
+ * context is rebuilt and the command checked again inside the section; a stale verdict never starts
+ * motion. The stop generation is captured before each check (FWR-01, motion_gate_capture()); a moved
+ * stop generation also triggers the re-check, and an active edge recorded by a level-0/1 handler but not
+ * yet folded counts as an active input in the context (FWR-16: no ENABLE after an E-stop edge in the
+ * window; FWR-17).
  * Implements: FW-CMD-001, FW-CMD-002, FW-CMD-003, FW-CMD-004, FW-CFG-002, FW-CFG-003, FW-CFG-004,
  *             FW-NVM-001, FW-STR-001, FW-MOT-004, FW-MOT-005, FW-MOT-006, FW-MOT-007, FW-MOT-008, FW-HOM-001,
  *             SAF-FW-001 (VALID clear), SAF-FW-006, SAF-FW-011 (regrow reference), SAF-FW-020,
- *             SAF-FW-021, SAF-FW-023, IF-005, IF-008, D-30, D-31
+ *             SAF-FW-021, SAF-FW-023, IF-005, IF-008, D-30, D-31, SAF-FW-013 (FWR-03: no start against
+ *             a latch folded after the check), SAF-FW-002 / SAF-FW-005 a (FWR-01 gate capture)
  */
 #include "fw.h"
 
+#include "hal_step.h"
 #include "hal_sys.h"
 #include "hal_time.h"
 #include "hal_uart.h"
@@ -44,6 +54,20 @@ void fw_cmd_ctx(cmd_ctx_t *c)
     c->paused = g_fw.lat.paused;
     c->hw_meas = g_fw.hw_meas;
     c->unhomed_origin_um = motion_unhomed_origin_um();
+    c->ena_on = g_fw.ena_on;                     /* FWR-09 (state_schema 4) */
+}
+
+/* FWR-16 / FWR-17: an active E-stop / START / END edge recorded by a level-0/1 handler (fixed reaction
+ * done) but not yet folded by the tick (<= 1 ms) */
+static bool pending_edges(void) { return safety_edges_pending(); }
+
+/* the context of the final check inside CRIT_TICK: such a pending edge counts as an active input */
+static void ctx_with_pending(cmd_ctx_t *c)
+{
+    fw_cmd_ctx(c);
+    c->estop_input_open = c->estop_input_open || g_fw.in.rec[IO_ESTOP_OPEN_BIT].act_edge;
+    c->limit_start = c->limit_start || g_fw.in.rec[IO_LIMIT_START_BIT].act_edge;
+    c->limit_end = c->limit_end || g_fw.in.rec[IO_LIMIT_END_BIT].act_edge;
 }
 
 static void ok_empty(uint8_t type, uint8_t seq)
@@ -69,23 +93,69 @@ static void do_set_param(uint8_t type, uint8_t seq, const cmd_req_t *r)
     link_respond(type, seq, ST_OK, body, PROTO_PARAM_ENTRY_LEN);
 }
 
+/* read-only or tick-independent commands: no re-validation under CRIT_TICK needed */
+static bool cmd_gated(uint8_t type)
+{
+    switch (type) {
+    case CMD_PING:
+    case CMD_STREAM_START:
+    case CMD_STREAM_STOP:
+    case CMD_GET_INFO:
+    case CMD_GET_STATUS:
+    case CMD_GET_ALL_PARAMS:
+    case CMD_GET_PARAM:
+    case CMD_REBOOT:
+    case CMD_DIAG_MEAS:
+        return false;
+    default:
+        return true;
+    }
+}
+
+static void cmd_run(uint8_t type, uint8_t seq, const uint8_t *payload, uint16_t len, uint32_t now_us);
+
 void cmd_execute(uint8_t type, uint8_t seq, const uint8_t *payload, uint16_t len)
 {
     cmd_ctx_t c;
     cmd_verdict_t v;
-    cmd_req_t r;
-    uint8_t body[PROTO_MAX_LEN];
     uint32_t now_us;
+    uint32_t tick0 = g_fw.tick_count;
+    uint32_t gen0 = hal_step_stop_gen();
 
+    motion_gate_capture();                           /* FWR-01: before the gate check */
     fw_cmd_ctx(&c);
     v = cmd_check(&c, type, payload, len);
     if (v.status != ST_OK) {
         link_nack(type, seq, v.status, v.detail);    /* no side effect (ICD §4.1) */
         return;
     }
-    (void)payload_decode_request(type, payload, len, &r);
     now_us = hal_time_us();
+    if (!cmd_gated(type)) {
+        cmd_run(type, seq, payload, len, now_us);
+        return;
+    }
+    CRIT_BEGIN(HAL_CRIT_TICK);                       /* FWR-03: check + execution atomic vs the tick */
+    if (g_fw.tick_count != tick0 || hal_step_stop_gen() != gen0 || pending_edges()) {
+        /* a tick ran (it may have folded a record), a fixed reaction acted since the check, or an
+         * edge record is still unfolded (FWR-16 / FWR-17): check again, pending edges counted */
+        motion_gate_capture();
+        ctx_with_pending(&c);
+        v = cmd_check(&c, type, payload, len);
+    }
+    if (v.status != ST_OK) {
+        link_nack(type, seq, v.status, v.detail);
+    } else {
+        cmd_run(type, seq, payload, len, now_us);
+    }
+    CRIT_END();
+}
 
+static void cmd_run(uint8_t type, uint8_t seq, const uint8_t *payload, uint16_t len, uint32_t now_us)
+{
+    cmd_req_t r;
+    uint8_t body[PROTO_MAX_LEN];
+
+    (void)payload_decode_request(type, payload, len, &r);
     switch (type) {
     case CMD_PING:
     case CMD_STREAM_START:

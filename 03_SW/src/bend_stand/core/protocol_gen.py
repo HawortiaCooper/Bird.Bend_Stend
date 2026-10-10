@@ -1,6 +1,6 @@
 """GENERATED - do not edit.
 
-Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.4, PROTO 1.0, PAYLOAD 1)
+Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.5, PROTO 1.0, PAYLOAD 1)
 Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
 
 Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes and
@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from enum import IntEnum, IntFlag
 from types import MappingProxyType
 
-ICD_VERSION = '0.7.4'
+ICD_VERSION = '0.7.5'
 PROTO_MAJOR = 1
 PROTO_MINOR = 0
 PAYLOAD_VERSION = 1
@@ -144,7 +144,7 @@ class Block(IntFlag):
 
 
 BLOCK_BITS: tuple[str, ...] = ('ESTOP', 'HALT', 'FAULT', 'NOT_ENABLED', 'NOT_HOMED', 'LIMIT', 'AFE_STALE', 'AFE_SATURATED', 'DRV_UNPOWERED', 'DRIVER_ALARM', 'PAUSED', 'MEAS_STATE')
-BLOCK_DESC: Mapping[str, str] = MappingProxyType({'ESTOP': 'ESTOP latched or E-stop sense input open (also evaluated by RESUME)', 'HALT': 'HALT latched (PC: HALT command / Pause-Break key) (also evaluated by RESUME)', 'FAULT': 'any FAULT latched (§7.6) (also evaluated by RESUME)', 'NOT_ENABLED': 'motion state NOT_ENABLED (ENABLE never done, or DISABLE / E-stop / idle disable / driver power loss since)', 'NOT_HOMED': 'MOVE_ABS, MOVE_UNTIL_LOAD or JOG with a bound while not homed', 'LIMIT': 'motion toward an active or latched limit switch (direction = sign(target − x) or sign(v)); only motion away is accepted while latched (D-33h)', 'AFE_STALE': 'no HX711 sample for afe.timeout_ms', 'AFE_SATURATED': 'last HX711 sample at a rail', 'DRV_UNPOWERED': "only with the optional power sense (drv.pwr_sense_enable, default 0 since CR-03 / D-41): the DRV_POWER input reads 'off' (D-28, D-29c)", 'DRIVER_ALARM': 'ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)', 'PAUSED': 'PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)', 'MEAS_STATE': 'DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c)'})
+BLOCK_DESC: Mapping[str, str] = MappingProxyType({'ESTOP': 'ESTOP latched or E-stop sense input open (also evaluated by RESUME)', 'HALT': 'HALT latched (PC: HALT command / Pause-Break key) (also evaluated by RESUME)', 'FAULT': 'any FAULT latched (§7.6) (also evaluated by RESUME)', 'NOT_ENABLED': 'motion state NOT_ENABLED (ENABLE never done, or DISABLE / E-stop / idle disable / driver power loss since)', 'NOT_HOMED': 'MOVE_ABS, MOVE_UNTIL_LOAD or JOG with a bound while not homed', 'LIMIT': 'motion toward an active or latched limit switch (direction = sign(target − x) or sign(v)); only motion away is accepted while latched (D-33h)', 'AFE_STALE': 'no HX711 sample for afe.timeout_ms', 'AFE_SATURATED': 'last HX711 sample at a rail', 'DRV_UNPOWERED': "only with the optional power sense (drv.pwr_sense_enable, default 0 since CR-03 / D-41): the DRV_POWER input reads 'off' (D-28, D-29c)", 'DRIVER_ALARM': 'ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)', 'PAUSED': 'PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)', 'MEAS_STATE': 'DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED and, for sel PUL, the ENA output at the disabled level (Appendix C, D-40c, FWR-09)'})
 BLOCK_RETIRED: frozenset[str] = frozenset()
 
 
@@ -553,10 +553,10 @@ class MeasOp(IntEnum):
 
 
 MEAS_OP_NAMES: tuple[str, ...] = ('INFO', 'PROBE_ARM', 'PROBE_READ', 'COUNTER', 'STAMPS', 'NOINIT', 'STIM_RUN', 'HANG', 'STATIC_LEVEL', 'DWT')
-MEAS_OP_DESC: Mapping[str, str] = MappingProxyType({'INFO': 'variant, clocks, ring size, stamp overhead', 'PROBE_ARM': 'arm the event-latency probe (MT-3)', 'PROBE_READ': 'read the probe captures', 'COUNTER': 'independent PUL counter (MT-2): read / reset', 'STAMPS': 'device-time stamp ring (MT-4), newest first', 'NOINIT': '.noinit block (last PUL, heartbeat, hang start, previous-boot record, boot counter; survives a reset)', 'STIM_RUN': 'stimulus series on the J-STIM output (MT-7)', 'HANG': 'test-image hang injection while moving (IWDG evidence)', 'STATIC_LEVEL': 'drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed)', 'DWT': 'DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0)'})
+MEAS_OP_DESC: Mapping[str, str] = MappingProxyType({'INFO': 'variant, clocks, ring size, stamp overhead', 'PROBE_ARM': 'arm the event-latency probe (MT-3)', 'PROBE_READ': 'read the probe captures', 'COUNTER': 'independent PUL counter (MT-2): read / reset', 'STAMPS': 'device-time stamp ring (MT-4), newest first', 'NOINIT': '.noinit block (last PUL, heartbeat, hang start, previous-boot record, boot counter; survives a reset)', 'STIM_RUN': 'stimulus series on the J-STIM output (MT-7)', 'HANG': 'test-image hang injection while moving (IWDG evidence)', 'STATIC_LEVEL': 'drive PUL or DIR statically for the DMM (only NOT_ENABLED; PUL only with ENA at the disabled level; released before the next command is executed)', 'DWT': 'DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0)'})
 MEAS_OP_RETIRED: frozenset[str] = frozenset()
 MEAS_OP_SEL: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'meas_src', 'PROBE_READ': '0', 'COUNTER': '0 read, 1 reset (returns the value before the reset)', 'STAMPS': 'meas_chan', 'NOINIT': '0 read, 1 clear', 'STIM_RUN': 'bit 0 polarity (0 high pulse, 1 low pulse), bits 1-7 hold time 1…127 ms', 'HANG': 'meas_hang_where', 'STATIC_LEVEL': 'meas_pin', 'DWT': '0 read, 1 reset'})
-MEAS_OP_A: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'bits 0-1 meas_probe_mode, bit 8 event polarity (0 rising, 1 falling), other bits 0', 'PROBE_READ': '0', 'COUNTER': '0', 'STAMPS': 'page 0…1023', 'NOINIT': '0', 'STIM_RUN': 'pulses 1…1000', 'HANG': 'duration 0…10000 ms (0 = until the IWDG resets)', 'STATIC_LEVEL': 'level 0/1', 'DWT': 'section 0…31 (0…22 defined, App. C table C.1)'})
+MEAS_OP_A: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'bits 0-1 meas_probe_mode, bit 8 event polarity (0 rising, 1 falling), other bits 0', 'PROBE_READ': '0', 'COUNTER': '0', 'STAMPS': 'page 0…1023', 'NOINIT': '0', 'STIM_RUN': 'pulses 1…1000', 'HANG': 'duration 0…10000 ms (0 = until the IWDG resets)', 'STATIC_LEVEL': 'level 0/1', 'DWT': 'section 0…31 (0…23 defined, App. C table C.1)'})
 MEAS_OP_B: Mapping[str, str] = MappingProxyType({'INFO': '0', 'PROBE_ARM': 'timer prescaler 0…65535', 'PROBE_READ': '0', 'COUNTER': '0', 'STAMPS': '0', 'NOINIT': '0', 'STIM_RUN': 'seed', 'HANG': '0', 'STATIC_LEVEL': '0', 'DWT': '0'})
 MEAS_OP_RETRY: Mapping[str, str] = MappingProxyType({'INFO': 'RETRY', 'PROBE_ARM': 'VERIFY', 'PROBE_READ': 'RETRY', 'COUNTER': 'RETRY (read) / VERIFY (reset)', 'STAMPS': 'RETRY', 'NOINIT': 'RETRY (read) / VERIFY (clear)', 'STIM_RUN': 'VERIFY', 'HANG': 'VERIFY', 'STATIC_LEVEL': 'VERIFY', 'DWT': 'RETRY (read) / VERIFY (reset)'})
 
@@ -589,7 +589,7 @@ class MeasProbeMode(IntEnum):
 
 
 MEAS_PROBE_MODE_NAMES: tuple[str, ...] = ('TRIGGER', 'RESET', 'PWM_INPUT')
-MEAS_PROBE_MODE_DESC: Mapping[str, str] = MappingProxyType({'TRIGGER': 'the first event edge after arming starts the probe counter (single shot)', 'RESET': 'every event edge restarts the probe counter (last event wins)', 'PWM_INPUT': 'PUL period and high width per pulse (min/max over the pulses since arming)'})
+MEAS_PROBE_MODE_DESC: Mapping[str, str] = MappingProxyType({'TRIGGER': 'the first event edge after arming starts the probe counter (single shot)', 'RESET': 'every event edge restarts the probe counter (last event wins)', 'PWM_INPUT': 'PUL period and high width per pulse (min/max over the pulses since arming; a period that overflowed the 16-bit capture = 0xFFFFFFFF)'})
 MEAS_PROBE_MODE_RETIRED: frozenset[str] = frozenset()
 
 

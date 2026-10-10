@@ -13,8 +13,14 @@ Owner: Validator E (00_System/tools/hil, the Integrator reviews). Runbook: HW_GA
   Other:  --list (the ordered plan) · --report <dir> (re-render the markdown report)
 
 D-06 interlock (hil_link.open_serial): no serial port is opened without --approved D-06-GATE-YYYYMMDD[-TAG] that is
-dated, not in the future, ≤ 7 days old and recorded in specs/DECISIONS.md or STATUS.md, an explicit --port, and the
-operator re-typing the port name; with --board-uid the GET_INFO UID must match. --twin and --port are exclusive.
+dated, not in the future, ≤ 7 days old and recorded as a dedicated approved row in specs/DECISIONS.md or STATUS.md,
+an explicit --port, the operator re-typing the port name, and --board-uid (24 hex digits). --twin and --port are
+exclusive.
+Session identity (FWR-13 / FWR-15, FW_code_review.md): every run starts with the identity block (S-00, or S-ID on a
+resume) whatever --only / --from select: GET_INFO dict hash + protocol must match and, on the board, the UID must equal
+--board-uid, else the session stops. Results carry session id / mode / board UID / image identity; gates (load gate,
+§6.8 bench entry, HG-10 c/d) accept only results of the current session. HG-10a always runs between BENCH-ENTRY and
+BENCH-EXIT; phase-4 items always follow GATE-LOAD. --accepted-open references must be recorded accepted rows.
 Flashing is never done by this tool: image steps ask the PO to flash and then verify GET_INFO / DIAG_MEAS INFO.
 Results: <out>/results/<item>.json, <out>/session.json, <out>/HG_report_<mode>.md.
 """
@@ -36,6 +42,7 @@ if str(HERE) not in sys.path:
 
 import hil_budget as hb  # noqa: E402
 import hil_procs as P  # noqa: E402
+import hil_link as hl  # noqa: E402
 import hil_report  # noqa: E402
 import ref_codec as rc  # noqa: E402
 from hil_link import InterlockError, Link, SerialTransport, TwinTransport  # noqa: E402
@@ -57,25 +64,23 @@ class Step:
 # ---------------------------------------------------------------------------------------- session steps
 def s_start(ctx: P.Ctx) -> None:
     op = ctx.op
+    P.check_identity(ctx)                    # FWR-15: first, before any operator question or motion (refuses)
     p = op.ask_text("PERSONS", "Operator and observer names", nominal="(dry run)")
     ctx.data("persons", p.value)
     c = op.ask_text("COMMIT", "Git commit of the three images (release / HW_MEAS / HW_MEAS_DWT, one commit)",
                     nominal="(dry run)")
     ctx.data("images_commit", c.value)
-    inf = ctx.L.info()
-    ctx.data("info", inf)
-    ctx.check(hb.check_eq("param dict hash", inf["param_dict_hash"], P.DICT_HASH, "gen_params (R-HIL-01)"))
-    ctx.check(hb.check_eq("protocol 1.0 / payload 1", (inf["proto_major"], inf["proto_minor"], inf["payload_version"]),
-                          (1, 0, 1)))
-    want_uid = ctx.cfg.get("board_uid")
-    if want_uid and not ctx.twin:
-        if inf["uid"].upper() != want_uid.upper():
-            raise P.BenchRefused(f"board UID {inf['uid']} != PO-named {want_uid} — wrong board, session stopped")
-        ctx.check(hb.check_eq("board UID (PO-named)", inf["uid"], want_uid.upper()))
     dip = op.ask_yes_no("DIP", "Driver DIP target setting applied with the driver unpowered (D-27, wiring §10)?",
                         nominal=True)
     ctx.judged(hb.check_true("DIP applied before the first motion", dip.value, "D-27"), dip)
+    if not dip.value:
+        raise P.BenchRefused("DIP not applied (D-27) - no motion, session stopped (O-2)")
     ctx.check(hb.info("TC-SYS-009-02 / check_meas_build", "see HG-29 f"))
+
+
+def s_identity(ctx: P.Ctx) -> None:
+    """Resume of a session (--from / --only after S-00 passed): board / image identity re-checked (FWR-15)."""
+    P.check_identity(ctx)
 
 
 def image_step(image: str) -> Callable[[P.Ctx], None]:
@@ -86,6 +91,7 @@ def image_step(image: str) -> Callable[[P.Ctx], None]:
             ctx.L.tr.reflash(image)
             ctx.note(f"twin: engine restarted with hw_meas={image != 'release'} (stand-in for flashing {names[image]})")
         else:
+            ctx.identified = False                    # C-R3: the device on the port is unverified until verify_image
             ctx.L.tr.close_port()
             ctx.op.instruct("FLASH", f"PO: flash {names[image]} (firmware.bin of the recorded commit) with "
                             "STM32CubeProgrammer over the ST-LINK; the session closed the COM port. Board resets.")
@@ -138,6 +144,34 @@ def gate_load(ctx: P.Ctx) -> None:
 def hg10cd(ctx: P.Ctx) -> None:
     P.hg10cd(ctx)
 
+
+IDENTITY_ITEMS = P.IDENTITY_ITEMS
+
+
+def stop_reason(item_id: str, it) -> str | None:
+    """O-2 / C-R3: an identity item (S-00, S-ID, IMG-*) or BENCH-ENTRY that ended with an error, a FAIL or an
+    INCONCLUSIVE verdict stops the session before any further motion (BENCH-ENTRY: after BENCH-EXIT restored the
+    E-stop sense). None = continue."""
+    if item_id not in IDENTITY_ITEMS and item_id != "BENCH-ENTRY":
+        return None
+    v = "ERROR" if it.error else it.verdict
+    if it.error or v in (hb.FAIL, hb.INCONCL):
+        return f"{item_id} ended {v}" + (f" ({it.error})" if it.error else "")
+    return None
+
+
+def validate_selection(only: str | None, from_: str | None) -> None:
+    """O-3: --only / --from ids are checked before any port is opened (ValueError)."""
+    ids = {s.id for s in PLAN} | {S_ID.id}
+    if only:
+        unknown = {x.strip() for x in only.split(",") if x.strip()} - ids
+        if unknown:
+            raise ValueError(f"--only: unknown step id(s) {sorted(unknown)}")
+    if from_:
+        pool = [s.id for s in PLAN] if not only else [s.id for s in PLAN if s.id in {x.strip() for x in only.split(",")}]
+        if from_ not in pool:
+            raise ValueError(f"--from {from_!r} is not in the selected plan")
+S_ID = Step("S-ID", 0, "Resume: board and image identity re-check (FWR-15)", s_identity, "SYS-009, D-06")
 
 PLAN: list[Step] = [
     Step("S-00", 0, "Session start: persons, image commit, board identity, DIP applied", s_start, "SYS-009, D-06",
@@ -221,6 +255,45 @@ PLAN: list[Step] = [
 ]
 
 
+def select_steps(ctx: P.Ctx, only: str | None, from_: str | None) -> list[Step]:
+    """--only / --from selection with the steps that can never be skipped (FWR-15): the identity block first (S-00, or
+    S-ID when S-00 already completed in this session); BENCH-ENTRY directly before and BENCH-EXIT directly after HG-10a;
+    GATE-LOAD before the first phase-4 item unless it already passed in this session (target)."""
+    steps = list(PLAN)
+    if only:
+        want = {x.strip() for x in only.split(",") if x.strip()}
+        unknown = want - {s.id for s in PLAN} - {S_ID.id}
+        if unknown:
+            raise ValueError(f"--only: unknown step id(s) {sorted(unknown)}")
+        steps = [s for s in PLAN if s.id in want]
+    if from_:
+        ids = [s.id for s in steps]
+        if from_ not in ids:
+            raise ValueError(f"--from {from_!r} is not in the selected plan")
+        steps = steps[ids.index(from_):]
+    by_id = {s.id: s for s in PLAN}
+    ids = [s.id for s in steps]
+    if "HG-10a" in ids:
+        k = ids.index("HG-10a")
+        if k == 0 or ids[k - 1] != "BENCH-ENTRY":
+            steps.insert(k, by_id["BENCH-ENTRY"])
+            k += 1
+        ids = [s.id for s in steps]
+        if "BENCH-EXIT" not in ids[k + 1:]:
+            steps.insert(k + 1, by_id["BENCH-EXIT"])
+        ids = [s.id for s in steps]
+        # no duplicate entry / exit elsewhere
+        steps = [s for i, s in enumerate(steps) if s.id not in ("BENCH-ENTRY", "BENCH-EXIT") or
+                 abs(i - ids.index("HG-10a")) == 1]
+    ids = [s.id for s in steps]
+    p4 = [i for i, s in enumerate(steps) if s.phase == 4 and s.id != "GATE-LOAD"]
+    if p4 and "GATE-LOAD" not in ids[:p4[0]] and not ctx.result_ok("GATE-LOAD"):
+        steps.insert(p4[0], by_id["GATE-LOAD"])
+    steps = [s for s in steps if s.id != "S-00"]
+    first = by_id["S-00"] if not ctx.result_ok("S-00") else S_ID
+    return [first] + steps
+
+
 def plan_text() -> str:
     out = []
     for s in PLAN:
@@ -264,8 +337,47 @@ def main(argv: list[str] | None = None) -> int:
     if not a.twin and not a.port:
         ap.error("choose --twin (dry run) or --port with --approved (PO-approved board session)")
     mode = "twin" if a.twin else "target"
+    try:
+        validate_selection(a.only, a.from_)                  # O-3: before any port is opened
+    except ValueError as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 2
+    # FWR-15: a session that opens a port needs the PO-named board UID; FWR-13: accepted-open references recorded
+    if mode == "target" and not (a.board_uid and hl.UID_RE.match(a.board_uid.strip())):
+        print("REFUSED: --board-uid <24 hex digits of the PO-named board> is required for a port session (FWR-15)",
+              file=sys.stderr)
+        return 2
+    accepted: dict[str, str] = {}
+    for x in a.accepted_open:
+        item, _, ref = x.partition(":")
+        try:
+            if mode == "target":
+                hl.check_accepted_open(item.strip(), ref.strip())
+            elif not ref:
+                raise InterlockError(f"--accepted-open {x!r}: expected HG-xx:REF")
+        except InterlockError as e:
+            print(f"REFUSED: {e}", file=sys.stderr)
+            return 2
+        accepted[item.strip()] = ref.strip()
     out = a.out or (Path.cwd() / "hil_sessions" / f"{_dt.date.today():%Y%m%d}_{mode}")
     out.mkdir(parents=True, exist_ok=True)
+    meta_f = out / "session.json"
+    meta = json.loads(meta_f.read_text(encoding="utf-8")) if meta_f.exists() else {}
+    board_uid = a.board_uid.strip().upper() if a.board_uid else None
+    approval = a.approved or "— (twin, D-06)"
+    # resume (--from / --only) only into the same mode, board and approval; a plain run always starts a new session
+    resume = (bool(a.from_ or a.only) and bool(meta.get("session_id")) and meta.get("mode") == mode
+              and meta.get("board_uid") == board_uid and meta.get("approval") == approval)
+    if resume:
+        session = {"session_id": meta["session_id"], "mode": mode, "board_uid": board_uid,
+                   "images": dict(meta.get("images", {}))}
+    else:
+        if mode == "target" and any((out / "results").glob("*.json")):
+            print(f"REFUSED: {out} holds results of another session (mode / board / approval differ) — use a fresh "
+                  "--out for a board session (FWR-13)", file=sys.stderr)
+            return 2
+        session = P.new_session(mode, board_uid)
+        meta = {}
 
     cfg = dict(P.DEFAULT_CFG)
     if a.quick:
@@ -275,8 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     cfg["power_sense_fitted"] = a.power_sense_fitted
     if a.counts_per_n:
         cfg["counts_per_n"] = a.counts_per_n
-    cfg["board_uid"] = a.board_uid
-    cfg["accepted_open"] = dict(x.split(":", 1) for x in a.accepted_open if ":" in x)
+    cfg["board_uid"] = board_uid
+    cfg["accepted_open"] = accepted
 
     if mode == "twin":
         tr = TwinTransport(out / "twin_run", image="meas", seed=1)
@@ -290,20 +402,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"REFUSED: {e}", file=sys.stderr)
             return 2
         link = Link(tr, step_ms=0.5)
-    ctx = P.Ctx(link, op, cfg, out, seed=a.seed)
+    ctx = P.Ctx(link, op, cfg, out, seed=a.seed, session=session)
 
-    steps = PLAN
-    if a.only:
-        want = {s.strip() for s in a.only.split(",")}
-        steps = [s for s in PLAN if s.id in want]
-    if a.from_:
-        ids = [s.id for s in steps]
-        steps = steps[ids.index(a.from_):]
+    try:
+        steps = select_steps(ctx, a.only, a.from_)
+    except ValueError as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        tr.close()
+        return 2
 
-    meta_f = out / "session.json"
-    meta = json.loads(meta_f.read_text(encoding="utf-8")) if meta_f.exists() else {}
-    meta.update({"mode": mode, "date": time.strftime("%Y-%m-%d %H:%M"), "approval": a.approved or "— (twin, D-06)",
-                 "port": a.port or "— (twin)", "board_uid": a.board_uid or "–", "icd": rc.ICD_VERSION,
+    meta.update({"session_id": session["session_id"], "images": session["images"],
+                 "mode": mode, "date": time.strftime("%Y-%m-%d %H:%M"), "approval": approval,
+                 "port": a.port or "— (twin)", "board_uid": board_uid, "icd": rc.ICD_VERSION,
                  "python": sys.version.split()[0], "host": platform.node(), "seed": a.seed, "quick": a.quick,
                  "order": [s.id for s in PLAN],
                  "twin_exe": str(getattr(tr, "exe", "")) if mode == "twin" else "–"})
@@ -314,28 +424,42 @@ def main(argv: list[str] | None = None) -> int:
         for s in steps:
             print(f"--- {s.id}: {s.title}", flush=True)
             t0 = time.time()
-            if s.id == "HG-10a":
-                be = ctx.result_of("BENCH-ENTRY")
-                if be and be.get("error"):
-                    it = ctx.begin(s.id, s.title, s.req, s.method)
-                    it.error = "REFUSED: bench entry (§6.8) did not complete"
-                    ctx.end()
-                    continue
+            if s.id == "HG-10a" and not ctx.result_ok("BENCH-ENTRY"):
+                it = ctx.begin(s.id, s.title, s.req, s.method)
+                it.error = "REFUSED: bench entry (§6.8 P-1…P-5) has not completed in this session"
+                ctx.end()
+                print(f"    {it.error}", flush=True)
+                continue
             if s.phase == 4 and s.id != "GATE-LOAD" and not ctx.twin:
                 g_ = ctx.result_of("GATE-LOAD")
                 if not g_ or g_.get("error") or g_["verdict"] != hb.PASS:
                     it = ctx.begin(s.id, s.title, s.req, s.method)
-                    it.error = "REFUSED: SYS-009 load gate not passed"
+                    it.error = "REFUSED: SYS-009 load gate not passed in this session"
                     ctx.end()
+                    print(f"    {it.error}", flush=True)
                     continue
             it = P.run_item(ctx, s.id, s.title, s.fn, s.req, s.method)
             print(f"    {it.verdict}  ({time.time() - t0:.1f} s)" + (f"  {it.error}" if it.error else ""), flush=True)
+            meta_f.write_text(json.dumps(meta, indent=1), encoding="utf-8")        # images of this session (resume)
+            why = stop_reason(s.id, it)
+            if why:
+                if s.id == "BENCH-ENTRY" and ctx.identified:
+                    # the sense bypass may be (partly) fitted: restore it (P-8, no motion) before stopping
+                    ex = next(x for x in PLAN if x.id == "BENCH-EXIT")
+                    print(f"--- {ex.id}: {ex.title} (restore before stopping)", flush=True)
+                    P.run_item(ctx, ex.id, ex.title, ex.fn, ex.req, ex.method)
+                print(f"REFUSED: {why} — session stopped before any further motion", file=sys.stderr)
+                rc_ = 2
+                break
     except (KeyboardInterrupt, OperatorAbort) as e:
-        print(f"ABORT ({type(e).__name__}) — sending HALT", file=sys.stderr)
-        try:
-            link.cmd("HALT", timeout_ms=500)
-        except Exception:  # noqa: BLE001
-            pass
+        if ctx.identified:
+            print(f"ABORT ({type(e).__name__}) — sending HALT", file=sys.stderr)
+            try:
+                link.cmd("HALT", timeout_ms=500)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            print(f"ABORT ({type(e).__name__}) — device not identified: nothing sent (C-R3)", file=sys.stderr)
         rc_ = 3
     finally:
         try:

@@ -142,11 +142,15 @@ def from_dict(d: Any) -> tuple[Sequence, list[str]]:
 
 
 def loads(text: str) -> tuple[Sequence, list[str]]:
+    from bend_stand.core.schema import parse_json_text  # noqa: PLC0415
+
+    d = parse_json_text(text, "sequence file")              # SWR-12: deep nesting → FileFormatError
     try:
-        d = json.loads(text)
-    except ValueError as exc:
-        raise FileFormatError(f"not valid JSON: {exc}") from exc
-    return from_dict(d)
+        return from_dict(d)
+    except FileFormatError:
+        raise
+    except (RecursionError, TypeError, ValueError, KeyError, AttributeError) as exc:
+        raise FileFormatError(f"sequence file: {type(exc).__name__}: {exc}") from exc
 
 
 def load(path: str | Path) -> tuple[Sequence, list[str]]:

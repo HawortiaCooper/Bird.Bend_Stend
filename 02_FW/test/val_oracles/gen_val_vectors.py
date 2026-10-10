@@ -265,17 +265,20 @@ STATE_ORDER = ["motion_state", "enabling_left_ms", "homed", "pos_um", "estop_lat
                "estop_input_open", "estop_closed_ms", "halt_latched", "stop_btn_active",
                "stop_btn_released_ms", "faults", "fault_causes", "limit_start", "limit_end",
                "afe_stale", "afe_saturated", "raw", "drv_power", "alm_active", "nvm_record_valid",
-               "paused", "unhomed_origin_um"]                        # schema 3 (ICD v0.7, D-43 b)
+               "paused", "unhomed_origin_um",                        # schema 3 (ICD v0.7, D-43 b)
+               "ena_on"]                                             # schema 4 (ICD v0.7.5 (h), FWR-09): s[22]
 
 
 def check_lines(cv: dict) -> list[str]:
-    if cv.get("state_schema") != 3:
-        die(f"check_vectors state_schema {cv.get('state_schema')} != 3 (validator mapping)")
+    """`CV` lines from `vectors` (release / twin builds, hw_meas = 0) and `CM` lines from `hw_meas_vectors`
+    (measurement builds, hw_meas = 1; ICD v0.6+ D-40 c, v0.7.5 (h) STATIC_LEVEL needs ENA disabled)."""
+    if cv.get("state_schema") != 4:
+        die(f"check_vectors state_schema {cv.get('state_schema')} != 4 (validator mapping, ICD v0.7.5 (h))")
     base = cv["state_defaults"]
     if sorted(base) != sorted(["params"] + STATE_ORDER):
         die(f"check_vectors state keys changed: {sorted(base)}")
     out = []
-    for v in cv["vectors"]:
+    for tag, v in [("CV", x) for x in cv["vectors"]] + [("CM", x) for x in cv.get("hw_meas_vectors", [])]:
         st = dict(base)
         st.update(v["state"])
         unknown = set(v["state"]) - set(base)
@@ -295,7 +298,7 @@ def check_lines(cv: dict) -> list[str]:
             prm += [p.id, raw_of(p, val)]
         rq, ex = v["request"], v["expect"]
         pa = ex.get("paused_after")
-        out.append(f"CV {v['name']} {int(rq['type'], 16)} {rq['seq']} {hx(rq['payload_hex'])} "
+        out.append(f"{tag} {v['name']} {int(rq['type'], 16)} {rq['seq']} {hx(rq['payload_hex'])} "
                    f"{rc.STATUS[ex['status']]} {ex['detail']} {ex.get('response_frame_hex') or '-'} "
                    f"{-1 if pa is None else int(bool(pa))} " + " ".join(map(str, ints)) +
                    f" {len(prm) // 2} " + " ".join(map(str, prm)))

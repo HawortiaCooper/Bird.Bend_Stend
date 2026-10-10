@@ -315,6 +315,8 @@ def _eval_drv(chip: str, status: Any, ind: Any) -> ChipView:
     level, text, tip = _generic(chip, ind, ok_text="on")
     if level == "alarm":
         text = "OFF – position lost"            # optional 48 V presence sense (D-41)
+    elif level == "ok":
+        text = "on"                             # good state ON: never echo the bit name ("DRV DRV_PWR")
     return _view(chip, level, text, tip)
 
 
@@ -354,6 +356,8 @@ def _eval_homed(chip: str, status: Any, ind: Any) -> ChipView:
         text = "NOT homed"
     elif h == "ON" and _state(_ind(ind, "POS_UNCERTAIN")) == "ON":
         text = "homed ±1 step"
+    elif level == "ok":
+        text = "homed"
     return _view(chip, level, text, tip)
 
 
@@ -364,6 +368,8 @@ def _eval_ena(chip: str, status: Any, ind: Any) -> ChipView:
         level, text = "warn", f"ENABLING {left} ms"
     elif level == "alarm":
         text = "disabled"
+    elif level == "ok":
+        text = "enabled"
     return _view(chip, level, text, tip)
 
 
@@ -401,6 +407,8 @@ def _eval_pend(chip: str, status: Any, ind: Any) -> ChipView:
     level, text, tip = _generic(chip, ind, ok_text="in position")
     if level == "warn":
         text = "not in position"
+    elif level == "ok":
+        text = "in position"
     return _view(chip, level, text, tip)
 
 
@@ -484,6 +492,8 @@ def _eval_key(chip: str, status: Any, ind: Any) -> ChipView:
     mode = getattr(hk, "mode", "UNAVAILABLE")
     level = {"REGISTERED": "ok", "LL_HOOK": "warn"}.get(mode, "alarm")
     text = mode
+    if mode == "UNAVAILABLE" and "not responding" in str(getattr(hk, "reason", "")):
+        text = "NOT RESPONDING"                  # B6-33 (5), SWR-09: hotkey thread silent > 750 ms (SW-STOP-002)
     if getattr(hk, "test_running", False):
         level, text = "warn", "test running"
     tip = f"Pause/Break hotkey: {mode} ({getattr(hk, 'reason', '')})"

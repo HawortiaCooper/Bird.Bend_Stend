@@ -34,6 +34,8 @@ void hx711_start(void);
 /* exti.c (E-stop, limits, PAUSE) */
 void exti_init(void);
 void exti_start(void);
+/* step_tim2.c (RAM): E-stop fixed reaction = hal_step_abort() + hal_ena_set(false), level 0 only */
+void step_estop_reaction(void);
 /* meas_f4.c (HW_MEAS images only, CR-02): weak empty default in board_init.c; the seam v1.3 forwarder
  * hal_meas_cmd() (hal_sys.h) has a weak "not in build" default in sys_f4.c */
 void meas_start(void);
@@ -57,6 +59,15 @@ static inline void dwt_enable(void)
 }
 
 static inline uint32_t dwt_cycles(void) { return DWT->CYCCNT; }
+
+/* One EXTI->IMR bit written through the Cortex-M4 peripheral bit-band alias: a single store, no
+ * read-modify-write, so mask / re-arm from the thread, the tick, level 3 and level 1 can no longer
+ * undo each other (review FWR-08, SAF-FW-002 limit path) */
+static inline void exti_imr_set(uint32_t line, bool on)
+{
+    *(volatile uint32_t *)(PERIPH_BB_BASE + (((uint32_t)&EXTI->IMR - PERIPH_BASE) * 32u) + (line * 4u)) =
+        on ? 1u : 0u;
+}
 
 /* GPIO pin configuration by read-modify-write of the pin's own bits only (PA13/PA14 untouched) */
 static inline void gpio_mode(GPIO_TypeDef *g, uint32_t pin, uint32_t mode, uint32_t pupd, uint32_t speed)

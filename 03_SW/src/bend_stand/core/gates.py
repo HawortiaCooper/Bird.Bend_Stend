@@ -12,7 +12,8 @@ DRIVER_ALARM are never derived from them. Direction-dependent items (LIMIT towar
 trip latch, speed caps, SAF-SW-006 margin) are added by ``MotionController.check()``.
 M4: ``sequence_start`` (device-state part of SW-SEQ-005 / D-33 b) and ``sequence_edit``; ``valid_toggle`` refused
 while a sequence runs; ``tare`` refused during a sequence capture window.
-M3: SAF-SW-001 load-input rule (REFUSE ``LOAD_INPUT_INVALID`` while a SW load limit is enabled outside the
+M3: SAF-SW-001 load-input rule (D-53 a / SW-LIM-003 v0.6.6: REFUSE ``LOAD_INPUT_INVALID`` whenever the load input
+is invalid outside the no-specimen mode, whatever the limit enables; before: while a SW load limit is enabled outside the
 no-specimen mode), thresholds verified **for the current target**, SW trip latch (WARN, direction in ``check``),
 motion owner (wizards), gates ``tare``, ``sample``, ``cal_travel_start``, ``cal_load_start``, ``no_specimen``. The
 sequencer gates stay ``NOT_IMPLEMENTED`` until M4.
@@ -28,6 +29,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
 
+from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core.model import (
     INT_DF, INT_DS, INT_IO, Compat, GateCode, GateId, GateItem, GateResult, LinkState, MotionKind, Severity,
@@ -36,21 +38,33 @@ from bend_stand.core.model import (
 R, C, W = Severity.REFUSE, Severity.CONFIRM, Severity.WARN
 DF, DS, IO = INT_DF, INT_DS, INT_IO       # plain ints (fast)
 
+#: default E-stop release time of the dictionary (``io.estop_release_ms``); the gates use the board value (snapshot)
+ESTOP_RELEASE_MS_DEFAULT = int(pgen.BY_KEY["io.estop_release_ms"].default)
+
+
+def estop_hint(release_ms: int | float | None = None) -> str:
+    """E-stop clear procedure with the release time as a value (OI-UM-01: no parameter name in an operator text);
+    the button names are those of the Clear stop window (Clear E-STOP / Clear faults)."""
+    ms = ESTOP_RELEASE_MS_DEFAULT if release_ms is None else int(release_ms)
+    return (f"release the red E-stop button, wait ≥ {ms} ms, Clear E-STOP, then Enable and Home "
+            "(the position is lost: re-home)")
+
+
+# Implements: SAF-SW-005 (clear procedures; OI-UM-01: wording = the Clear stop window's button labels)
 CLEAR_HINTS: Mapping[str, str] = MappingProxyType({
-    "ESTOP": "release the red E-stop button, wait ≥ io.estop_release_ms, Clear E-stop, then Enable and Home "
-             "(the position is lost: re-home)",
+    "ESTOP": estop_hint(),
     "HALT": "Clear stop",                       # HALT comes from GUI STOP / Pause/Break only (D-36, GF-19)
     "PAUSED": "motion blocked — Resume (clears PAUSE) or Clear stop",
-    "FAULT": "Fault clear when the cause is gone",
-    "LOAD_LIMIT": "Fault clear, then move to reduce the load — re-trips if the load grows",
+    "FAULT": "Clear faults when the cause is gone",
+    "LOAD_LIMIT": "Clear faults, then move to reduce the load — re-trips if the load grows",
     "K1_WELDED": "optional 48 V presence sense: driver supply still present with the E-stop open — check the "
-                 "supply wiring; Fault clear when the E-stop is closed or the supply is off",
+                 "supply wiring; Clear faults when the E-stop is closed or the supply is off",
     "DRV_PWR": "driver supply absent (optional 48 V presence sense): restore the 48 V supply, then Enable and "
                "Home",
     "DRV_UNPOWERED": "driver supply absent (optional 48 V presence sense): restore the 48 V supply, then Enable and "
                      "Home",
     "DRIVER_ALARM": "driver alarm: new motion blocked — power-cycle the driver supply, then Enable and Home",
-    "HOME_DRIFT": "home switch moved: check the switch, Fault clear",
+    "HOME_DRIFT": "home switch moved: check the switch, Clear faults",
     "LINK_WDG": "clears with the next command frame",
     "NOT_ENABLED": "Enable the driver",
     "NOT_HOMED": "Home the axis",
@@ -68,7 +82,10 @@ NO_SPECIMEN_TEXT = ("No specimen is mounted. The PC load limits are switched OFF
                     "calibration and a tare exist.")
 
 
-def clear_procedure(code: str) -> str | None:
+def clear_procedure(code: str, estop_release_ms: int | float | None = None) -> str | None:
+    """Clear procedure of a latch / refusal code; the E-stop text carries the board's release time if given."""
+    if code == "ESTOP":
+        return estop_hint(estop_release_ms)
     return CLEAR_HINTS.get(code)
 
 
@@ -116,6 +133,8 @@ class GateSnapshot:
     sequence_state: str = "IDLE"           # SeqStatus.state of the executor
     seq_capture: bool = False              # a sequence capture window (VALID) is open
     recording_failed: bool = False
+    estop_release_ms: int = ESTOP_RELEASE_MS_DEFAULT   # board ``io.estop_release_ms`` (clear-hint value, OI-UM-01)
+    params_invalid: tuple[str, ...] = ()               # SWR-22: board values outside the dictionary range
 
 
 def _link_items(s: GateSnapshot) -> list[GateItem]:
@@ -153,6 +172,14 @@ def g_config_write(s: GateSnapshot) -> GateResult:
                               "mismatch)"))
     if s.moving:
         items.append(GateItem(GateCode.MOTION_ACTIVE, W, "moving: only parameters marked M can be written"))
+    # Implements: SW-CFG-003 (SWR-08): no configuration change under a running / paused operation
+    if s.sequence_state in SEQ_ACTIVE:
+        items.append(GateItem(GateCode.SEQUENCE_RUNNING, R, "a sequence is running or paused — change the board "
+                                                            "configuration after it has ended"))
+    elif s.owner != "MANUAL" or s.operation is not None:
+        what = (s.operation or s.owner).lower().replace("_", " ")
+        items.append(GateItem(GateCode.OPERATION_RUNNING, R, f"{what} running — change the board configuration "
+                                                             "after it has ended"))
     return GateResult(tuple(items))
 
 
@@ -166,7 +193,7 @@ def g_pause(s: GateSnapshot) -> GateResult:
 def _latched(s: GateSnapshot) -> list[GateItem]:
     out = []
     if s.flags & DF.ESTOP:
-        out.append(GateItem("ESTOP", R, "E-stop latched", CLEAR_HINTS["ESTOP"]))
+        out.append(GateItem("ESTOP", R, "E-stop latched", estop_hint(s.estop_release_ms)))
     if s.flags & DF.HALT:
         out.append(GateItem("HALT", R, "HALT latched — Clear stop first", CLEAR_HINTS["HALT"]))
     if s.flags & DF.FAULT:
@@ -202,7 +229,7 @@ def g_estop_clear(s: GateSnapshot) -> GateResult:
     if not s.flags & DF.ESTOP:
         items.append(GateItem(GateCode.NOTHING_TO_CLEAR, R, "E-stop not latched"))
     elif s.io & IO.ESTOP_OPEN:
-        items.append(GateItem("ESTOP", R, "E-stop input still open", CLEAR_HINTS["ESTOP"]))
+        items.append(GateItem("ESTOP", R, "E-stop input still open", estop_hint(s.estop_release_ms)))
     else:
         items.append(GateItem(GateCode.CAUSE_ACTIVE, C, "E-stop button released; the driver stays disabled: "
                                                         "Enable and re-home"))
@@ -222,7 +249,10 @@ def g_fault_clear(s: GateSnapshot) -> GateResult:
 
 
 def g_record_start(s: GateSnapshot) -> GateResult:
-    items = []
+    """GRQ-B-31 a: refused without a link (CONNECTED / DEGRADED) — no empty recording folder; stopping a running
+    recording stays possible after a link loss (``g_record_stop`` has no link item)."""
+    # Implements: SW-ACQ-002 (record start gate, GRQ-B-31 a)
+    items = _link_items(s)
     if s.recording:
         items.append(GateItem(GateCode.RECORDING_ACTIVE, R, "already recording"))
     if not s.stream_on:
@@ -263,6 +293,9 @@ def motion_items(s: GateSnapshot, kind: MotionKind, owner: str = "MANUAL") -> li
     if not s.stream_on or not s.data_fresh:
         items.append(GateItem(GateCode.STREAM_STALE, R, "data stream off or no DATA for 500 ms (the PC limits need "
                                                         "it)"))
+    if s.params_invalid:                                     # Implements: SW-CFG-001 (SWR-22)
+        items.append(GateItem("PARAM_INVALID", R, "board parameters outside the dictionary range: "
+                                                  + ", ".join(s.params_invalid) + " — read / write the configuration"))
     items += _latched(s)
     if s.status & DS.PAUSED:
         items.append(GateItem("PAUSED", R, "paused — press Resume (clears PAUSE)", CLEAR_HINTS["PAUSED"]))
@@ -287,9 +320,9 @@ def motion_items(s: GateSnapshot, kind: MotionKind, owner: str = "MANUAL") -> li
         why = s.thresholds_state if s.thresholds_state not in ("VERIFIED", "DEFAULT_ONLY") else "being rewritten"
         items.append(GateItem(GateCode.THRESHOLDS_UNVERIFIED, R, f"FW load thresholds not verified for the active "
                               f"calibration + tare ({why}) — Recheck thresholds"))
-    if s.load_limits_on and not s.load_input_valid:
-        items.append(GateItem(GateCode.LOAD_INPUT_INVALID, R, f"PC load limits enabled without a valid input: "
-                              f"{s.load_input_reason}", "Calibrate + Tare, or enter the no-specimen mode"))
+    if not s.no_specimen and not s.load_input_valid:         # D-53 a: independent of the limit enables (SWR-03)
+        items.append(GateItem(GateCode.LOAD_INPUT_INVALID, R, f"no valid load input: {s.load_input_reason}",
+                              "Calibrate + Tare, or enter the no-specimen mode"))
     if s.owner != owner:
         items.append(GateItem(GateCode.OWNER_CONFLICT, R, f"motion owned by {s.owner.lower().replace('_', ' ')}"))
     if s.hotkey_test:
@@ -329,7 +362,7 @@ def g_enable(s: GateSnapshot) -> GateResult:
         return GateResult(tuple(items))
     items += _feature_items(s, "MOTION")
     if s.flags & DF.ESTOP or s.io & IO.ESTOP_OPEN:
-        items.append(GateItem("ESTOP", R, "E-stop latched or pressed", CLEAR_HINTS["ESTOP"]))
+        items.append(GateItem("ESTOP", R, "E-stop latched or pressed", estop_hint(s.estop_release_ms)))
     if _drv_power_off(s):
         items.append(GateItem("DRV_UNPOWERED", R, "driver unpowered", CLEAR_HINTS["DRV_UNPOWERED"]))
     return GateResult(tuple(items))
@@ -505,9 +538,9 @@ def g_sequence_start(s: GateSnapshot) -> GateResult:
     if s.thresholds_state not in ("VERIFIED", "DEFAULT_ONLY") or not s.thresholds_match:
         items.append(GateItem(GateCode.THRESHOLDS_UNVERIFIED, R, "FW load thresholds not verified for the active "
                                                                  "calibration + tare — Recheck thresholds"))
-    if s.load_limits_on and not s.load_input_valid:
-        items.append(GateItem(GateCode.LOAD_INPUT_INVALID, R, f"PC load limits enabled without a valid input: "
-                              f"{s.load_input_reason}", "Calibrate + Tare, or enter the no-specimen mode"))
+    if not s.no_specimen and not s.load_input_valid:         # D-53 a: independent of the limit enables (SWR-03)
+        items.append(GateItem(GateCode.LOAD_INPUT_INVALID, R, f"no valid load input: {s.load_input_reason}",
+                              "Calibrate + Tare, or enter the no-specimen mode"))
     if s.owner not in ("MANUAL", "SEQUENCE") or s.operation is not None:
         what = (s.operation or s.owner).lower().replace("_", " ")
         items.append(GateItem(GateCode.OPERATION_RUNNING, R, f"{what} running"))

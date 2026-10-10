@@ -28,6 +28,14 @@ Behaviour = ICD v0.5 §4–§9 + FW_design §5 (M2, WP-B12):
   PAUSE_BTN) and those inputs are not sampled; commands of absent features answer ``E_INTERNAL`` NOT_IN_BUILD
   after a passed check, like A's M1 FW.
 - D-36 / CR-01: no STOP/BREAK button, HALT source PC only.
+- **Step stall** (vocabulary ``inject step_stall``, ICD v0.7.5 / ``00_System/tools/README.md`` "Move stall", same
+  action in the FW twin; SW_design §12.4): the step-pulse output of the running move is frozen — a pulse already
+  high completes, then no PUL pulse, the step counter and the world stand still, MOVING stays set, no EVENT and no
+  status bit — until ``duration_ms`` has passed (0 = until the move ends; negative refused; armed for the next move
+  when none runs; a second call sets a new end from now) or any stop ends the move (controlled stop: the simulator
+  lifts the stall and ramps down — model-dependent, not compared with the twin); the pulse train then resumes one
+  step period later; a reset drops it. Makes the PC step-timeout guard (SW-SEQ-007 TIMEOUT) testable without
+  another stop cause.
 
 Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/io/simulator.py @37c87471 (architecture: loopback endpoint,
 per-command dispatch with NACK first, fault injector, NVM as JSON; behaviour rewritten for the bend stand).
@@ -39,6 +47,7 @@ from __future__ import annotations
 
 import collections
 import logging
+import math
 import struct
 import threading
 from collections.abc import Callable
@@ -69,6 +78,11 @@ SIM_UID = "53494D0000000000B1BDB0A0"
 EVENT_QUEUE = 32
 DRV_PWR_FILTER_MS = 20                         # FW-SW-005 stability filter, both directions
 TICKS_PER_US = F_TICK_HZ / 1e6
+
+
+def _stall_until(t_us: float, ms: int) -> float:
+    """End of an ``inject step_stall`` (µs); ``inf`` = until the move ends."""
+    return math.inf if ms <= 0 else float(t_us) + ms * 1000.0
 #: commands that answer E_INTERNAL NOT_IN_BUILD after a passed check while their feature bit is 0 (A's M1 FW)
 FEATURE_OF_CMD: dict[int, int] = {
     int(Cmd.ENABLE): int(FE.MOTION), int(Cmd.DISABLE): int(FE.MOTION), int(Cmd.MOVE_ABS): int(FE.MOTION),
@@ -140,6 +154,9 @@ class SimConfig:
     #: SAVE = sector erase + program, the ICD worst case (≈ 0.5 s, §2.4); LOAD reads, DEFAULTS writes no flash.
     nvm_stall_ms: dict[str, int] = field(default_factory=lambda: {"SAVE_PARAMS": 500, "LOAD_PARAMS": 5,
                                                                    "DEFAULT_PARAMS": 2})
+    #: length of the sent-frame and wire logs (validation hooks b / e); the backend's in-process simulator uses a
+    #: small value outside test runs (OBS-P3-04: 200 000 entries ≈ 25 MB each)
+    log_len: int = 200_000
 
 
 class SimBoard:
@@ -157,8 +174,8 @@ class SimBoard:
         self._lock = threading.RLock()
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
-        self.sent_log: collections.deque[dict[str, Any]] = collections.deque(maxlen=200_000)
-        self.wire_log: collections.deque[dict[str, Any]] = collections.deque(maxlen=200_000)
+        self.sent_log: collections.deque[dict[str, Any]] = collections.deque(maxlen=self.cfg.log_len)
+        self.wire_log: collections.deque[dict[str, Any]] = collections.deque(maxlen=self.cfg.log_len)
         self.faults: list[_Fault] = []
         self.store_mismatch: dict[str, Any] = {}
         self.on_frame_actions: list[dict[str, Any]] = []
@@ -168,6 +185,8 @@ class SimBoard:
         self.link_silence_until_us = 0
         self.tx_congestion_until_us = 0
         self.hang_until_us = 0
+        self.step_stall_until_us: float | None = None   # inject step_stall: pulse output frozen until (µs, inf)
+        self.step_stall_armed_ms: int | None = None      # … armed for the next move (no move running at the inject)
         self.act_hook: Callable[[dict[str, Any]], Any] | None = None   # SimControl dispatches scheduled actions
         self.pulses = 0
         self.true_offset_um = float(self.cfg.true_offset_um)
@@ -217,6 +236,8 @@ class SimBoard:
             self.home_phase = int(pg.HomePhase.NONE)
             self.steps = 0
             self.motion: Move | None = None
+            self.step_stall_until_us = None                # a reset ends a step stall
+            self.step_stall_armed_ms = None
             self.target_um = 0
             self.pos_uncertain = False
             self._done_pending: list[tuple[int, int, int]] = []
@@ -525,7 +546,7 @@ class SimBoard:
             self.faults.remove(f)
 
     def check_state(self) -> SimCheckState:
-        """View of the live state with exactly the fields of the check vectors (state_schema 2)."""
+        """View of the live state with exactly the fields of the check vectors (state_schema 4)."""
         now = self.now_us()
         return SimCheckState(
             params=self.params, motion_state=self.motion_state,
@@ -542,7 +563,8 @@ class SimBoard:
             raw=0 if self.last_raw == pg.AFE_NO_DATA else self.last_raw,
             drv_power=self.pwr_filt, alm_active=self.alm_filt,
             nvm_record_valid=self.nvm.newest_valid() is not None, paused=self.paused,
-            unhomed_origin_um=steps_to_um(self.unhomed_origin, self.spm))
+            unhomed_origin_um=steps_to_um(self.unhomed_origin, self.spm),
+            ena_on=not self.ena_disabled)             # D-50 c: false after DISABLE / E-stop / idle disable
 
     def load_check_state(self, st: SimCheckState) -> None:
         """Set the live state from a check-vector state (differential replay, §12.5)."""
@@ -589,6 +611,7 @@ class SimBoard:
         self.paused = st.paused
         self.pause_src = int(pg.Source.PC) if st.paused else int(pg.Source.NONE)
         self.unhomed_origin = um_to_steps(int(st.unhomed_origin_um), self.spm)
+        self.ena_disabled = not st.ena_on                # D-50 c (state_schema 4)
         self.loadlim.last = None if st.raw == pg.AFE_NO_DATA else int(st.raw)
 
     def snapshot(self) -> dict[str, Any]:
@@ -839,6 +862,11 @@ class SimBoard:
                  float(a_um_s2), ramp, t0 + first / TICKS_PER_US, start_steps=self.steps,
                  last_refresh_us=int(t0), **kw)
         self.motion = m
+        if self.step_stall_armed_ms is not None:          # inject step_stall armed before this move
+            self.step_stall_until_us = _stall_until(t0, self.step_stall_armed_ms)
+            self.step_stall_armed_ms = None
+        if self.step_stall_until_us is not None:          # stalled (also a follow-on homing leg): no pulse
+            m.t_next_us = math.inf
         self.motion_state = kind
         self.idle_since_us = None
         self.pend_wait_since_us = None
@@ -1084,6 +1112,7 @@ class SimBoard:
     def _finish(self, reason: str) -> None:
         """End of a motion (position final): IDLE, queue MOVE_DONE (emitted after the events of this handler)."""
         self.motion = None
+        self.step_stall_until_us = None
         if self.motion_state in MOVING:
             self.motion_state = "IDLE"
             self.idle_since_us = self.now_us()
@@ -1116,7 +1145,9 @@ class SimBoard:
         m = self.motion
         if m is None:
             return
-        self._clean_halt_position(truncate=truncate)
+        stalled = self._lift_stall(float(self.now_us()))
+        if truncate or not stalled:                        # a stalled output has no pulse in flight
+            self._clean_halt_position(truncate=truncate)
         if m.kind == "HOMING":
             self._unhome()
             self.home_phase = int(pg.HomePhase.DONE)
@@ -1135,6 +1166,7 @@ class SimBoard:
             self._immediate_stop(int(cause) if cause is not None else int(SC.PC_STOP_CONTROLLED))
             return
         m.reverse = None
+        self._lift_stall(float(self.now_us()))                 # the stop ramp runs on the restarted pulse timer
         if cause is not None:
             self.emit(EV.STOPPED, cause, self.pos_um, self.pos_steps)
         m.stopping, m.stop_cause, m.stop_reason = True, cause, reason
@@ -1158,6 +1190,8 @@ class SimBoard:
         """Execute every step completed up to ``t_us`` (per-step switch checks, leg ends). Pulses into a
         de-energised driver are counted by the FW but do not move the carriage (lost steps)."""
         m = self.motion
+        if m is not None and self.step_stall_until_us is not None and t_us >= self.step_stall_until_us:
+            self._lift_stall(self.step_stall_until_us)       # stall over: the pulse train resumes
         lost = m is not None and not self.driver_energised()
         while m is not None and m.t_next_us <= t_us:
             self.steps += m.direction
@@ -1626,6 +1660,40 @@ class SimBoard:
                   status: int = 0, detail: int = 0) -> None:
         with self._lock:
             self.faults.append(_Fault(kind, cmd, what, n, ms, status, detail))
+
+    def inject_step_stall(self, duration_ms: int = 0) -> dict[str, Any]:
+        """Vocabulary ``inject step_stall`` (ICD v0.7.5, tools/README "Move stall"; ``duration_ms``: 0 = until the
+        move ends, negative = refused): freeze the step-pulse output of the running move (no PUL, counter / world
+        unchanged, MOVING stays, no EVENT / status bit); a pulse already in its high phase completes and counts
+        first (twin parity: the timer freezes in its low phase). Without a running move the stall is armed for the
+        next move start (duration counted from that start). A second call while stalled sets a new end from now.
+        Any stop of the move lifts it; a reset drops it."""
+        ms = int(duration_ms)
+        if ms < 0:
+            raise ValueError(f"duration_ms {ms} < 0")
+        with self._lock:
+            m = self.motion
+            now = float(self.now_us())
+            if m is not None and 0 < m.t_next_us - now < self._pw_us():
+                self._advance_axis(m.t_next_us)              # the pulse in flight completes
+                m = self.motion
+            if m is None:
+                self.step_stall_armed_ms = ms
+                return {"armed": True}
+            self.step_stall_until_us = _stall_until(now, ms)
+            m.t_next_us = math.inf
+            return {"armed": False}
+
+    def _lift_stall(self, t_us: float) -> bool:
+        """End a step stall at ``t_us``: the next pulse one step period later. True when a stall was active."""
+        if self.step_stall_until_us is None:
+            return False
+        self.step_stall_until_us = None
+        m = self.motion
+        if m is not None and math.isinf(m.t_next_us):
+            c = m.ramp.c_last
+            m.t_next_us = float(t_us) + max(self._pw_us(), (float(c) if c else 0.0) / TICKS_PER_US)
+        return True
 
     def inject_step_fault(self) -> None:
         """Step overrun / count fault (vocabulary ``inject step_fault``): CLEAN halt, STEP_FAULT, HOMED cleared,

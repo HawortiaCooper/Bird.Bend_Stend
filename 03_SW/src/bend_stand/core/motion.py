@@ -170,8 +170,8 @@ class MotionController:
         """Board value as last read; before the first read the **dictionary default** (``params_gen``), never a
         hand-written number (ICD v0.7.3 / dict 6: e.g. ``motion.max_step_rate_hz`` 40 000)."""
         v = self._dev.params.get(key)
-        if v is None:
-            meta = pgen.BY_KEY.get(key)
+        if v is None or key in self._dev.params.invalid():       # SWR-22: an out-of-range board value never
+            meta = pgen.BY_KEY.get(key)                          # enters a computation (motion is refused, gate)
             return default if meta is None else meta.default
         return v
 
@@ -259,6 +259,15 @@ class MotionController:
               target_mm: float | None = None, owner: str = "MANUAL") -> GateResult:
         """Pure check for the GUI fields (GRQ-B-05, < 1 ms): the motion gate plus caps, range and direction."""
         items = list(self._static_gate(kind, owner).items)
+        # Implements: SW-LIM-001 (SWR-13): non-finite values are refused, never passed on (NaN compares False)
+        for name, v in (("speed", speed_mm_s), ("acceleration", accel_mm_s2), ("target", target_mm)):
+            if v is not None and not (isinstance(v, (int, float)) and math.isfinite(float(v))):
+                items.append(GateItem(GateCode.TARGET_OUT_OF_RANGE if name == "target" else
+                                      (GateCode.SPEED_CAP if name == "speed" else GateCode.ACCEL_CAP), R,
+                                      f"{name} {v!r} is not a finite number"))
+        if items and any(not (isinstance(v, (int, float)) and math.isfinite(float(v)))
+                         for v in (speed_mm_s, accel_mm_s2, target_mm) if v is not None):
+            return GateResult(tuple(items))
         items += self._margin_items(speed_mm_s)
         lim = self.limits()
         if lim is not None:
@@ -312,8 +321,13 @@ class MotionController:
     def move_to(self, target_mm: float, *, speed_mm_s: float | None = None,
                 accel_mm_s2: float | None = None, owner: str = "MANUAL",
                 accel_fw_default: bool = False) -> ReleasingFuture:
-        """``accel_fw_default=True`` (sequencer): accel 0 on the wire = ``motion.a_max_um_s2`` (ICD §5.4)."""
-        target_mm = float(target_mm)
+        """``accel_fw_default=True`` (sequencer): accel 0 on the wire = ``motion.a_max_um_s2`` (ICD §5.4). Never
+        raises: a refusal (incl. a non-finite value, SWR-13) is a failed ticket."""
+        try:
+            target_mm = float(target_mm)
+        except (TypeError, ValueError) as exc:
+            return failed_future(GateRefused(GateResult((GateItem(GateCode.TARGET_OUT_OF_RANGE, R,
+                                                                  f"target {target_mm!r}: {exc}"),))))
         g = self.check(MotionKind.MOVE, speed_mm_s=speed_mm_s, accel_mm_s2=accel_mm_s2, target_mm=target_mm,
                        owner=owner)
         if not g.ok:
@@ -348,7 +362,10 @@ class MotionController:
             base = self.position_mm()
         if base is None:
             return failed_future(GateRefused(GateResult((GateItem(GateCode.LINK_DOWN, R, "position unknown"),))))
-        return self.move_to(base + float(delta_mm), **kw)
+        try:
+            return self.move_to(base + float(delta_mm), **kw)
+        except (TypeError, ValueError) as exc:                # SWR-13: never raises
+            return failed_future(GateRefused(GateResult((GateItem(GateCode.TARGET_OUT_OF_RANGE, R, str(exc)),))))
 
     def _send_move(self, target_mm: float, v_um_s: int, a_um_s2: int, ticket: ReleasingFuture) -> None:
         d = self._dev
@@ -408,7 +425,11 @@ class MotionController:
         if g.exception() is not None or g.result() is None:
             self._finish_active(act, MoveOutcome("NOT_EXECUTED", text="outcome unknown (GET_STATUS failed)"))
             return
-        st = P.decode_status(g.result().body)
+        try:
+            st = P.decode_status(g.result().body)
+        except ValueError as exc:                          # SWR-18: the ticket always resolves
+            self._finish_active(act, MoveOutcome("NOT_EXECUTED", text=f"outcome unknown (STATUS undecodable: {exc})"))
+            return
         self._dev._apply_status(st, g.result().t_host_ns, g.result().t_sent_ns)  # noqa: SLF001
         ms = st.motion
         if act.kind == "MOVE":

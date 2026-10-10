@@ -11,6 +11,8 @@ from bend_stand.calc.rounding import round_half_away
 G0 = 9.80665                       #: standard gravity, m/s² (N per kgf)
 FS_KG = 200.0                      #: load cell full scale (D-19, Keli DEF 200 kg)
 FS_N = FS_KG * G0                  #: 1961.33 N
+CELL_SENS_MV_V = 3.0               #: nominal cell sensitivity, mV/V (SRS A-02, R2 §3: 32 212 counts/kg at gain 128)
+HX711_FULL_RANGE_COUNTS = 2 ** 24  #: ±2^23 counts span ±0.5·VREF/gain (ratiometric: excitation = VREF)
 FW_LIMIT_MAX_N = 1.10 * FS_N       #: 110 % FS = 2157.463 N (D-12, SW-LIM-002)
 STROKE_MM = 300.0                  #: table stroke (D-19)
 

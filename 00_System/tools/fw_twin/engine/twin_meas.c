@@ -140,6 +140,7 @@ void tw_meas_edge(const char *pin, int level)
                  * capture after arming (no previous rise) is discarded, min / max / count start with the second */
                 if (M.have_rise && M.have_h) {
                     uint32_t p = (uint32_t)((double)(T.now - M.last_rise) * 1e-9 * PROBE_HZ / (double)(M.psc + 1u));
+                    if (p > 0xFFFFu) p = 0xFFFFFFFFu;   /* OI-FW-47 / OBS-M3-01: 16-bit capture overflow sentinel */
                     uint32_t h = M.pend_h;
                     if (!M.pwm_n || p < M.pwm_min_p) M.pwm_min_p = p;
                     if (p > M.pwm_max_p) M.pwm_max_p = p;

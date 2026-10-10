@@ -116,7 +116,23 @@ class ParamStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._values: dict[str, Any] = {}
+        self._invalid: dict[str, Any] = {}       # SWR-22: received values outside the dictionary range / not finite
         self.read_ok = False
+
+    @staticmethod
+    def _valid(key: str, value: Any) -> bool:
+        meta = pgen.BY_KEY.get(key)
+        if meta is None:
+            return True
+        try:
+            return bool(meta.in_range(value))
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    def invalid(self) -> dict[str, Any]:
+        """SWR-22: board values outside the dictionary range (FW defect); motion is refused while any is present."""
+        with self._lock:
+            return dict(self._invalid)
 
     def metas(self) -> tuple[pgen.ParamMeta, ...]:
         return pgen.PARAMS
@@ -136,17 +152,26 @@ class ParamStore:
             return self._values.get(key, default)
 
     def set_all(self, values: Mapping[str, Any]) -> None:
+        # Implements: SW-CFG-001 (received values checked against the dictionary, SWR-22)
+        bad = {k: v for k, v in values.items() if not self._valid(k, v)}
         with self._lock:
             self._values = dict(values)
+            self._invalid = bad
             self.read_ok = True
 
     def update(self, key: str, value: Any) -> None:
+        ok = self._valid(key, value)
         with self._lock:
             self._values[key] = value
+            if ok:
+                self._invalid.pop(key, None)
+            else:
+                self._invalid[key] = value
 
     def clear(self) -> None:
         with self._lock:
             self._values = {}
+            self._invalid = {}
             self.read_ok = False
 
 

@@ -8,7 +8,13 @@ round(capture × measured rate); |drift| ≤ max(2·std, 20); std ≤ max(3·std
 each ≥ 1.5 × the previous weight; the first weight < 2 % FS is a warning only, D-22). A rejected point is re-taken
 (``repeat()`` / ``continue_()``), never silently used. ``FIT``: ``calc.loadcal.load_calibration`` → PASS / WARN
 (accept only with ``continue_(confirmed=True)``) / FAIL ("points are not linear", accept refused) /
-UNVERIFIED_LINEARITY (2 points, ``finish_early()``); LOW_SPAN when the largest force < 20 % FS. ``retake(i)``
+UNVERIFIED_LINEARITY (2 points, ``finish_early()``); LOW_SPAN when the largest force < 20 % FS. **Plausibility
+(D-50 a)**: a weight point whose raw change from the zero point or from the previous point is < max(10 × std_zero,
+50 counts) is refused "weight not detected" and re-taken (checked when the point is captured and again before the
+fit); a fitted |K| outside 0.5…2 × the nominal |K| of the configured cell / AFE (``calc.loadcal.nominal_k`` with the
+board's PGA gain) needs the confirmation ``K_IMPLAUSIBLE`` (``continue_(confirmed=True)``), recorded in the file
+(``plausibility`` block, ``confirmations``); without a derivable nominal the file records "nominal unknown".
+``retake(i)``
 discards point *i* and captures it again (mass prefilled). Accept (idle only) stores ``load_<serial>_<UTC>.json`` +
 ``active_load.json`` (R4 §6.4 schema, ``push_calibrated = false``, AFE block, board UID / FW) and activates it — the
 FW thresholds are rewritten by the backend's threshold recheck. The engine needs no motion; any stop / pause /
@@ -23,7 +29,9 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from bend_stand import __version__
-from bend_stand.calc.loadcal import LoadCalResult, load_calibration, mass_rules
+from bend_stand.calc.loadcal import (
+    AFE_GAIN, KPlausibility, LoadCalResult, k_plausibility, load_calibration, mass_rules, nominal_k, weight_detected,
+)
 from bend_stand.calc.stats import window_acceptance
 from bend_stand.calc.units import FS_KG, G0
 from bend_stand.core.capture import CaptureResult
@@ -55,6 +63,7 @@ class LoadCalEngine(EngineBase):
         self._g = G0
         self._restore_stream = False
         self._fit: LoadCalResult | None = None
+        self._plaus: KPlausibility | None = None
         self._warnings: tuple[str, ...] = ()
 
     # ---- start --------------------------------------------------------------------------------------------
@@ -79,6 +88,7 @@ class LoadCalEngine(EngineBase):
         self._masses = [0.0] + [None] * (int(n_points) - 1)
         self._idx = 0
         self._fit = None
+        self._plaus = None
         self._warnings = ()
         self._restore_stream = not be.device.stream_on
         if self._restore_stream:
@@ -187,6 +197,12 @@ class LoadCalEngine(EngineBase):
             self._be.record_event("CAL_POINT_REJECTED", f"point {i}: " + "; ".join(texts or ["no samples"]))
             self._await(i, tuple(texts) or ("no samples",), stats)
             return
+        if i > 0:
+            bad = self._weight_check(i, w.stats.mean)
+            if bad:
+                self._be.record_event("CAL_POINT_REJECTED", f"point {i}: {bad}")
+                self._await(i, (bad,), stats)
+                return
         m = float(self._masses[i] or 0.0)
         self._points[i] = {
             "mass_kg": m, "force_n": m * self._g, "raw_mean": w.stats.mean, "raw_std": w.stats.std, "raw_se": w.se,
@@ -200,6 +216,26 @@ class LoadCalEngine(EngineBase):
             self._do_fit()
         else:
             self._await(nxt, (), stats)
+
+    def _weight_check(self, i: int, raw: float) -> str:
+        """D-50 a: "weight not detected" text for point ``i`` (raw mean ``raw``) or "" — against the zero point and
+        the previous captured weight point."""
+        # Implements: SW-CAL-006, SW-CAL-007 (D-50 a weight detection)
+        zero = self._points[0] if self._points else None
+        if zero is None:
+            return ""
+        prev = next((self._points[j] for j in range(i - 1, 0, -1) if self._points[j] is not None), None)
+        ok, text = weight_detected(raw, float(zero["raw_mean"]), None if prev is None else float(prev["raw_mean"]),
+                                   float(zero["raw_std"]))
+        return "" if ok else text
+
+    def _k_nominal(self) -> float | None:
+        code = self._be.device.params.get("afe.gain_channel")
+        try:
+            gain = AFE_GAIN.get(int(code), ("?", 0))[1] if code is not None else 0
+        except (TypeError, ValueError):
+            gain = 0
+        return nominal_k(gain)
 
     # ---- fit / accept ----------------------------------------------------------------------------------------
     def finish_early(self) -> None:
@@ -223,6 +259,15 @@ class LoadCalEngine(EngineBase):
         self._await(i)
 
     def _do_fit(self) -> None:
+        for j in range(1, len(self._points)):                  # D-50 a again (a re-taken zero point moves the base)
+            pj = self._points[j]
+            bad = "" if pj is None else self._weight_check(j, float(pj["raw_mean"]))
+            if bad:
+                self._points[j] = None
+                self._fit = None
+                self._be.record_event("CAL_POINT_REJECTED", f"point {j}: {bad}")
+                self._await(j, (bad,))
+                return
         pts = [p for p in self._points if p is not None]
         try:
             fit = load_calibration([p["raw_mean"] for p in pts], [p["mass_kg"] for p in pts], g=self._g,
@@ -234,15 +279,21 @@ class LoadCalEngine(EngineBase):
             return
         self._fit = fit
         ok = fit.status != "FAIL"
+        self._plaus = plaus = k_plausibility(fit.K, self._k_nominal())       # D-50 a (SW-CAL-007)
         conf = None
+        texts: list[str] = []
         if fit.status == "WARN":
             res = ", ".join(f"{r:+.3f} N" for r in fit.residuals)
-            conf = ConfirmRequest("FIT_WARN", f"non-linearity {fit.nl_pct_span:.3f} % of span (0.1…0.5 %): residuals "
-                                              f"{res}. Accept anyway?")
+            texts.append(f"non-linearity {fit.nl_pct_span:.3f} % of span (0.1…0.5 %): residuals {res}.")
+            conf = ConfirmRequest("FIT_WARN", texts[-1] + " Accept anyway?")
+        if ok and plaus.status == "IMPLAUSIBLE":
+            texts.append(plaus.text + ".")
+            conf = ConfirmRequest("K_IMPLAUSIBLE", " ".join(texts) + " Accept anyway?")
         errors = () if ok else tuple(fit.texts) or ("points are not linear",)
+        extra = (plaus.text,) if ok and plaus.status != "OK" else ()
         self._set(phase="FIT", step_index=len(self._points), result=fit, needs_confirmation=conf, can_continue=ok,
                   continue_label="Accept calibration ▶", continue_moves=False, can_repeat=False, inputs=(),
-                  progress=None, errors=errors, warnings=self._warnings + tuple(t for t in fit.texts if ok),
+                  progress=None, errors=errors, warnings=self._warnings + tuple(t for t in fit.texts if ok) + extra,
                   instruction="Check the fit; accept to make it the active calibration, or re-take a point.")
 
     def _accept(self, confirmed: bool) -> None:
@@ -253,6 +304,10 @@ class LoadCalEngine(EngineBase):
             return
         if fit.status == "WARN" and not confirmed:
             self._set(errors=("non-linearity in the WARN band: confirm to accept",))
+            return
+        plaus = self._plaus or k_plausibility(fit.K, self._k_nominal())
+        if plaus.status == "IMPLAUSIBLE" and not confirmed:
+            self._set(errors=("K implausible: confirm to accept",))
             return
         if be.motion.fw_moving() or be.motion.busy:
             self._set(errors=("accept only while the axis stands still",))
@@ -267,10 +322,13 @@ class LoadCalEngine(EngineBase):
                "board": {"fw_version": ".".join(map(str, info.fw_version)) if info else "",
                          "uid": info.uid if info else ""},
                "direction": "pull", "push_calibrated": False, "g_used": self._g, "points": pts, "fit": fit.as_fit(),
-               "low_span": fit.low_span, "warnings": list(self._warnings), "notes": ""}
+               "low_span": fit.low_span, "warnings": list(self._warnings), "notes": "",
+               "plausibility": plaus.as_dict(confirmed=plaus.status == "IMPLAUSIBLE"),       # D-50 a, recorded
+               "confirmations": [c for c, on in (("FIT_WARN", fit.status == "WARN"),
+                                                 ("K_IMPLAUSIBLE", plaus.status == "IMPLAUSIBLE")) if on]}
         try:
             path = be.calibration_store.save_load(rec)
-        except (OSError, FileFormatError) as exc:
+        except (OSError, FileFormatError, ValueError, TypeError) as exc:   # SWR-22: NaN → JSON ValueError
             self._set(phase="FIT", can_continue=True, errors=(f"calibration file not written: {exc}",))
             return
         rec["file"] = path.name

@@ -67,6 +67,18 @@ def _isolated_gui_state(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _flush_deferred_deletes():
+    """pytest-qt closes and ``deleteLater()``s the widgets of a test, but the DeferredDelete events are only processed
+    by a running event loop — so closed main windows (with their menus / combo popups / plot menus, ~40 top-levels
+    each) piled up across a module and slowed the real-time refresh tests. Flush them before every test."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    if QCoreApplication.instance() is not None:
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _gui_thread_gc(request):
     policy = None
     if "qtbot" in request.fixturenames:

@@ -13,7 +13,9 @@ parameter dictionary and the protocol names regenerate together. Only dependency
 """
 from __future__ import annotations
 
+import keyword
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,71 @@ CTYPES = {"u8": ("uint8_t", 0, 0xFF), "u16": ("uint16_t", 0, 0xFFFF),
 
 class ProtoError(Exception):
     """Validation error in protocol.yaml."""
+
+
+# --------------------------------------------------------------------------------------
+# text and identifier safety (FWR-14; shared with gen_params.py)
+# --------------------------------------------------------------------------------------
+# Every YAML string that reaches generated C or Python passes one of these checks in load(), so a
+# dictionary edit can never turn into code: identifiers against strict ASCII patterns (no keyword of
+# either language), versions and numbers against numeric patterns, free text (rendered only inside C
+# comments, Python string literals via repr(), docstrings, '#' comments and Markdown cells) without
+# control / format / line-separator characters (newline, tab, CR, NEL, U+2028/9, bidi controls, BOM),
+# C comment delimiters, backslashes, triple quotes and C trigraphs. Non-ASCII letters and symbols
+# (µ, §, →, ≥) stay allowed: they are inert in those contexts and the dictionaries use them.
+C_KEYWORDS = frozenset("""auto break case char const continue default do double else enum extern float for
+goto if inline int long register restrict return short signed sizeof static struct switch typedef union
+unsigned void volatile while bool true false _Bool _Complex _Imaginary _Alignas _Alignof _Atomic _Generic
+_Noreturn _Static_assert _Thread_local NULL""".split())
+C_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+PY_CLASS_RE = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+VERSION_RE = re.compile(r"^[0-9]{1,3}\.[0-9]{1,3}(\.[0-9]{1,3})?$")
+_BAD_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+_BAD_SEQUENCES = ("*/", "/*", "\\", '"""')
+_TRIGRAPH_RE = re.compile(r"\?\?[=/'()!<>-]")
+
+
+def safe_text(v: Any, where: str, err: type[Exception] | None = None) -> str:
+    """Free text (comments, string literals, docstrings, Markdown): see the rule above."""
+    err = err or ProtoError
+    if not isinstance(v, (str, int, float)) or isinstance(v, bool):
+        raise err(f"{where}: text expected, got {type(v).__name__}")
+    s = str(v)
+    for ch in s:
+        if unicodedata.category(ch) in _BAD_CATEGORIES:
+            raise err(f"{where}: control / format / line-separator character U+{ord(ch):04X} in {s!r}")
+    for seq in _BAD_SEQUENCES:
+        if seq in s:
+            raise err(f"{where}: {seq!r} not allowed in generated text {s!r}")
+    if _TRIGRAPH_RE.search(s):
+        raise err(f"{where}: C trigraph sequence in {s!r}")
+    return s
+
+
+def safe_ident(v: Any, where: str, err: type[Exception] | None = None,
+               pattern: re.Pattern[str] = C_IDENT_RE) -> str:
+    """Identifier used in generated C and / or Python code: ASCII pattern, no keyword of either language."""
+    err = err or ProtoError
+    if (not isinstance(v, str) or not v.isascii() or not pattern.match(v) or v in C_KEYWORDS
+            or keyword.iskeyword(v) or keyword.issoftkeyword(v)):
+        raise err(f"{where}: bad identifier {v!r}")
+    return v
+
+
+def safe_version(v: Any, where: str, err: type[Exception] | None = None) -> str:
+    """Version text rendered into a C string literal / Python string: digits and dots only."""
+    err = err or ProtoError
+    if not isinstance(v, str) or not VERSION_RE.match(v):
+        raise err(f"{where}: version must match {VERSION_RE.pattern}, got {v!r}")
+    return v
+
+
+def safe_int(v: Any, where: str, lo: int, hi: int, err: type[Exception] | None = None) -> int:
+    """Integer rendered as a literal: a YAML int (not bool, not text) in [lo, hi]."""
+    err = err or ProtoError
+    if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+        raise err(f"{where}: integer {lo}..{hi} expected, got {v!r}")
+    return v
 
 
 @dataclass(frozen=True)
@@ -162,7 +229,7 @@ def load(path: Path = PROTO_YAML_PATH) -> Protocol:
         lo, hi = CTYPES[ct][1:]
         if not lo <= value <= hi:
             raise ProtoError(f"constant {name}: value outside {ct}")
-        consts.append(Constant(name, value, ct, str(c.get("desc", ""))))
+        consts.append(Constant(name, value, ct, safe_text(c.get("desc", ""), f"constant {name}.desc")))
     if len({c.name for c in consts}) != len(consts):
         raise ProtoError("duplicate constant names")
 
@@ -177,15 +244,18 @@ def load(path: Path = PROTO_YAML_PATH) -> Protocol:
         width = int(td.get("width", 0))
         if kind == "bitset" and width not in (8, 16, 32):
             raise ProtoError(f"{tid}: bitset width must be 8, 16 or 32")
-        cols = tuple(str(c) for c in ([td["columns"]] if isinstance(td.get("columns"), str)
-                                      else td.get("columns", [])))
+        cols = tuple(safe_ident(c, f"{tid}.columns", pattern=ID_RE)
+                     for c in ([td["columns"]] if isinstance(td.get("columns"), str) else td.get("columns", [])))
         items = []
         for it in _req(td, "items", tid):
             key = "bit" if kind == "bitset" else "value"
-            extra = {k: str(it[k]) for k in ("arg", "values", *cols) if k in it}
-            items.append(Item(str(_req(it, "name", tid)), int(_req(it, key, tid)),
-                              " ".join(str(it.get("desc", "")).split()), extra,
-                              str(it.get("retired", "")), str(it.get("feature", ""))))
+            iname = str(_req(it, "name", tid))
+            extra = {k: safe_text(it[k], f"{tid}.{iname}.{k}") for k in ("arg", "values", *cols) if k in it}
+            ret = it.get("retired", "")
+            items.append(Item(iname, safe_int(_req(it, key, tid), f"{tid}.{iname}.{key}", 0, 0xFFFF),
+                              safe_text(" ".join(str(it.get("desc", "")).split()), f"{tid}.{iname}.desc"), extra,
+                              safe_version(str(ret), f"{tid}.{iname}.retired") if ret != "" else "",
+                              str(it.get("feature", ""))))
             if kind == "events" and not {"arg", "values"} <= extra.keys():
                 raise ProtoError(f"{tid}.{it['name']}: events need arg and values")
             if any(c not in extra for c in cols):
@@ -198,9 +268,10 @@ def load(path: Path = PROTO_YAML_PATH) -> Protocol:
         prefix = str(_req(td, "c_prefix", tid))
         if not re.match(r"^[A-Z][A-Z0-9_]*_$", prefix):
             raise ProtoError(f"{tid}: bad c_prefix")
-        tables.append(Table(tid, kind, str(_req(td, "title", tid)), str(td.get("icd", "")), prefix,
-                            str(_req(td, "py_name", tid)), width, bool(td.get("wire", True)), cols,
-                            tuple(items)))
+        tables.append(Table(tid, kind, safe_text(_req(td, "title", tid), f"{tid}.title"),
+                            safe_text(td.get("icd", ""), f"{tid}.icd"), prefix,
+                            safe_ident(_req(td, "py_name", tid), f"{tid}.py_name", pattern=PY_CLASS_RE),
+                            width, bool(td.get("wire", True)), cols, tuple(items)))
     if len({t.id for t in tables}) != len(tables) or len({t.c_prefix for t in tables}) != len(tables):
         raise ProtoError("duplicate table id or c_prefix")
     feats = {i.name for t in tables if t.id == "features" for i in t.items}
@@ -213,9 +284,14 @@ def load(path: Path = PROTO_YAML_PATH) -> Protocol:
     retry_names = {i.name for t in tables if t.id == "retry_class" for i in t.items}
     cmds = []
     for c in _req(cd, "items", "commands"):
-        cmd = Command(str(c["name"]), int(c["value"]), int(c["req_len"]), str(c["request"]),
-                      str(c["response"]), str(c["retry"]), str(c.get("retry_text", c["retry"])),
-                      bool(c["priority"]), bool(c.get("sniffed", False)), str(c["srs"]))
+        cn = str(c["name"])
+        cmd = Command(cn, safe_int(c["value"], f"command {cn}.value", 0, 0xFF),
+                      safe_int(c["req_len"], f"command {cn}.req_len", 0, 0xFFFF),
+                      safe_text(c["request"], f"command {cn}.request"),
+                      safe_text(c["response"], f"command {cn}.response"), str(c["retry"]),
+                      safe_text(c.get("retry_text", c["retry"]), f"command {cn}.retry_text"),
+                      bool(c["priority"]), bool(c.get("sniffed", False)),
+                      safe_text(c["srs"], f"command {cn}.srs"))
         if not 0x01 <= cmd.value <= 0x3F:
             raise ProtoError(f"command {cmd.name}: TYPE must be 0x01..0x3F")
         if cmd.retry not in retry_names:
@@ -225,9 +301,15 @@ def load(path: Path = PROTO_YAML_PATH) -> Protocol:
             raise ProtoError(f"command {cmd.name}: req_len")
         cmds.append(cmd)
     _check_names([Item(c.name, c.value) for c in cmds], "commands")
-    return Protocol(str(_req(doc, "icd_version", "top")), int(doc["proto_major"]),
-                    int(doc["proto_minor"]), int(doc["payload_version"]), tuple(consts),
-                    str(cd["c_prefix"]), str(cd["py_name"]), tuple(cmds), tuple(tables))
+    cprefix = str(cd["c_prefix"])
+    if not re.match(r"^[A-Z][A-Z0-9_]*_$", cprefix):
+        raise ProtoError("commands: bad c_prefix")
+    return Protocol(safe_version(_req(doc, "icd_version", "top"), "icd_version"),
+                    safe_int(doc["proto_major"], "proto_major", 0, 255),
+                    safe_int(doc["proto_minor"], "proto_minor", 0, 255),
+                    safe_int(doc["payload_version"], "payload_version", 0, 255), tuple(consts),
+                    cprefix, safe_ident(cd["py_name"], "commands.py_name", pattern=PY_CLASS_RE),
+                    tuple(cmds), tuple(tables))
 
 
 # --------------------------------------------------------------------------------------
@@ -283,7 +365,7 @@ def gen_c(p: Protocol) -> str:
     for t in p.tables:
         if not t.wire:
             continue
-        o.append(f"/* ---- {_c_comment(t.title)} (ICD {t.icd}) ---- */\n")
+        o.append(f"/* ---- {_c_comment(t.title)} (ICD {_c_comment(t.icd)}) ---- */\n")
         if t.kind in ("enum", "events"):
             o.append("typedef enum {\n")
             for it in sorted(t.items, key=lambda i: i.value):

@@ -35,6 +35,7 @@ OWN_HANDLERS = {
     "HardFault_Handler": 3,
     "EXTI0_IRQHandler": 16 + 6,
     "EXTI1_IRQHandler": 16 + 7,
+    "EXTI3_IRQHandler": 16 + 9,          # v0.8: software-pended deferred E-stop core callback (level 1)
     "EXTI4_IRQHandler": 16 + 10,
     "DMA1_Stream5_IRQHandler": 16 + 16,
     "DMA1_Stream6_IRQHandler": 16 + 17,
@@ -47,7 +48,8 @@ OWN_HANDLERS = {
 # flash busy loops + the level-0/1 input handlers and the stop / ENA primitives they call (FW_design
 # §5.11: served from RAM while the flash is busy)
 RAMFUNCS = ["ram_erase", "ram_program", "EXTI15_10_IRQHandler", "EXTI0_IRQHandler", "EXTI1_IRQHandler",
-            "EXTI9_5_IRQHandler", "hal_step_stop_now", "hal_step_abort", "hal_ena_set"]
+            "EXTI9_5_IRQHandler", "EXTI3_IRQHandler", "hal_step_stop_now", "hal_step_abort", "hal_ena_set",
+            "step_estop_reaction"]
 FORBIDDEN_SUBSTR = ["HardwareSerial", "HardwareTimer", "TwoWire", "Servo", "attachInterrupt"]
 FORBIDDEN_EXACT = {"tone", "noTone", "malloc", "free", "realloc", "calloc", "_sbrk", "_sbrk_r",
                    "_malloc_r", "_free_r", "_realloc_r", "_calloc_r", "printf", "sprintf",

@@ -203,7 +203,8 @@ class SimControl:
 
     # ---------------------------------------------------------------------------------------- faults
     def _a_inject(self, fault: str, duration_ms: int | None = None, where: str | None = None,
-                  cmd: str | int | None = None, what: str = "response", n: int = 1, ms: int = 0) -> None:
+                  cmd: str | int | None = None, what: str = "response", n: int = 1,
+                  ms: int = 0) -> dict[str, Any] | None:
         b = self.board
         if fault in TWIN_ONLY_INJECT or where is not None:
             raise ValueError("twin only")
@@ -224,8 +225,11 @@ class SimControl:
             b.link_silence_until_us = now + dur         # model: corrupted bytes = lost frames
         elif fault == "step_fault":
             b.inject_step_fault()
+        elif fault == "step_stall":                     # SW_design §12.4: frozen pulse output (TIMEOUT guard tests)
+            return b.inject_step_stall(int(duration_ms or 0))
         else:
             raise ValueError(f"fault {fault!r}")
+        return None
 
     def _a_rx_bytes(self, hex: str, at_us: int | None = None) -> None:  # noqa: A002
         b = self.board
@@ -286,7 +290,9 @@ class SimControl:
                         "creep_counts": b.afe.creep_counts, "drift_counts": b.afe.offset_at(b.now_us())
                         - b.afe.offset_counts}
             if what == "pulses":
-                return {"pul_count": b.pulses, "pos_steps": b.pos_steps}
+                return {"pul_count": b.pulses, "pos_steps": b.pos_steps,
+                        "step_stalled": b.step_stall_until_us is not None and b.motion is not None,
+                        "step_stall_armed": b.step_stall_armed_ms is not None}
             if what == "outputs":
                 return {"ena": not b.ena_disabled, "driver_energised": b.driver_energised(),
                         "rate": int(b.p("afe.rate_sps")) == 1, "led": False, "trip_relay": False}

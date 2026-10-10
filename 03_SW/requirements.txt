@@ -2,6 +2,9 @@
 # Owner: Implementer B (D-31). Supported runtime: Python 3.14 (D-33 i), project venv .venv.
 # Pins = the versions verified in .venv; pyproject.toml carries the same set as ranges.
 # Install: .venv\Scripts\python -m pip install -r 03_SW\requirements.txt
+# Reproducible install (SWR-27): hash-pinned lock requirements.lock.txt (direct + transitive, SHA-256), install with
+#   .venv\Scripts\python -m pip install --require-hashes -r 03_SW\requirements.lock.txt
+# Re-lock after changing a pin: .venv\Scripts\python 03_SW\packaging\lock_requirements.py generate
 PySide6-Essentials==6.11.2
 pyqtgraph==0.14.0
 numpy==2.5.3

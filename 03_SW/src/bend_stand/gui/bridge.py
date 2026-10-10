@@ -27,7 +27,13 @@ from typing import Any
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 from shiboken6 import Shiboken
 
+from bend_stand.core import api as _api
 from bend_stand.core.api import TOPICS
+
+#: topics B publishes before they are listed in ``api.TOPICS`` (B6-33: listed there once the GUI maps them)
+TOPICS_PENDING_GUI: tuple[str, ...] = tuple(getattr(_api, "TOPICS_PENDING_GUI", ()))
+#: every topic the bridge knows (``TOPICS`` + pending ones)
+KNOWN_TOPICS: tuple[str, ...] = tuple(dict.fromkeys((*TOPICS, *TOPICS_PENDING_GUI)))
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +58,7 @@ TOPIC_SIGNALS: Mapping[str, str] = {
     "hotkey.state": "hotkeyEvent", "hotkey.test": "hotkeyEvent",
     "report.ready": "reportReady",
     "log": "logMessage",
+    "device.board_changed": "boardChanged",      # B6-33 (6), SWR-19: another board (UID) after a reconnect
 }
 
 if "safety.trip_cleared" in TOPICS:          # B6-15 (MC3-5): trip clear on its own topic
@@ -127,6 +134,7 @@ class QtBridge(QObject):
     hotkeyEvent = Signal(object)
     reportReady = Signal(object)
     logMessage = Signal(object)
+    boardChanged = Signal(object)
     anyEvent = Signal(object)
     busyChanged = Signal(bool)
 
@@ -139,7 +147,7 @@ class QtBridge(QObject):
         self._closed = False
         events = getattr(backend, "events", None)
         if events is not None:
-            for topic in TOPICS:
+            for topic in KNOWN_TOPICS:
                 if topic in IGNORED_TOPICS or topic not in TOPIC_SIGNALS:
                     continue
                 try:

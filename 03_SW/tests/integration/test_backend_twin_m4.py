@@ -29,6 +29,9 @@ SW_design §10–§11):
 9. report: CSV + JSON + HTML exist; the report rebuilt offline from the recording equals the one built online at
    the sequence end; the raw window statistics equal the Integrator's recomputation from the DATA frames on the
    wire (ICD §7.6 window rule) (SW-REP-001…003).
+10. TIMEOUT: a move stall (twin ``inject step_stall``, ICD v0.7.5: the step output freezes, no FW stop cause) in
+   a TRAVEL step: no MOVE_DONE, the SW step-timeout guard (1.2 × planned travel time + 10 s) sends the priority
+   STOP at the deadline, the step ends TIMEOUT, sequence stopped (SW-SEQ-007).
 
 xfail (run=False) while B's ``bend_stand.core.sequencer`` is absent; run-time xfail while an API is still B's M4
 stub (NotImplementedError / NOT_IMPLEMENTED). Flip = automatic when B's code lands.
@@ -716,3 +719,64 @@ def test_slow_relaxation_during_a_long_capture_does_not_trip(m4):
     f = [m.force(d["afe_raw"]) for d in runs[0]]
     assert f[0] - f[-1] >= 30.0, (f[0], f[-1])                          # the relaxation really happened
     assert not any({"BREAK_DETECTED", "SLIP", "TIMEOUT"} & flags_of(r) for r in results(m))
+
+
+# ============================================================================================ 10 TIMEOUT (move stall)
+STALL_D, STALL_V, STALL_A = 10.0, 5.0, 50.0          # travel step: 10 mm at 5 mm/s, 50 mm/s²
+
+
+def planned_timeout_s(d_mm: float, v: float, a: float) -> float:
+    """SRS SW-SEQ-007 step-timeout rule, computed here independently of B's ``calc.trim``: 1.2 × the trapezoid
+    travel time + 10 s."""
+    t = d_mm / v + v / a if d_mm >= v * v / a else 2.0 * math.sqrt(d_mm / a)
+    return 1.2 * t + 10.0
+
+
+@pytest.mark.req("SW-SEQ-007", "SW-STOP-003")
+def test_step_timeout_on_a_move_stall(m4):
+    """Move stall 0.5 s into the TRAVEL step (tools/README "Move stall", ``duration_ms`` absent = until the move
+    ends): the FW keeps MOVING at a frozen position without any stop cause and MOVE_DONE never comes; the
+    sequencer's TIMEOUT guard sends the priority STOP (mode 0) at 1.2 × planned travel time + 10 s after the
+    MOVE_ABS; the FW halts the frozen output: STOPPED (PC_STOP) + MOVE_DONE STOPPED at the frozen position; step
+    result TIMEOUT, sequence STOPPED, nothing commanded afterwards."""
+    m = m4
+    rig, tw = m.rig, m.rig.tw
+    seq = m.load(ss.seq_doc("stall", [
+        ss.step("a", "travel", STALL_D, speed_mm_s=STALL_V, accel_mm_s2=STALL_A, settle_s=0.5, capture_s=0.5),
+        ss.step("r", "travel", 0.0, speed_mm_s=10.0)]))
+    t0 = tw.now_us
+    ss.start_sequence(rig.be, seq)
+    ss.run_sequence(rig, 10_000, on_tick=lambda st: bool(move_cmds(m, t0, ZERO_MM + STALL_D))
+                    and tw.now_us - move_cmds(m, t0, ZERO_MM + STALL_D)[0]["last_us"] > 500_000)
+    mv = move_cmds(m, t0, ZERO_MM + STALL_D)[0]
+    t_s = tw.now_us
+    r = rig.act("inject", fault="step_stall")
+    assert r.get("ok"), r
+    rig.advance(2)
+    frozen = tw.act("query", what="pulses")
+    assert frozen["step_stalled"] and frozen["running"], frozen
+    x_frozen = tw.act("query", what="world")["x_um_true"]
+    st = ss.run_sequence(rig, 30_000)
+    # the guard stop: the first stop on the wire after the stall, STOP mode 0 at the planned deadline
+    stops = ss.rx_cmds(tw, t_s, ("STOP", "HALT"))
+    assert stops and stops[0]["name"] == "STOP" and stops[0]["fields"]["mode"] == 0, stops
+    t_out = planned_timeout_s(STALL_D, STALL_V, STALL_A)
+    dt = (stops[0]["first_us"] - mv["last_us"]) / 1e6
+    assert t_out - 0.1 <= dt <= t_out + 0.3, (dt, t_out)
+    # FW side up to the stop: MOVING throughout, no stop cause, no MOVE_DONE, position frozen
+    t_stop = stops[0]["first_us"]
+    assert [e for e in ss.events(tw, t_s) if e["wire_us"] < t_stop and e["code"] in
+            ("MOVE_DONE", "STOPPED", "FAULT_SET", "HALT_SET", "LIMIT_SET")] == []
+    during = [d for d in ss.data(tw, t_s + FRAME + SLACK) if d["wire_us"] < t_stop]
+    assert during and all("MOVING" in d["flags"] for d in during)
+    stp = ss.events(tw, t_stop, ("STOPPED",))
+    done = ss.events(tw, t_stop, ("MOVE_DONE",))
+    assert stp and stp[0]["arg"] == 1, stp                                  # cause PC_STOP (STOP mode 0)
+    assert done and done[0]["arg"] == 5 and done[0]["value2"] == frozen["pos_steps"], (done, frozen)
+    assert [s_ for s_ in tw.seam_log if s_["call"] == "step_stall_halted" and s_["t_us"] >= t_stop]
+    assert tw.act("query", what="world")["x_um_true"] == x_frozen
+    # SW side: TIMEOUT, sequence stopped, no retry
+    assert ss.state_name(st) == "STOPPED" and "TIMEOUT" in ss.outcome_text(st), ss.outcome_text(st)
+    assert any("TIMEOUT" in flags_of(r_) for r_ in results(m)), [flags_of(r_) for r_ in results(m)]
+    rig.advance(3000)
+    assert ss.no_motion_after(tw, t_stop) == []

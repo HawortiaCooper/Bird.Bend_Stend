@@ -491,11 +491,14 @@ def fmt_hms(s: float | None) -> str:
 
 
 def run_line(v: RunView) -> str:
-    """One status line (§3.6 run status): state, step i/N, loop, phase, windows, plan / total, remaining."""
+    """One status line (§3.6 run status): state, step i/N, step label (while active), loop, phase, windows,
+    plan / total, remaining."""
     st = v.state + (f" ({v.paused_source})" if v.state == "PAUSED" and v.paused_source else "")
     parts = [st]
     if v.exec_idx is not None:
         parts.append(f"step {v.exec_idx + 1}/{v.n_exec}" if v.n_exec else f"step {v.exec_idx + 1}")
+    if v.label and v.active:      # SW-SEQ-003: label of the step being run, from the same status snapshot as the
+        parts.append(f'"{v.label}"')   # step / phase (B publishes them together); not shown once the run has ended
     if v.loop_iters:
         parts.append("loop " + ".".join(str(i) for i in v.loop_iters))
     if v.phase:

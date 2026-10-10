@@ -43,6 +43,8 @@ typedef struct {
     bool     nvm_record_valid;
     bool     paused;                /* PAUSED latch (D-30) */
     bool     hw_meas;               /* build has FEAT_HW_MEAS (not a FwState key: replay parameter) */
+    bool     ena_on;                /* ENA output at the enabled level (STATUS io ENA_DISABLED = !ena_on);
+                                       state_schema 4, FWR-09 */
     int32_t  unhomed_origin_um;     /* D-43 b: origin of the un-homed travel window (state_schema 3) */
 } cmd_ctx_t;
 

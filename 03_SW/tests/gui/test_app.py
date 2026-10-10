@@ -33,14 +33,17 @@ from bend_stand.gui import app, main_window
 fake = FakeBackend()
 started_at_show = []
 orig_show = main_window.MainWindow.show
+icon_null_at_show = []
 def show(self):
     started_at_show.append(fake.started)
+    icon_null_at_show.append([QtWidgets.QApplication.instance().windowIcon().isNull(), self.windowIcon().isNull()])
     orig_show(self)
 main_window.MainWindow.show = show
 endpoint = %(endpoint)r
 rc = app.run(fake, argparse.Namespace(endpoint=endpoint, quit_after_ms=150))
 print("RESULT " + json.dumps({"rc": rc, "native_off_at_qapp": native_off_at_qapp,
                                "started_at_show": started_at_show, "calls": fake.call_names(),
+                               "icon_null_at_show": icon_null_at_show,
                                "shutdowns": fake.shutdowns, "connect": [c.args for c in fake.calls_of("connect_async")]}))
 """
 
@@ -59,13 +62,14 @@ def _run(tmp_path: Path, endpoint: str | None) -> dict:
 def test_run_starts_before_show_and_shuts_down(tmp_path) -> None:
     """Verifies: SW-PLT-001, SW-STOP-002, SW-STOP-001 — native dialogs disabled before the QApplication exists;
     backend.start() before the window is shown (hotkey active before Connect); no connect without args.endpoint
-    (D-06); shutdown on close; returns the exit code."""
+    (D-06); shutdown on close; returns the exit code; the application and window icon are set (F-B-PKG-01)."""
     res = _run(tmp_path, None)
     assert res["rc"] == 0
     assert res["native_off_at_qapp"] == [True]
     assert res["started_at_show"] == [True]
     assert res["calls"][0] == "start" and res["connect"] == []
     assert res["shutdowns"] >= 1
+    assert res["icon_null_at_show"] == [[False, False]]          # F-B-PKG-01: app + window icon set (not Qt's default)
 
 
 @pytest.mark.req("SW-PLT-001", "SYS-008")

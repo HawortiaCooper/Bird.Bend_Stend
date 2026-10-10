@@ -250,6 +250,9 @@ void     motion_stop(uint8_t cause, bool controlled, uint8_t md);
 void     motion_estop_hw(void);
 void     motion_tick(uint32_t now_ms);
 bool     motion_active(void);
+bool     motion_stopping(void);                /* an active motion is stopping */
+void     motion_gate_capture(void);            /* stop generation before a gate check (FWR-01) */
+bool     safety_edges_pending(void);           /* E-stop / START / END record not yet folded (FWR-18) */
 int8_t   motion_dir(void);                   /* direction of the running segment (0 = none) */
 bool     motion_home_edge(uint8_t lim_id, int32_t steps);  /* true: an expected homing edge */
 int32_t  motion_target_um(void);             /* STATUS target_um */

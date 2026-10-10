@@ -22,7 +22,8 @@ import ref_codec as rc
 
 MOVING_STATES = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOMING", "STOPPING")
 MOTION_CMDS = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOME")
-STATE_SCHEMA = 3        # check_vectors.json state_schema (F-B-25); 3 (v0.7): + unhomed_origin_um (D-43 b)
+STATE_SCHEMA = 4        # check_vectors.json state_schema (F-B-25); 3 (v0.7): + unhomed_origin_um (D-43 b);
+                        # 4 (v0.7.5, D-50 c / OI-FW-50): + ena_on (FWR-09)
 SPS = {0: 10, 1: 80}    # afe.rate_sps enum code -> conversions per second (H5)
 
 
@@ -54,6 +55,9 @@ class FwState:
     nvm_record_valid: bool = True
     paused: bool = False            # PAUSED latch: blocks new motion (BLOCK PAUSED, D-30)
     unhomed_origin_um: int = 0      # D-43 b: position latched when the axis became un-homed (schema 3)
+    ena_on: bool = True             # schema 4 (D-50 c, FWR-09): ENA output at the enabled level (STATUS io
+                                    # ENA_DISABLED = not ena_on); always true outside NOT_ENABLED; after a boot
+                                    # NOT_ENABLED keeps it true (holding, D-13); false after DISABLE / E-stop
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FwState":
@@ -299,6 +303,8 @@ class Model:
             return "E_STATE", meas_state
         if name == "STATIC_LEVEL" and st.motion_state != "NOT_ENABLED":
             return "E_STATE", meas_state
+        if name == "STATIC_LEVEL" and sel == 0 and st.ena_on:     # FWR-09 (ICD v0.7.5 App. C op 8): PUL only with
+            return "E_STATE", meas_state                          # ENA at the disabled level
         return "OK", 0
 
     def _check_motion(self, st: FwState, name: str, req: dict[str, Any], payload: bytes,

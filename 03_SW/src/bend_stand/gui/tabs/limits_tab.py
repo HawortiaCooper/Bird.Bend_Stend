@@ -51,6 +51,8 @@ log = logging.getLogger(__name__)
 RAW_RANGE = 8_388_607                   # i24 (HX711) — editor range only; the backend / FW check the values
 ERR_STYLE = "background-color: #ffc8c8;"
 MOTION_DISABLED_CODES = ("LOAD_INPUT_INVALID", "THRESHOLDS_UNVERIFIED")
+#: limits.set issues whose way out is the no-specimen mode (B6-33 (2), D-53): highlight [Enter no-specimen mode…]
+NOSPEC_CODES = frozenset({"LOAD_LIMITS_BOTH_OFF", "LOAD_INPUT_INVALID"})
 
 
 def _err_text(exc: BaseException) -> str:
@@ -363,8 +365,11 @@ class LimitsTab(QWidget):
             return
         self._show_issues(issues)
         errors = [i for i in issues if str(getattr(i, "severity", "ERROR")) == "ERROR"]
+        nospec = any(str(getattr(i, "code", "")) in NOSPEC_CODES for i in errors)
+        self._point_to_no_specimen(nospec)
         if errors:
-            self.apply_result.setText("✗ not applied: " + "; ".join(i.text for i in errors))
+            self.apply_result.setText("✗ not applied: " + "; ".join(i.text for i in errors)
+                                      + (" → [Enter no-specimen mode…] below" if nospec else ""))
             self.apply_result.setStyleSheet("color: #a00000;")
             self.message.emit("Limits not applied: " + "; ".join(i.text for i in errors), "warn")
             return
@@ -459,6 +464,11 @@ class LimitsTab(QWidget):
         self.clamped_label.setVisible(bool(clamped))
 
     # ================================================================== no-specimen mode
+    def _point_to_no_specimen(self, on: bool) -> None:
+        """B6-33 (2): both PC load limits off (LOAD_LIMITS_BOTH_OFF), or one off without a valid load input, is refused
+        outside the no-specimen mode — the [Enter no-specimen mode…] button is highlighted as the way to do it."""
+        self.nospec_enter.setStyleSheet("QPushButton { background: #ffd060; font-weight: bold; }" if on else "")
+
     def enter_no_specimen(self) -> None:
         st = self._status if self._status is not None else self._backend.status()
         gate = gating.gate_of(st, GateId.NO_SPECIMEN)

@@ -300,7 +300,8 @@ class SequenceTab(QWidget):
         self.pull_combo.addItem("+1", 1)
         self.pull_combo.setToolTip("+1: pull (tension) = +x; −1: pull = −x")
         self.pull_combo.addItem("−1", -1)
-        self.pull_combo.activated.connect(lambda _i: self._set_attr("pull_dir", self.pull_combo.currentData()))
+        self.pull_combo.activated.connect(lambda _i: (self._set_attr("pull_dir", self.pull_combo.currentData()),
+                                                     self.mark_pull_dir(None)))
         grid.addWidget(self.pull_combo, 1, 1)
         grid.addWidget(QLabel("k_est N/mm", box), 1, 2)
         self.kest_spin = QDoubleSpinBox(box)
@@ -744,6 +745,7 @@ class SequenceTab(QWidget):
         if not g.ok:
             self._show_refusal(g)
             return
+        self.mark_pull_dir(None)
         self.chart.clear_run()
         self.step_results.clear()
         self._add_message("Sequence started" + (" (confirmed)" if confirmed else ""))
@@ -751,9 +753,22 @@ class SequenceTab(QWidget):
             self.message.emit("; ".join(i.text for i in g.warnings), "warn")
         self.message.emit("Sequence started", "info")
 
+    def mark_pull_dir(self, item: Any) -> None:
+        """PULL_DIR_MISMATCH (B6-33 (4), D-53 b): the pull-dir field is marked red with the refusal text (which
+        names both values) until the pull dir is changed, a start succeeds or a session is loaded. Display only."""
+        tip = "+1: pull (tension) = +x; −1: pull = −x"
+        if item is None:
+            self.pull_combo.setStyleSheet("")
+            self.pull_combo.setToolTip(tip)
+            return
+        self.pull_combo.setStyleSheet("QComboBox { background: #ffd0d0; }")
+        self.pull_combo.setToolTip(f"{item.text}\n{tip}")
+
     def _show_refusal(self, g: Any) -> None:
-        """One message row per REFUSE item, verbatim (SW-SEQ-005: one item per reason)."""
+        """One message row per REFUSE item, verbatim (SW-SEQ-005: one item per reason); PULL_DIR_MISMATCH also marks
+        the pull-dir field (Implements: SW-SEQ-005, D-53 b)."""
         items = [i for i in g.refused if i.code != "CONFIRMATION_REQUIRED"]
+        self.mark_pull_dir(next((i for i in items if i.code == "PULL_DIR_MISMATCH"), None))
         self.message.emit("Sequence start refused: " + "; ".join(i.text for i in items), "warn")
         for i in items:
             self._add_message(f"start refused [{i.code}]: {i.text}" + (f" — {i.clear_hint}" if i.clear_hint else ""),
@@ -924,7 +939,7 @@ class SequenceTab(QWidget):
             nr = "NOT_REACHED" in flags
             txt = (f"step {row['step']}" + (f" loop {row['loop']}" if row["loop"] not in ("", None) else "")
                    + (f" {row['label']}" if row["label"] else "") + ": " + (", ".join(flags) or "OK"))
-            if row["F.mean"] is not None:
+            if row["F.mean"] is not None and sa.finite(row["F.mean"]):   # no window (guard stop) → no "nan"
                 txt += f"  F̄ {force_unit().from_n(float(row['F.mean'])):.2f} {force_unit().unit}"
             if nr:
                 txt += " — load target not reached at the approach bound (axis stopped there; not a limit trip)"

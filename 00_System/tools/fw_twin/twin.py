@@ -952,6 +952,11 @@ class Twin:
             if duration_ms is None:
                 return {"ok": False, "error": "isr_storm needs duration_ms"}
             self._send(f"W hang isr1 {end}")
+        elif fault == "step_stall":                  # v0.7.5 (tools/README "Move stall"): step output frozen
+            if duration_ms is not None and float(duration_ms) < 0:
+                return {"ok": False, "error": "step_stall: duration_ms >= 0 (0 = until the move ends)"}
+            self._send(f"W stepstall {int(float(duration_ms or 0) * 1e6)}")
+            return {"ok": True, "duration_ms": float(duration_ms or 0)}
         elif fault in ("drop_next", "duplicate_next", "delay_next", "corrupt_next"):
             if cmd is None:
                 raise ValueError("cmd required")
@@ -1029,7 +1034,9 @@ class Twin:
                     "rx_overruns": int(y["rx_overruns"]), "resets": list(self.resets), "core": self.core}
         if what == "pulses":
             return {"ok": True, "count": self.pul_rising, "pos_steps": int(y["pos_steps"]),
-                    "running": y["step_running"] == "1", "pos_uncertain": y["pos_uncertain"] == "1"}
+                    "running": y["step_running"] == "1", "pos_uncertain": y["pos_uncertain"] == "1",
+                    "step_stalled": y.get("step_stalled", "0") == "1",
+                    "step_stall_armed": y.get("step_stall_armed", "0") == "1"}
         if what == "outputs":
             return {"ok": True, "ENA": int(y["ena_level"]), "ena_enabled": y["ena_enabled"] == "1",
                     "RATE": int(y["rate_pin"]), "LED": int(y["led"]), "TRIP": int(y["trip"])}

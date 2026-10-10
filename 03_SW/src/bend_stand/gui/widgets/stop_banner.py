@@ -66,6 +66,16 @@ def _hint(item: Any) -> str:
     return f" {h}" if h else ""
 
 
+def with_hint(text: str, item: Any) -> str:
+    """Gate-item text and its ``clear_hint`` with a visible separator (OI-UM-05 a): "<text> – <hint>". The text stays
+    verbatim (a trailing period is dropped only to avoid ". –"); no hint → the text alone."""
+    h = str(getattr(item, "clear_hint", None) or "").strip()
+    t = str(text).rstrip()
+    if not h:
+        return t
+    return f"{t.rstrip('.').rstrip()} – {h}"
+
+
 def _on(ind: Any, name: str) -> Any:
     try:
         it = ind[name]
@@ -142,10 +152,15 @@ def banner_rows(status: Any, recent: RecentStop | None, now: float) -> list[Bann
                                           "(controlled).", "", "rec"))
     move = gating.gate_of(status, GateId.MOVE)
     if move is not None:
+        for item in move.refused:                       # B6-33 (1), SWR-22: board values outside the dictionary
+            if item.code == "PARAM_INVALID":
+                rows.append(BannerRow(10, "alarm", "Motion refused: " + with_hint(item.text, item), "connection",
+                                      "param_invalid"))
+                break
         for item in move.refused:
             if item.code == "LOAD_INPUT_INVALID":
                 action = "" if getattr(getattr(status, "safety", None), "no_specimen_mode", False) else "nospec"
-                rows.append(BannerRow(11, "warn", item.text + _hint(item), action, "first_use"))
+                rows.append(BannerRow(11, "warn", with_hint(item.text, item), action, "first_use"))  # SAF-SW-001
                 break
     if recent is not None and recent.state in ("sent", "confirmed") and now - recent.t_mono < SENT_AUTOHIDE_S:
         if recent.cmd == "PAUSE":

@@ -2,7 +2,7 @@
 
 | Doc | SW_test_plan |
 |---|---|
-| Version | **0.5 — M4 gate execution (Sequencer, D-46…D-48)** · 0.4 — M3 gate execution (SW application, D-44) · 0.3.2 — M2 close-out re-test (ICD v0.7 / CR-03, D-43) · 0.3.1 — M2 gate execution (armed §3.14, D-41/D-42) · 0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
+| Version | **0.5.3 — code-review add-on (§10e)** · 0.5.2 — code-review fix verification · 0.5.1 — code-review reproducers (Task 6, §10e) · 0.5 — M4 gate execution (Sequencer, D-46…D-48) · 0.4 — M3 gate execution (SW application, D-44) · 0.3.2 — M2 close-out re-test (ICD v0.7 / CR-03, D-43) · 0.3.1 — M2 gate execution (armed §3.14, D-41/D-42) · 0.3 — M2 plan: CR-01 / D-36, D-37, SW-RT-006 (D-38), M2 SW early acceptance** (0.2 = M1 execution corrections, 0.1 = P1 gate draft) |
 | Date | 2026-10-04 |
 | Owner | Validator F — SW (`03_SW/docs/SW_test_plan.md`, `03_SW/docs/SW_test_report*.md`, `03_SW/tests/validation/**`) |
 | Verifies | SRS **v0.5.1**: SW-* (61, incl. new SW-RT-006), SAF-SW-* (6), NFR-001…004, the SW side of IF-001…012, SYS-003, SYS-008, SYS-010 (**86 requirements**; v0.2: 85 of SRS v0.3) |
@@ -776,11 +776,57 @@ resume refused with HALT, recording failure, status rate + marker, report files 
 data.csv, offline CLI with tare / cal / 3-point bend, test vs machine travel reference); oracles `f_ref.steady_ok`,
 `window_select`, `band`, `raw_stop`, `move_time_s`; harness M4 verbs.
 
+## 10e. Code-review reproducers (v0.5.1, Task 6)
+
+The whole-codebase review `03_SW/docs/SW_code_review.md` (anchor e600169, findings SWR-01…28) adds
+`test_v_review.py`: one test per reproducible finding, `@pytest.mark.defect("SWR-nn")` + `xfail(strict=True)` while
+open (the M1 rule for open defects, §10a), plus three evidence tests (decoder bound under adversarial input, HTML
+escaping of operator marks, recording folder names). Unlike the milestone modules some reproducers drive one backend
+unit directly or patch one function to force a thread interleaving deterministically (rule 2 exception, documented in
+the module docstring); expected values still come from the SRS / SW_design text.
+
+| Finding | Test (`test_v_review.py`) | Requirement |
+|---|---|---|
+| SWR-01 | `test_swr01_pipeline_stall_while_moving_sends_stop` | SAF-SW-001, SAF-SW-003 |
+| SWR-02 | `test_swr02_handler_exception_does_not_drop_following_frames` | SAF-SW-001, SW-STOP-003, IF-006 |
+| SWR-03 | `test_swr03_saved_limits_off_do_not_bypass_load_input_rule` | SAF-SW-001, SW-LIM-004, SW-LIM-003 |
+| SWR-04 | `test_swr04_refused_ramp_step_does_not_leave_valid_on` | SW-SEQ-004 |
+| SWR-05 | `test_swr05_rows_during_stop_never_leak_into_next_recording` | SW-ACQ-002, SW-ACQ-004 |
+| SWR-06 | `test_swr06_session_wrong_type_does_not_prevent_start`, `…_string_travel_limit_does_not_break_status` | SW-LIM-003, SW-LIM-001 |
+| SWR-07 | `test_swr07_shutdown_mid_sequence_keeps_the_run_log` | SW-ACQ-002, SW-REP-001, SW-REP-003 |
+| SWR-08 | `test_swr08_config_write_refused_while_sequence_paused` | SW-CFG-003 (SW_design §5.6 gate table) |
+| SWR-09 | `test_swr09_hung_hotkey_thread_is_not_shown_active` (real clock) | SW-STOP-002, SAF-SW-005 |
+| SWR-10 | `test_swr10_fast_ack_does_not_turn_a_written_stop_into_not_sent` | SW-STOP-001, IF-011 |
+| SWR-11 | `test_swr11_report_html_escapes_sidecar_values` | SW-REP-001, SW-REP-003 |
+| SWR-12 | `test_swr12_sequence_file_deep_nesting_is_a_file_error`, `…_corrupt_active_calibration_does_not_prevent_start` | SW-SEQF-001, SW-CAL-009 |
+| SWR-13 | `test_swr13_nan_target_is_refused_by_the_gate` | SW-LIM-001 |
+| SWR-16 | `test_swr16_sequence_pull_dir_mismatch_is_flagged` (review expectation, owner decision) | SW-SEQ-006, SW-SEQ-005 |
+
+v0.5.2 (SW_code_review §8, fix verification): the 16 reproducers above guard the fixes (markers removed by the owners).
+Added — independent tests of fixes that had only the implementer's tests, and reproducers of the new findings:
+
+| Finding | Test (`test_v_review.py`) | Requirement |
+|---|---|---|
+| SWR-15 | `test_swr15_reserved_move_of_an_old_epoch_never_follows_a_stop`, `test_swr15_stop_waits_at_most_for_the_motion_frame_being_written` | SW-STOP-001, IF-011, IF-005 |
+| SWR-22 | `test_swr22_out_of_range_board_value_refuses_motion` | SW-CFG-001, SAF-SW-001 |
+| SWR-23 | `test_swr23_samples_csv_neutralises_formula_marks` | SW-ACQ-003 |
+| SWR-24 | `test_swr24_failed_calibration_cannot_be_applied_offline` | SW-REP-003 |
+| SWR-25 | `test_swr25_broken_session_file_is_never_overwritten` | SW-LIM-003 |
+| SWR-14 | `test_swr14_incident_log_records_liveness_stop_halt_and_latches` | SAF-SW-005, SW-PLT-001 |
+| SWR-29 (new, closed 2026-10-10) | `test_swr29_leaving_no_specimen_mode_does_not_keep_both_limits_off` (guards the fix) | SW-LIM-004, SAF-SW-001, SW-LIM-003 |
+| SWR-30 (new, closed 2026-10-10) | `test_swr30_report_warns_about_a_truncated_run_log` (guards the fix) | SW-SEQ-002, SW-REP-001 |
+| SWR-31 (new, closed 2026-10-10) | `test_swr31_log_set_up_never_blocks_the_start` (guards the fix) | SW-PLT-001 |
+| SWR-05 (final recorder, SWD-P3-01) | `test_swr05_threaded_stop_start_cycles_keep_every_row_in_one_recording` (real clock) | SW-ACQ-002, SW-ACQ-004 |
+| SWR-37 (new, closed 2026-10-10) | `test_swr37_pipeline_stall_not_hidden_by_repeated_supervisor_stalls` (guards the fix) | SAF-SW-001, SAF-SW-003 |
+
 ## 11. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 0.1 | 2026-10-03 | Validator F | First plan for the P1 gate: strategy and levels, 167 TCs for 85 requirements, R4 + VV vectors (R4 §12 independently verified 22/22 × 3 runs), 29 fault-injection scenarios, REF runs PR-1…5, demonstrations DM-01…10, milestone criteria, findings SWD-P1-01…18, P1 verdict YES WITH CONDITIONS (C1…C7). Includes D-30, D-31 (RESUME 0x3C) and D-32 (load step travels to the soft limit, NOT_REACHED) per Orchestrator messages. |
+| 0.5.3 | 2026-10-10 | Validator F | §10e: SWR-05 threaded stop / start test on the final recorder; SWR-37 reproducer (liveness filter without ceiling). |
+| 0.5.2 | 2026-10-09 | Validator F | §10e: fix verification of the code review (SW_code_review §8): 7 independent tests of fixes (SWR-14, 15 ×2, 22, 23, 24, 25) and 3 strict-xfail reproducers of new findings SWR-29 / 30 / 31. |
+| 0.5.1 | 2026-10-08 | Validator F | §10e: whole-codebase code review (Task 6, anchor e600169) — reproducers of SWR-01…13 / SWR-16 in `test_v_review.py` (16 strict xfail) + 3 evidence tests; findings in `SW_code_review.md`. |
 | 0.5 | 2026-10-05 | Validator F | M4 gate execution: baseline 5daf3b8 / SW_design v0.6 / GUI v0.6 / D-46…D-48; corrections M4-C1…C7 (TC-SW-SEQ-007-03 aligned to D-33 c / D-47 c); M4 validation modules (U / C). Results: `SW_test_report_M4.md`. |
 | 0.4 | 2026-10-05 | Validator F | M3 gate execution: baseline 2d36eec / SW_design v0.5 / GUI v0.5 / dict 6; corrections M3-C1…C5; M3 validation modules (U / C / G). Results: `SW_test_report_M3.md`. |
 | 0.3.2 | 2026-10-04 | Validator F | M2 close-out re-test: ICD v0.7 / CR-03 defaults (sense and K1 check off; sense cases via scenario params), D-43 b/e, MC2-4 real SAVE stall, SWD-M2-01/02 regression; correction M2-C10. |

@@ -2,6 +2,7 @@
  * 800 steps/mm, as the twin's default scenario): normal homing, START active at HOME (RELEASE),
  * HOME_NOT_FOUND, HOME_WIRING (END during the seek), re-homing drift 0.1 mm / 0.3 mm (HOME_DRIFT),
  * aborted homing, E_CONFIRM load pre-check.
+ * FWR-18: an expected homing edge inside a tick after the record take (real core_tick_1ms()).
  * Verifies: FW-HOM-001, FW-HOM-002, FW-HOM-004, SAF-FW-021
  */
 #include <unity.h>
@@ -227,6 +228,51 @@ static void test_unhomed_window(void)
     TEST_ASSERT_EQUAL_INT32(-2400, fake_step_count());
 }
 
+/* FWR-18 (re-check v0.8.1, TC-FW-HOM-001-02 analogue on the REAL core_tick_1ms()): the expected START
+ * edge of the fast seek lands inside a tick, after safety_tick() took the records and captured the stop
+ * generation (injected at the sniffer's hal_uart_peek() in link_tick()); the HAL halt stops the timer,
+ * the record stays pending: motion_tick() must not decide the segment end in that tick (no
+ * HOME_NOT_FOUND, no killed restart) and the next tick completes homing normally */
+static bool s_inj_done;
+static void inject_start_world(void) { fake_world_limits(true, -1200, 240800); }
+
+static void run_homing_inject(uint32_t max_ms)
+{
+    uint32_t t;
+    for (t = 0u; t < max_ms && motion_active(); t++) {
+        fake_advance_tk(1000u * (uint64_t)(FAKE_F_TICK / 1000000u));
+        if (!s_inj_done && g_fw.home_phase == (uint8_t)HP_FAST_SEEK && fake_step_count() <= -1200) {
+            s_inj_done = true;
+            fake_peek_hook = inject_start_world;      /* START edge inside the next tick */
+        }
+        core_tick_1ms();
+        app_loop();
+        if ((fake_now_us() / 1000u) % 12u == 0u) {
+            fake_sample(fake_now_us(), 0);
+        }
+        if (t % 50u == 0u) {
+            h_expect_ok(h_cmd(CMD_PING, 0x70u, NULL, 0u));
+        }
+    }
+}
+
+static void test_homing_edge_inside_tick_after_take(void)
+{
+    uint32_t from;
+    fake_world_limits(false, -1200, 240800);          /* the START edge is injected */
+    s_inj_done = false;
+    mu_enable();
+    from = fake_cap_n;
+    home_cmd(0u);
+    run_homing_inject(60000u);
+    TEST_ASSERT_TRUE_MESSAGE(s_inj_done, "fast seek did not reach the injection point");
+    TEST_ASSERT_NULL_MESSAGE(fake_peek_hook, "hook did not run");
+    TEST_ASSERT_FALSE(motion_active());
+    TEST_ASSERT_TRUE_MESSAGE(mu_ev(EV_HOME_FAILED, from) < 0, "HOME_FAILED (FWR-18)");
+    TEST_ASSERT_EQUAL_HEX16(0u, g_fw.lat.faults);
+    TEST_ASSERT_TRUE(g_fw.homed);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -238,5 +284,6 @@ int main(void)
     RUN_TEST(test_aborted);
     RUN_TEST(test_load_precheck);
     RUN_TEST(test_unhomed_window);
+    RUN_TEST(test_homing_edge_inside_tick_after_take);
     return UNITY_END();
 }

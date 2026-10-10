@@ -1,5 +1,5 @@
 /* GENERATED - do not edit.
- * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.4, PROTO 1.0, PAYLOAD 1)
+ * Source : 00_System/specs/protocol.yaml (ICD_protocol.md v0.7.5, PROTO 1.0, PAYLOAD 1)
  * Tool   : 00_System/tools/gen_protocol.py (run via gen_params.py)
  * Names and codes of commands, NACK codes, flag/status/FAULT/IO/BLOCK bits, EVENT codes
  * and their argument enums. FW code uses these identifiers only (no hand-listed codes).
@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define PROTO_ICD_VERSION      "0.7.4"
+#define PROTO_ICD_VERSION      "0.7.5"
 #define PROTO_MAJOR            1u
 #define PROTO_MINOR            0u
 #define PROTO_PAYLOAD_VERSION  1u
@@ -192,7 +192,7 @@ typedef enum {
 #define BLOCK_PAUSED_BIT                 10u
 #define BLOCK_PAUSED                     0x0400u /* PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31) */
 #define BLOCK_MEAS_STATE_BIT             11u
-#define BLOCK_MEAS_STATE                 0x0800u /* DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c) */
+#define BLOCK_MEAS_STATE                 0x0800u /* DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED and, for sel PUL, the ENA output at the disabled level (Appendix C, D-40c, FWR-09) */
 #define BLOCK_DEFINED_MASK               0x0FFFu
 
 /* ---- STOP mode (ICD §5.5) ---- */
@@ -512,7 +512,7 @@ typedef enum {
     MEAS_OP_NOINIT                   = 5, /* .noinit block (last PUL, heartbeat, hang start, previous-boot record, boot counter; survives a reset) */
     MEAS_OP_STIM_RUN                 = 6, /* stimulus series on the J-STIM output (MT-7) */
     MEAS_OP_HANG                     = 7, /* test-image hang injection while moving (IWDG evidence) */
-    MEAS_OP_STATIC_LEVEL             = 8, /* drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed) */
+    MEAS_OP_STATIC_LEVEL             = 8, /* drive PUL or DIR statically for the DMM (only NOT_ENABLED; PUL only with ENA at the disabled level; released before the next command is executed) */
     MEAS_OP_DWT                      = 9, /* DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0) */
 } proto_meas_op_t;
 
@@ -533,7 +533,7 @@ typedef enum {
 typedef enum {
     MEAS_MODE_TRIGGER                  = 0, /* the first event edge after arming starts the probe counter (single shot) */
     MEAS_MODE_RESET                    = 1, /* every event edge restarts the probe counter (last event wins) */
-    MEAS_MODE_PWM_INPUT                = 2, /* PUL period and high width per pulse (min/max over the pulses since arming) */
+    MEAS_MODE_PWM_INPUT                = 2, /* PUL period and high width per pulse (min/max over the pulses since arming; a period that overflowed the 16-bit capture = 0xFFFFFFFF) */
 } proto_meas_probe_mode_t;
 
 /* ---- DIAG_MEAS PROBE_READ w0 flags (ICD App. C) ---- */

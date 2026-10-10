@@ -5,7 +5,6 @@
 
 #include <math.h>
 
-#define U32_MAX_F 4294967040.0f        /* largest float below 2^32 */
 #define C_MAX     4.0e9                /* longest period handled (ticks) */
 
 double ramp_steps_of(uint32_t um, float spm)
@@ -48,7 +47,23 @@ static void set_rguard(ramp_t *r)
     /* D(rem) >= chw needs rem <~ Cd^2 / (4 chw^2) + 1 */
     double g = ((double)r->cd * (double)r->cd) / (4.0 * (double)r->chw * (double)r->chw) + 2.0;
     r->rguard = sat_u32(g);
-    r->sr_ok = false;
+}
+
+/* sqrt(rem), sqrt(rem - 1) for the decel term: called by every function that changes rem (ramp_next
+ * keeps them itself); the same expressions as the v0.7 lazy initialisation in the ISR (bit-identical) */
+static void set_sr(ramp_t *r)
+{
+    r->sr = sqrtf((float)r->rem);
+    r->sr1 = (r->rem > 1u) ? sqrtf((float)(r->rem - 1u)) : 0.0f;
+}
+
+/* sqrt(rv), sqrt(rv - 1) for the reduction term (used while red) */
+static void set_srv(ramp_t *r)
+{
+    if (r->rv >= 1.0f) {
+        r->srv = sqrtf(r->rv);
+        r->srv1 = sqrtf(r->rv - 1.0f);
+    }
 }
 
 void ramp_start(ramp_t *r, double f, double alpha_a, double alpha_d, double v_steps_s, float chw,
@@ -68,9 +83,12 @@ void ramp_start(ramp_t *r, double f, double alpha_a, double alpha_d, double v_st
     r->sa1 = 0.0f;
     r->acc_on = true;
     r->rv = 0.0f;
+    r->srv = 0.0f;
+    r->srv1 = 0.0f;
     r->red = false;
     r->rem = n_steps;
     set_rguard(r);
+    set_sr(r);
     r->mono = false;
     r->last = 0.0f;
     r->prev = 0.0f;
@@ -80,78 +98,7 @@ void ramp_start(ramp_t *r, double f, double alpha_a, double alpha_d, double v_st
 
 uint32_t ramp_next(ramp_t *r)
 {
-    float c = r->cmin;
-    float acc;
-    uint32_t n;
-    uint8_t bind = 0u;                       /* 1 = accel term, 2 = reduction term */
-
-    if (r->red) {
-        if (r->rv >= 1.0f) {
-            float p = r->cr / (sqrtf(r->rv) + sqrtf(r->rv - 1.0f));
-            if (p < r->cmin) {
-                c = p;
-                bind = 2u;
-            } else {
-                r->red = false;              /* reduction done: cruise */
-            }
-        } else {
-            r->red = false;
-        }
-    } else if (r->acc_on) {
-        float p = r->ca / (r->sa + r->sa1);
-        if (p > c) {
-            c = p;
-            bind = 1u;
-        } else {
-            r->acc_on = false;               /* cruise reached: the accel term never binds again */
-        }
-    }
-    if (r->rem != 0u && r->rem <= r->rguard) {
-        float p;
-        if (!r->sr_ok) {
-            r->sr = sqrtf((float)r->rem);
-            r->sr1 = sqrtf((float)(r->rem - 1u));
-            r->sr_ok = true;
-        }
-        p = r->cd / (r->sr + r->sr1);
-        if (p > c) {
-            c = p;
-            bind = 0u;                       /* decelerating to the end point */
-        }
-    }
-    if (bind == 1u) {
-        r->ka += 1.0f;
-        r->sa1 = r->sa;
-        r->sa = sqrtf(r->ka);
-    } else if (bind == 2u) {
-        r->rv -= 1.0f;
-    }
-    if (c < r->chw) {
-        c = r->chw;
-    }
-    if (r->mono && c < r->last) {
-        c = r->last;
-    }
-    if (c > U32_MAX_F) {
-        c = U32_MAX_F;
-    }
-    r->prev = r->last;
-    r->last = c;
-    acc = r->carry + c;
-    if (acc > U32_MAX_F) {
-        acc = U32_MAX_F;
-    }
-    n = (uint32_t)acc;
-    r->carry = acc - (float)n;
-    if (r->rem != 0u) {
-        r->rem--;
-        if (r->sr_ok) {
-            r->sr = r->sr1;
-            r->sr1 = (r->rem > 1u) ? sqrtf((float)(r->rem - 1u)) : 0.0f;
-        }
-    }
-    r->gen++;
-    return (n == 0u) ? 1u : n;
+    return ramp_next_inl(r);
 }
 
 static void accel_from_last(ramp_t *r)
@@ -169,22 +116,36 @@ void ramp_set_total(ramp_t *r, uint32_t total_steps)
 {
     uint32_t old = r->rem;
     r->rem = (total_steps > r->gen) ? total_steps - r->gen : 0u;
-    r->sr_ok = false;
+    set_sr(r);
     if (r->rem > old && !r->mono && !r->red && r->last > 0.0f && r->last > r->cmin) {
         accel_from_last(r);                  /* the end moved away: may accelerate again */
     }
 }
 
-void ramp_set_speed(ramp_t *r, double v_steps_s, double alpha_a, double alpha_d)
+void ramp_speed_k(const ramp_t *r, double v_steps_s, double alpha_a, double alpha_d, ramp_speed_k_t *k)
 {
     float cmin = ramp_period_of(r->f, v_steps_s);
     if (cmin < r->chw) {
         cmin = r->chw;
     }
-    r->ca = ramp_c_of(r->f, alpha_a);
-    r->cr = ramp_c_of(r->f, alpha_d);
+    k->cmin = cmin;
+    k->ca = ramp_c_of(r->f, alpha_a);
+    k->cr = ramp_c_of(r->f, alpha_d);
+}
+
+void ramp_set_speed(ramp_t *r, double v_steps_s, double alpha_a, double alpha_d)
+{
+    ramp_speed_k_t k;
+    ramp_speed_k(r, v_steps_s, alpha_a, alpha_d, &k);
+    ramp_set_speed_k(r, &k, alpha_d);
+}
+
+void ramp_set_speed_k(ramp_t *r, const ramp_speed_k_t *k, double alpha_d)
+{
+    float cmin = k->cmin;
+    r->ca = k->ca;
+    r->cr = k->cr;
     r->cmin = cmin;
-    r->sr_ok = false;
     if (r->last <= 0.0f) {                   /* not started yet: from rest */
         r->ka = 1.0f;
         r->sa = 1.0f;
@@ -199,6 +160,7 @@ void ramp_set_speed(ramp_t *r, double v_steps_s, double alpha_a, double alpha_d)
         double R = ramp_stop_dist(r->f, r->last, alpha_d);
         r->rv = (float)R;
         r->red = R >= 1.0;
+        set_srv(r);
         r->acc_on = false;
     } else {
         r->acc_on = false;                   /* equal: cruise */
@@ -207,6 +169,11 @@ void ramp_set_speed(ramp_t *r, double v_steps_s, double alpha_a, double alpha_d)
 }
 
 uint32_t ramp_stop(ramp_t *r, double alpha_stop, uint32_t extra, float floor_c)
+{
+    return ramp_stop_k(r, alpha_stop, ramp_c_of(r->f, alpha_stop), extra, floor_c);
+}
+
+uint32_t ramp_stop_k(ramp_t *r, double alpha_stop, float cd, uint32_t extra, float floor_c)
 {
     double d = ramp_stop_dist(r->f, (r->last > 0.0f) ? r->last : r->chw, alpha_stop);
     uint32_t r0 = sat_u32(ceil(d));
@@ -220,9 +187,9 @@ uint32_t ramp_stop(ramp_t *r, double alpha_stop, uint32_t extra, float floor_c)
     if (floor_c > r->last) {
         r->last = floor_c;                   /* never faster than the running period */
     }
-    r->cd = ramp_c_of(r->f, alpha_stop);
+    r->cd = cd;
     r->rguard = UINT32_MAX;                  /* D_s binds from now on */
-    r->sr_ok = false;
+    set_sr(r);
     r->mono = true;
     r->acc_on = false;
     r->red = false;

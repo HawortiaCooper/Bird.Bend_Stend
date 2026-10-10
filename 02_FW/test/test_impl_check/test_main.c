@@ -5,6 +5,8 @@
  *           SAF-FW-023, SAF-FW-024, SAF-FW-026, FW-CMD-003, FW-MOT-009, D-30, D-31, D-40 c (DIAG_MEAS)
  */
 #include <string.h>
+#include <stdio.h>
+
 #include <unity.h>
 
 #include "check_ctx.h"
@@ -60,8 +62,10 @@ static void test_all_check_vectors(void)        /* release / twin build: FEAT_HW
 
 static void test_hw_meas_check_vectors(void)    /* measurement build (D-40 c, ICD v0.6 Appendix C) */
 {
-    TEST_ASSERT_TRUE(VEC_CHECK_MEAS_N >= 20u);
-    TEST_ASSERT_TRUE(replay(VEC_CHECK_MEAS, VEC_CHECK_MEAS_N) > 5u);
+    uint32_t n = replay(VEC_CHECK_MEAS, VEC_CHECK_MEAS_N);
+    TEST_ASSERT_TRUE(VEC_CHECK_MEAS_N >= 32u);         /* state_schema 4: + 3 FWR-09 cases (ena_on) */
+    TEST_ASSERT_TRUE(n > 5u);
+    printf("hw_meas check vectors replayed: %u (NACK %u)\n", (unsigned)VEC_CHECK_MEAS_N, (unsigned)n);
 }
 
 int main(void)

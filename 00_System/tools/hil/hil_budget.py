@@ -238,18 +238,23 @@ def dwt_overhead(cal: DwtSection) -> tuple[float, float]:
     return cal.mean_cycles, (cal.max_cycles - cal.min_cycles) / 2 + 1
 
 
-def check_dwt(name: str, sec: DwtSection, budget_us: float, ovh: tuple[float, float], note: str = "") -> Check:
-    """Section maximum minus the calibrated stamp overhead against a µs budget (§6.3 HW_MEAS_DWT rule)."""
-    crit = f"max(section {sec.section}) − stamp overhead + u <= {budget_us} µs"
+def check_dwt(name: str, sec: DwtSection, budget_us: float, ovh: tuple[float, float], note: str = "",
+              exc_cycles: float = 0.0) -> Check:
+    """Section maximum minus the calibrated stamp overhead against a µs budget (§6.3 HW_MEAS_DWT rule). For an
+    interrupt handler `exc_cycles` adds the exception entry + exit that the DWT section (first to last
+    instruction of the handler body) does not see (D-51 / FW_design §9.8 v0.8: NFR-007 is judged on the total,
+    entry 12 + vector 5 + exit 10 = 27 cycles; a lazy FP context is stacked inside the body and is measured)."""
+    crit = (f"max(section {sec.section}) − stamp overhead" + (f" + {exc_cycles:g} cyc entry/exit" if exc_cycles else "")
+            + f" + u <= {budget_us} µs")
     if not sec.valid:
         return Check(name, crit, NOT_MEASURED, None, "µs", None, budget_us, 0,
                      (note + "; " if note else "") + "DWT not valid in this image (w0 = 0)")
     if sec.count == 0:
         return Check(name, crit, NOT_MEASURED, None, "µs", None, budget_us, 0,
                      (note + "; " if note else "") + "section never executed during the workload (count 0)")
-    net = cycles_us(max(sec.max_cycles - ovh[0], 0.0))
+    net = cycles_us(max(sec.max_cycles - ovh[0], 0.0) + exc_cycles)
     u = cycles_us(ovh[1])
-    raw = cycles_us(sec.max_cycles)
+    raw = cycles_us(sec.max_cycles + exc_cycles)
     dec = PASS if raw <= budget_us else decide_le(net, budget_us, u)   # raw max ≤ budget is conservative
     return Check(name, crit, dec, net, "µs", u, budget_us, sec.count,
                  (f"raw max {raw:.3f} µs ({sec.max_cycles} cyc), min {cycles_us(sec.min_cycles):.3f} µs, "

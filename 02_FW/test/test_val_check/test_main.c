@@ -1,6 +1,9 @@
 /* Validator E - command acceptance (independent suite; FW_test_plan v0.1 §2, level U).
  * Oracle: check_vectors.json (ref_cmdcheck) read in place via test/val_oracles/gen_val_vectors.py,
- * state translated by the validator (state_schema 2, parameter overrides via params.yaml raw form).
+ * state translated by the validator (state_schema 4, ICD v0.7.5 (h): 23 state words, s[22] = ena_on;
+ * parameter overrides via params.yaml raw form). `CV` lines = `vectors` replayed as a release / twin build
+ * (hw_meas = 0), `CM` lines = `hw_meas_vectors` replayed as a measurement build (hw_meas = 1; DIAG_MEAS
+ * STATIC_LEVEL sel PUL needs ENA at the disabled level, FWR-09 / D-40 c).
  * Per vector: STATUS + detail, the exact NACK frame bytes, `paused_after` (D-30/D-31), and no side
  * effect of the pure check on its context or the parameter image.
  *
@@ -30,12 +33,14 @@ static void test_check_vectors(void)
         char name[160];
         uint8_t pl[PROTO_MAX_LEN], rf[PROTO_FRAME_MAX], b[PROTO_FRAME_MAX];
         uint16_t npl, nrf;
-        uint32_t type, seq, st, detail, s[22], np, k;
+        uint32_t type, seq, st, detail, s[23], np, k;
+        bool meas_line;
         int32_t paused_after;
         params_t prm, prm_before;
         cmd_ctx_t c, c_before;
         cmd_verdict_t vd;
-        TEST_ASSERT_EQUAL_STRING("CV", T);
+        meas_line = strcmp(T, "CM") == 0;
+        TEST_ASSERT_TRUE_MESSAGE(meas_line || strcmp(T, "CV") == 0, "line kind CV / CM");
         val_tok(&v, name);
         type = val_u32(&v);
         seq = val_u32(&v);
@@ -46,7 +51,7 @@ static void test_check_vectors(void)
         val_tok(&v, T);
         nrf = val_hex(T, rf, sizeof rf);
         paused_after = (int32_t)val_u32(&v);
-        for (k = 0u; k < 22u; k++) s[k] = val_u32(&v);   /* state_schema 3 */
+        for (k = 0u; k < 23u; k++) s[k] = val_u32(&v);   /* state_schema 4 */
         params_set_defaults(&prm);
         np = val_u32(&v);
         for (k = 0u; k < np; k++) {
@@ -80,6 +85,8 @@ static void test_check_vectors(void)
         c.nvm_record_valid = s[19] != 0u;
         c.paused = s[20] != 0u;
         c.unhomed_origin_um = (int32_t)s[21];         /* D-43 b (ICD v0.7) */
+        c.ena_on = s[22] != 0u;                       /* ICD v0.7.5 (h), state_schema 4 (FWR-09) */
+        c.hw_meas = meas_line;                        /* hw_meas_vectors: measurement build */
         c_before = c;
         prm_before = prm;
 

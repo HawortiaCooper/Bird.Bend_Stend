@@ -62,10 +62,10 @@ from bend_stand.core.dataview import DataView
 from bend_stand.core.device import Device, DeviceSettings
 from bend_stand.core.errors import ConfirmationRequired, FileFormatError, GateRefused, RecorderError
 from bend_stand.core.events import EventBus
-from bend_stand.core.gates import CLEAR_HINTS, GateSnapshot, all_gates
+from bend_stand.core.gates import CLEAR_HINTS, ESTOP_RELEASE_MS_DEFAULT, GateSnapshot, all_gates, clear_procedure
 from bend_stand.core.jobs import Job, Worker
 from bend_stand.core.link import SUPERVISOR_TICK_NS
-from bend_stand.core.liveness import LivenessMonitor
+from bend_stand.core.liveness import FAULT_LIMITS_MS, LivenessFault, LivenessMonitor
 from bend_stand.core.loadinput import LoadInput
 from bend_stand.core.motion import MotionController
 from bend_stand.core.model import (
@@ -99,6 +99,7 @@ from bend_stand.io.transport import LINK_BYTES_PER_S, Transport, parse_endpoint,
 
 log = logging.getLogger("bend_stand.core.backend")
 MS = 1_000_000
+PIPELINE_CEILING_MS = 1000                  # SWR-37: unevaluated DATA older than this while moving → fault
 DATA_STALE_NS = 500 * MS
 STATUS_STALE_NS = 1500 * MS
 TWIN_ENDPOINT = f"tcp://127.0.0.1:{pg.TWIN_TCP_PORT}"
@@ -121,6 +122,15 @@ class BackendSettings:
     sim_nvm_path: str | None = None
     hotkey: Literal["auto", "win32", "fake", "off"] = "auto"    # auto: env BEND_STAND_HOTKEY, else win32
     data_dir: str | None = None              # <data> root (calibration, sessions, presets); env BEND_STAND_DATA_DIR
+    #: full-length diagnostic logs (Reader ``rx_log`` 100 000, in-process simulator wire / sent logs 200 000 each);
+    #: None = on with ``test_hooks`` (validation / integration fixtures), else small (5 000 each, OBS-P3-04)
+    test_logs: bool | None = None
+
+
+#: diagnostic log lengths (OBS-P3-04): normal operation keeps them small (≈ 1 MB), test runs opt in
+LOG_LEN_SMALL = 5_000
+RX_LOG_LEN_TEST = 100_000
+SIM_LOG_LEN_TEST = 200_000
 
 
 def _not_implemented(what: str, milestone: str) -> GateResult:
@@ -151,23 +161,30 @@ class ConfigAPI:
         d = self._be.device
         return check_edits(d.params.values(), edits, moving=bool(d.last_flags & INT_DF.MOVING))
 
+    def _refused(self) -> Future[Any] | None:
+        """SWR-08: the ``config_write`` gate is enforced by every changing call (operation items only; link and
+        read-only refusals come from the device as before)."""
+        g = self._be._gates()[GateId.CONFIG_WRITE]  # noqa: SLF001
+        items = tuple(i for i in g.refused if i.code in (GateCode.SEQUENCE_RUNNING, GateCode.OPERATION_RUNNING))
+        return failed_future(GateRefused(GateResult(items))) if items else None
+
     def write_and_verify_async(self, edits: Mapping[str, Any]) -> Future[VerifyReport]:
-        return self._be._job(self._be.device.write_and_verify_job, dict(edits))  # noqa: SLF001
+        return self._refused() or self._be._job(self._be.device.write_and_verify_job, dict(edits))  # noqa: SLF001
 
     def read_all_async(self) -> Future[Mapping[str, Any]]:
         return self._be._job(self._be.device.read_all_params_job)  # noqa: SLF001
 
     def save_async(self) -> Future[None]:
-        return self._be._job(self._be.device.save_job)  # noqa: SLF001
+        return self._refused() or self._be._job(self._be.device.save_job)  # noqa: SLF001
 
     def load_async(self) -> Future[Mapping[str, Any]]:
-        return self._be._job(self._be.device.load_job)  # noqa: SLF001
+        return self._refused() or self._be._job(self._be.device.load_job)  # noqa: SLF001
 
     def defaults_async(self) -> Future[Mapping[str, Any]]:
-        return self._be._job(self._be.device.default_job)  # noqa: SLF001
+        return self._refused() or self._be._job(self._be.device.default_job)  # noqa: SLF001
 
     def reboot_async(self) -> Future[None]:
-        return self._be._job(self._be.device.reboot_job)  # noqa: SLF001
+        return self._refused() or self._be._job(self._be.device.reboot_job)  # noqa: SLF001
 
     def save_board_config(self, path: str, values: Mapping[str, Any] | None = None) -> None:
         d = self._be.device
@@ -197,6 +214,10 @@ class LimitsAPI:
         out: list[Issue] = list(session_mod.validate_limits(cfg))
         be = self._be
         st = be.load_input.evaluate(be.device.params.values(), be.device.info)
+        if not cfg.pull_enabled and not cfg.push_enabled and not be.load_input.no_specimen:
+            # Implements: SW-LIM-003 (D-53 a, SWR-03): both PC load limits off only in the no-specimen mode
+            out.append(Issue("pull_enabled", IssueSeverity.ERROR, "LOAD_LIMITS_BOTH_OFF",
+                             "both PC load limits cannot be switched off — use the no-specimen mode"))
         if (not cfg.pull_enabled or not cfg.push_enabled) and not st.valid:
             old = self.get()
             if (old.pull_enabled and not cfg.pull_enabled) or (old.push_enabled and not cfg.push_enabled):
@@ -391,7 +412,7 @@ class SessionAPI:
     def load(self, path: str) -> SessionSettings:
         s, self.load_issues = session_mod.load(path)
         errs = [i for i in self._be.limits.check(s.limits) if i.severity == IssueSeverity.ERROR
-                and i.code != "LOAD_INPUT_INVALID"]
+                and i.code not in ("LOAD_INPUT_INVALID", "LOAD_LIMITS_BOTH_OFF")]
         if errs:
             raise FileFormatError(f"{path}: " + "; ".join(i.text for i in errs))
         self._s = s
@@ -402,16 +423,38 @@ class SessionAPI:
         session_mod.save(path, self._s)
 
     def load_default(self, path: Path) -> None:
-        """At start: the default / configured session file (missing → defaults; broken → defaults + log)."""
+        """At start: the default / configured session file (missing → defaults; broken → defaults + an issue, the
+        broken file is kept as ``<name>.bad`` so the next auto-save cannot overwrite the operator's file, SWR-25).
+        Any exception of the loader (wrong types, deep nesting, …) is a broken file (SWR-06 / SWR-12)."""
+        # Implements: SW-LIM-003 (session applied at start; robust loading SWR-06 / SWR-12 / SWR-25)
         self.path = path
         if not path.exists():
             return
         try:
             s, self.load_issues = session_mod.load(path)
             self._s = s
-        except FileFormatError as exc:
-            log.warning("session file ignored: %s", exc)
-            self.load_issues = [Issue(None, IssueSeverity.ERROR, "FILE", str(exc))]
+        except Exception as exc:  # noqa: BLE001 — never prevents the start
+            kept = _keep_bad_file(path)
+            text = f"session file ignored ({exc}); defaults in use" + (f"; the file was kept as {kept.name}" if kept
+                                                                       else "")
+            log.warning(text)
+            self.load_issues = [Issue(None, IssueSeverity.ERROR, "FILE", text)]
+        for i in self.load_issues:
+            if i.code == "LOAD_LIMITS_RESTORED":
+                log.warning(i.text)
+
+
+def _keep_bad_file(path: Path) -> Path | None:
+    """SWR-25: move a broken settings file aside (``<name>.bad``, ``.bad2`` …) instead of overwriting it later."""
+    for i in range(1, 100):
+        cand = path.with_name(path.name + (".bad" if i == 1 else f".bad{i}"))
+        if not cand.exists():
+            try:
+                path.replace(cand)
+                return cand
+            except OSError:
+                return None
+    return None
 
 
 class CalibrationStoreAPI:
@@ -547,6 +590,12 @@ class SequencerAPI:
         if rng:
             items.append(GateItem(GateCode.TARGET_OUT_OF_RANGE, Severity.REFUSE, rng[0].text
                                   + (f" (+{len(rng) - 1} more)" if len(rng) > 1 else "")))
+        sess_dir = be.session.get().pull_dir
+        if int(seq.pull_dir) != int(sess_dir):
+            # Implements: SW-SEQF-001, SW-SEQ-006 (D-53 b, SWR-16): the session pull direction is the truth
+            items.append(GateItem("PULL_DIR_MISMATCH", Severity.REFUSE,
+                                  f"sequence pull direction {int(seq.pull_dir):+d} differs from the session pull "
+                                  f"direction {int(sess_dir):+d} (machine setting) — adjust the sequence"))
         kinds = set()
         for s in seq.steps:
             try:
@@ -643,10 +692,16 @@ class ReportAPI:
             return paths
             yield  # pragma: no cover - makes this a generator job
 
-        return be._job(job)  # noqa: SLF001
+        return be._report_job(job)  # noqa: SLF001
+
+    def root(self) -> str:
+        """Effective recordings folder (GRQ-B-31 b): ``BackendSettings.recordings_root``, else the session value,
+        else ``Documents/BirdBendStand/recordings`` — the folder ``record_start`` writes to."""
+        # Implements: SW-ACQ-002 (recordings folder, GRQ-B-31 b)
+        return self._be._recordings_root()  # noqa: SLF001
 
     def list_recordings(self, root: str | None = None) -> list[RecordingInfo]:
-        return report_mod.list_recordings(root or self._be._recordings_root())  # noqa: SLF001
+        return report_mod.list_recordings(root or self.root())
 
     def load_result(self, rec_dir: str) -> ReportResult:
         return report_mod.load_result(rec_dir)
@@ -661,14 +716,22 @@ class Backend:
         self.lockstep = s.clock == "lockstep"
         self.events = EventBus(self.clock)
         self.liveness = LivenessMonitor(self.clock)
+        self.liveness.on_fault = self._on_liveness_fault          # SWR-01: faults have a reaction (§4.6)
+        self._liveness_bad: set[str] = set()                     # liveness conditions currently active (one fault each)
+        self._hk_mode_pub: str | None = None
+        self._sup_prev_ns = 0                                    # previous Supervisor tick (process-stall filter)
+        self._pipe_bad_since: int | None = None
         self.worker = Worker(self.clock, "worker")
+        self.report_worker = Worker(self.clock, "reports")      # SWR-21: reports never block the general Worker
         self.sim_endpoint: Any = None
         self.sim: Any = None
         self._sim_name: str | None = None
+        self.test_logs = s.test_hooks if s.test_logs is None else bool(s.test_logs)
         self.device = Device(self.clock, self.events, self.liveness, self._transport_for,
                              DeviceSettings(wire_log=s.wire_log, stream_on_connect=s.stream_on_connect,
                                             auto_reconnect=s.auto_reconnect, heartbeat=s.heartbeat,
-                                            seq_seed=s.seq_seed))
+                                            seq_seed=s.seq_seed,
+                                            rx_log_len=RX_LOG_LEN_TEST if self.test_logs else LOG_LEN_SMALL))
         self.device.threaded_reader = not self.lockstep
         self.device.submit_job = lambda fn: self.worker.submit(fn)
         self.pipeline = Pipeline(self.clock, self.events, self.liveness, on_fw_event=self._on_fw_event,
@@ -753,18 +816,27 @@ class Backend:
         self._gc_watch.install()
         self.worker.start()
         self.seq.runner.start()
+        if not self.lockstep:
+            self.report_worker.start()
         self.pipeline.start()
         self._sup_stop.clear()
         self._sup_thread = threading.Thread(target=self._supervisor_loop, name="bend-supervisor", daemon=True)
         self._sup_thread.start()
 
     def shutdown(self) -> None:
-        """STOP if moving, stop recording, disconnect, join threads."""
+        """End the operations first (a running sequence ends ABORTED and writes its run log into the recording,
+        SWR-07), STOP if moving, stop the recording, then disconnect and join the threads (SWR-26)."""
+        # Implements: SW-ACQ-002, SW-REP-001, SW-REP-003 (run log kept at shutdown, SWR-07 / SWR-26)
         try:
-            if self.device.last_flags & INT_DF.MOVING:
+            seq_was_active = self.seq.active
+            if seq_was_active:
+                self.seq.closing = True                       # no recording tail, no report build at shutdown
+            self.terminate_all("shutdown")
+            if self.device.last_flags & INT_DF.MOVING or self._moving_now():   # SWR-35: also a just-started jog
                 self.device.stop(pg.StopMode.IMMEDIATE, "shutdown")
+            self._wait_sequence_end(3.0)
             if self.recorder.state != "IDLE":
-                self.recorder.stop()
+                self.recorder.stop({"closed_during_sequence": True} if seq_was_active else None)
             if self.device.state != LinkState.DISCONNECTED:
                 if self.lockstep:
                     f = self.worker.submit(self.device.disconnect_job)
@@ -784,6 +856,7 @@ class Backend:
                 t.join(1.0)
             self.seq.shutdown()
             self.worker.stop()
+            self.report_worker.stop()
             self.pipeline.stop()
             self._stop_sim()
             hk, self.hotkey = self.hotkey, None
@@ -795,8 +868,84 @@ class Backend:
                 gw.uninstall()
             self._started = False
 
+    def _wait_sequence_end(self, timeout_s: float) -> None:
+        """Shutdown: let the sequencer runner finish ``_finish`` (run log into the sidecar), bounded."""
+        job = getattr(self.seq, "_job", None)
+        if job is None or job.done():
+            return
+        if self.lockstep:
+            end = self.clock.monotonic_ns() + int(timeout_s * 1e9)
+            while not job.done() and self.clock.monotonic_ns() < end:
+                if self.test_hooks is not None:
+                    self.test_hooks.advance(1)
+                else:  # pragma: no cover - lock-step backends always have test hooks
+                    self._step_all(self.clock.monotonic_ns())
+            return
+        try:
+            job.result(timeout=timeout_s)
+        except Exception:  # noqa: BLE001 — shutdown never raises
+            log.warning("sequence did not end within %.1f s at shutdown", timeout_s)
+
     def gui_beat(self) -> None:
         self.liveness.beat("gui")
+
+    # ---- liveness reactions (SW_design §4.6, SWR-01) --------------------------------------------------
+    def _moving_now(self) -> bool:
+        m = self.motion
+        return bool(m.fw_moving() or m.busy or m.jogging)
+
+    def _check_liveness(self, now: int, sup_gap_ns: int = 0) -> None:
+        """Supervisor tick (SWR-01): DATA received but not evaluated for longer than ``FAULT_LIMITS_MS["pipeline"]``
+        (oldest frame waiting in the Pipeline queue), and — on the real clock, while moving — a GUI thread silent for
+        ``FAULT_LIMITS_MS["gui"]``, are liveness faults; each condition raises one fault per episode."""
+        # Implements: SAF-SW-001, SAF-SW-003 (liveness supervision, SWR-01)
+        age_ns = self.pipeline.oldest_unprocessed_age_ns(now)
+        # a whole-process stall (GC pause, host pre-emption: the Supervisor itself was silent > 100 ms) is not a
+        # Pipeline fault — the Pipeline gets the same chance to catch up; the condition must persist 30 ms of
+        # continuous Supervisor operation (OBS-P3-05: 320–476 ms GC pauses under host load)
+        if sup_gap_ns > 100 * MS or age_ns <= FAULT_LIMITS_MS["pipeline"] * MS:
+            self._pipe_bad_since = None
+        elif self._pipe_bad_since is None:
+            self._pipe_bad_since = now
+        bad = self._pipe_bad_since is not None and now - self._pipe_bad_since >= 30 * MS
+        # SWR-37 (S3): hard ceiling that ignores Supervisor gaps — repeated > 100 ms gaps must not hide a real
+        # Pipeline stall while moving (the DATA-loss STOP does not fire, the FW link watchdog stays fed)
+        if not bad and age_ns > PIPELINE_CEILING_MS * MS and self._moving_now():
+            bad = True
+        self._liveness_cond("pipeline", bad, f"DATA received but not evaluated for {age_ns / 1e6:.0f} ms")
+        gui_age = None if self.lockstep else self.liveness.age_ms("gui", now)   # lock-step: the test drives the GUI
+        self._liveness_cond("gui", gui_age is not None and gui_age > FAULT_LIMITS_MS["gui"] and self._moving_now(),
+                            f"GUI thread silent for {gui_age or 0:.0f} ms while moving")
+
+    def _liveness_cond(self, name: str, bad: bool, reason: str) -> None:
+        if not bad:
+            self._liveness_bad.discard(name)
+        elif name not in self._liveness_bad:
+            self._liveness_bad.add(name)
+            self.liveness.record_fault(name, reason)
+
+    def _on_liveness_fault(self, f: LivenessFault) -> None:
+        """Any thread (SWR-01, SW_design §4.6): while moving → priority STOP + ``terminate_all("LIVENESS")`` + event;
+        idle → warning event. Uncaught thread exceptions (excepthook), a full async queue, a failing frame handler
+        (SWR-02) and the supervisor checks above end here."""
+        # Implements: SAF-SW-001, SAF-SW-003 (liveness fault reaction, SWR-01)
+        moving = False
+        try:
+            moving = self._moving_now()
+        except Exception:  # noqa: BLE001 — decide for the safe side
+            moving = True
+        text = f"liveness fault {f.thread}: {f.reason}"
+        if moving:
+            try:
+                self._safety_stop(f"liveness {f.thread}")
+            except Exception:  # noqa: BLE001 — never raises
+                log.exception("liveness STOP failed")
+            self.terminate_all("LIVENESS")
+        try:
+            self.events.log(text + (" — STOP sent" if moving else ""), logging.ERROR if moving else logging.WARNING)
+            self.record_event("LIVENESS", text + (" STOP" if moving else ""))
+        except Exception:  # noqa: BLE001
+            log.exception("liveness event failed")
 
     def _supervisor_loop(self) -> None:
         from bend_stand.core.timing import Ticker, raise_thread_priority  # noqa: PLC0415
@@ -811,8 +960,12 @@ class Backend:
                 log.exception("supervisor tick failed")
 
     def _tick(self, now: int) -> None:
-        """Supervisor body: link / heartbeat / confirmations (Device), jog refresh (motion), hotkey ping."""
+        """Supervisor body: liveness checks, link / heartbeat / confirmations (Device), jog refresh (motion), hotkey
+        ping."""
+        gap = now - self._sup_prev_ns if self._sup_prev_ns else 0
+        self._sup_prev_ns = now
         self.liveness.beat("supervisor", now)
+        self._check_liveness(now, gap)
         self.device.tick(now)
         self.motion.tick(now)
         self.seq.tick(now)
@@ -821,6 +974,10 @@ class Backend:
         if hk is not None and now >= self._next_hotkey_ping_ns:
             self._next_hotkey_ping_ns = now + 250 * MS
             hk.ping()
+            st = self.hotkey_status()                         # SWR-09: publish the "not responding" edge
+            if st.mode != self._hk_mode_pub:
+                self._hk_mode_pub = st.mode
+                self.events.publish("hotkey.state", st)
 
     def _step_all(self, now: int) -> None:
         """One lockstep step: simulator → Reader → Pipeline → Supervisor → Worker → Recorder."""
@@ -855,7 +1012,8 @@ class Backend:
             adv = self.test_hooks.advance if self.test_hooks is not None and self.lockstep else None
             se = SimEndpoint(self.clock, ep.target or None, bytes_per_s=self.settings.sim_bytes_per_s,
                              latency_ns=self.settings.sim_latency_ns, advance=adv,
-                             nvm_path=self.settings.sim_nvm_path)
+                             nvm_path=self.settings.sim_nvm_path,
+                             log_len=SIM_LOG_LEN_TEST if self.test_logs else LOG_LEN_SMALL)
             self.sim_endpoint, self.sim, self._sim_name = se, se.control, endpoint
             if not self.lockstep:
                 se.start()
@@ -871,6 +1029,11 @@ class Backend:
 
     def _job(self, fn: Callable[..., Job], *args: Any) -> ReleasingFuture:
         return self.worker.submit(fn, *args)
+
+    def _report_job(self, fn: Callable[..., Job], *args: Any) -> ReleasingFuture:
+        """SWR-21: report builds run on their own worker thread (real clock), so reconnect, threshold rewrites and
+        config jobs never wait behind a long report; on the lock-step clock the general Worker (deterministic)."""
+        return (self.worker if self.lockstep else self.report_worker).submit(fn, *args)
 
     def connect_async(self, endpoint: str) -> Future[DeviceInfo]:
         self.pipeline.reset_link()
@@ -922,9 +1085,21 @@ class Backend:
 
     def _on_fw_event(self, ev: Any) -> None:
         """Pipeline thread: link-level reactions first (epoch, BOOT resync), then the motion controller, then the
-        operations (§5.5.1: stops / latches / pause / driver power loss terminate wizards and captures)."""
-        self.device.handle_fw_event(ev)
-        self.motion.on_fw_event(ev)
+        operations (§5.5.1: stops / latches / pause / driver power loss terminate wizards and captures). Each step is
+        guarded on its own (SWR-02): a defect in one reaction never skips ``terminate_all``."""
+        self._guarded_event("device", self.device.handle_fw_event, ev)
+        self._guarded_event("motion", self.motion.on_fw_event, ev)
+        self._guarded_event("operations", self._fw_event_operations, ev)
+
+    def _guarded_event(self, what: str, fn: Any, ev: Any) -> None:
+        try:
+            fn(ev)
+        except Exception as exc:  # noqa: BLE001 — Implements: SW-STOP-003 (SWR-02)
+            self.pipeline.counters.dispatch_errors += 1
+            log.error("EVENT %s: %s reaction failed", getattr(ev, "name", ev), what, exc_info=exc)
+            self.liveness.record_fault("pipeline", f"EVENT {getattr(ev, 'name', ev)} {what} reaction failed: {exc}")
+
+    def _fw_event_operations(self, ev: Any) -> None:
         code = int(ev.code)
         if code in self._TERMINATING or (code == int(pg.Event.DRIVER_POWER) and ev.arg == 0):
             name = pg.Event(code).name
@@ -1011,7 +1186,10 @@ class Backend:
         if hk is None:
             return HotkeyStatus(self._hotkey_mode, self._hotkey_reason, False)  # type: ignore[arg-type]
         mode = hk.mode if hk.alive else self._hotkey_mode
-        return HotkeyStatus(mode, hk.status_detail or self._hotkey_reason, test)  # type: ignore[arg-type]
+        detail = hk.status_detail or self._hotkey_reason
+        if hk.alive and not hk.responding:
+            detail = "Pause/Break key unavailable: hotkey thread not responding"
+        return HotkeyStatus(mode, detail, test)  # type: ignore[arg-type]
 
     # ---- global actions (GUI thread, non-blocking, never raise) --------------------------------------
     def stop(self, source: str = "gui") -> StopResult:
@@ -1186,6 +1364,10 @@ class Backend:
         except OSError as exc:                     # never surface the raw (localised) OS text (SWD-M1-09)
             return GateResult((GateItem(GateCode.RECORDING_ACTIVE, Severity.REFUSE,
                                         f"cannot start the recording (file error {exc.errno})"),))
+        except (ValueError, TypeError) as exc:     # SWR-22: e.g. a NaN in the sidecar snapshot (JSON allow_nan=False)
+            log.error("recording start failed: %s", exc)
+            return GateResult((GateItem(GateCode.RECORDING_ACTIVE, Severity.REFUSE,
+                                        f"cannot start the recording (metadata not writable: {exc})"),))
         return g
 
     def record_stop(self) -> GateResult:
@@ -1195,7 +1377,7 @@ class Backend:
                                 "marks_final": marks_mod.marks_to_dict(self.marks.get()),
                                 "no_specimen_mode_at_stop": self.load_input.no_specimen})
             if self.seq.report_pending is not None:          # a sequence ran inside the operator's recording
-                self._job(self._pending_report_job)
+                self._report_job(self._pending_report_job)
         return g
 
     def _pending_report_job(self) -> Job:
@@ -1208,7 +1390,7 @@ class Backend:
         try:
             rec = self.calibration_store.active_load()
             self.load_input.set_calibration(rec)
-        except FileFormatError as exc:
+        except Exception as exc:  # noqa: BLE001 — SWR-12: a corrupt file never prevents the start (SW-CAL-009)
             self.load_input.set_calibration(None, str(exc))
             log.warning("active load calibration ignored: %s", exc)
 
@@ -1269,6 +1451,16 @@ class Backend:
             return
         li.no_specimen = on
         self.record_event("NO_SPECIMEN_ON" if on else "NO_SPECIMEN_OFF", why)
+        if not on:
+            # Implements: SW-LIM-003, SW-LIM-004, SAF-SW-001 (D-53 a, SWR-29): on ANY exit from the mode both PC load
+            # limits are enabled again at their configured levels; the motion gate (valid load input) then decides
+            lim = self.session.get().limits
+            if not (lim.pull_enabled and lim.push_enabled):
+                self.session.apply_limits(replace(lim, pull_enabled=True, push_enabled=True))
+                self.record_event("LIMITS_RESTORED", f"no-specimen mode left ({why}): PC load limits ON — "
+                                                     + _limits_text(self.session.get().limits))
+                self.events.log(f"no-specimen mode left ({why}): both PC load limits switched ON again (D-53 a)",
+                                logging.WARNING)
         self.events.log(("no-specimen mode ON — PC load limits off" if on else "no-specimen mode OFF") + f" ({why})",
                         logging.WARNING if on else logging.INFO)
         self.events.publish("safety.no_specimen", on)
@@ -1278,6 +1470,16 @@ class Backend:
         left at 1 by a link loss during a capture window is cleared (SWC-M4-03; D-47: the FW also clears it on its
         link watchdog)."""
         self.on_scale_changed()
+        if getattr(self.device, "board_changed", False):
+            # Implements: SAF-SW-005, SW-LIM-001 (SWR-19): another board after a reconnect — the test travel zero of
+            # the previous board is meaningless here; the operator is told (event + topic ``device.board_changed``)
+            self.device.board_changed = False
+            uid = self.device.info.uid if self.device.info is not None else "?"
+            self.motion.reset_test_zero()
+            self.record_event("BOARD_CHANGED", f"uid={uid}: test zero reset — check the SW travel limits")
+            self.events.log(f"another board connected (UID {uid}): test travel zero reset — check the SW travel "
+                            "limits and the travel calibration", logging.WARNING)
+            self.events.publish("device.board_changed", uid)
         self._job(self.travel_cal.post_sync_job)
         if self.device.last_flags & INT_DF.VALID and not self.seq.capture_open and not self.device.compat.read_only:
             self.record_event("VALID_OFF", "left over after a reconnect")
@@ -1390,7 +1592,7 @@ class Backend:
             if not known:
                 items[key] = INDICATOR_UNKNOWN
                 return
-            hint = CLEAR_HINTS.get(name) if on else None
+            hint = clear_procedure(name, d.params.get("io.estop_release_ms")) if on else None
             items[key] = Indicator("ON" if on else "OFF", None, kw.get("source"), kw.get("value"), hint)
 
         for i, n in enumerate(pg.DATA_FLAGS_BITS):
@@ -1476,7 +1678,10 @@ class Backend:
             travel_cal_differs=self.travel_cal.diff.differs and not self.travel_cal.diff.ignored,
             travel_room_mm=room, sequence_paused=self.seq.paused,
             sequence_state=self.seq.run.state if self.seq.run is not None else "IDLE",
-            seq_capture=self.seq.capture_open, recording_failed=self.recorder.state == "FAILED")
+            seq_capture=self.seq.capture_open, recording_failed=self.recorder.state == "FAILED",
+            estop_release_ms=int(params.get("io.estop_release_ms") or ESTOP_RELEASE_MS_DEFAULT)
+            if "io.estop_release_ms" not in d.params.invalid() else ESTOP_RELEASE_MS_DEFAULT,
+            params_invalid=tuple(sorted(d.params.invalid())))
 
     def _gates(self, now: int | None = None) -> Mapping[GateId, GateResult]:
         return all_gates(self._gate_snapshot(now))

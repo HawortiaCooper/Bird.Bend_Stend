@@ -73,6 +73,9 @@ HOTKEYS: tuple[tuple[int, int, int], ...] = (
 )
 
 
+PING_LIMIT_MS = 750.0                     # SWR-09: 3 missed 250 ms pings → hotkey shown unavailable
+
+
 class KeyStatus(enum.Enum):
     STARTING = "STARTING"
     ACTIVE_HOTKEY = "ACTIVE (hotkey)"
@@ -408,6 +411,7 @@ class GlobalHaltHotkey:
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self.last_beat_ns = 0
+        self._ping_out_ns = 0                   # SWR-09: time of the oldest unanswered Supervisor ping (0 = none)
         self.presses = 0
         self.halts = 0
         self.test_reports: list[float] = []
@@ -496,6 +500,7 @@ class GlobalHaltHotkey:
 
     def _answer_ping(self) -> None:
         self.last_beat_ns = self.clock_ns()
+        self._ping_out_ns = 0
 
     # -- status -----------------------------------------------------------------------------------------
     @property
@@ -503,17 +508,26 @@ class GlobalHaltHotkey:
         return self._thread is not None and self._thread.is_alive()
 
     @property
+    def responding(self) -> bool:
+        """SWR-09 (SW_design §4.6): False when a Supervisor ping stays unanswered > ``PING_LIMIT_MS``."""
+        out = self._ping_out_ns
+        return not out or (self.clock_ns() - out) / 1e6 <= PING_LIMIT_MS
+
+    @property
     def available(self) -> bool:
-        return self.alive and self.status in (KeyStatus.ACTIVE_HOTKEY, KeyStatus.ACTIVE_HOOK)
+        return self.alive and self.responding and self.status in (KeyStatus.ACTIVE_HOTKEY, KeyStatus.ACTIVE_HOOK)
 
     @property
     def mode(self) -> str:
-        return MODE_OF[self.status] if self.alive else "UNAVAILABLE"
+        # Implements: SW-STOP-002 (hotkey shown unavailable when its thread does not answer, SWR-09)
+        return MODE_OF[self.status] if self.alive and self.responding else "UNAVAILABLE"
 
     def ping(self) -> None:
         """Supervisor liveness ping (every 250 ms); answered on the hotkey thread."""
         b = self.backend
         if b is not None and self.alive:
+            if not self._ping_out_ns:
+                self._ping_out_ns = self.clock_ns()
             b.post_ping()
 
     def beat_age_ms(self) -> float | None:

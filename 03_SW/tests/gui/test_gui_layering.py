@@ -66,12 +66,13 @@ def test_gui_never_imports_serial_or_io() -> None:
 @pytest.mark.req("SW-PLT-002")
 def test_every_topic_mapped_or_ignored() -> None:
     """Verifies: SW-PLT-002 (G-01b) — every topic of B §15.3 is mapped to a bridge signal or ignored."""
-    from bend_stand.gui.bridge import IGNORED_TOPICS, TOPIC_SIGNALS, QtBridge
-    for t in TOPICS:
+    from bend_stand.gui.bridge import IGNORED_TOPICS, KNOWN_TOPICS, TOPIC_SIGNALS, TOPICS_PENDING_GUI, QtBridge
+    for t in KNOWN_TOPICS:                              # TOPICS + B's topics pending a GUI decision (B6-33)
         assert (t in TOPIC_SIGNALS) != (t in IGNORED_TOPICS), t
     for name in set(TOPIC_SIGNALS.values()):
         assert hasattr(QtBridge, name), name
-    assert set(TOPIC_SIGNALS) <= set(TOPICS)
+    assert set(TOPIC_SIGNALS) <= set(TOPICS) | set(TOPICS_PENDING_GUI)
+    assert "device.board_changed" in TOPIC_SIGNALS      # mapped (B moves it into api.TOPICS)
 
 
 @pytest.mark.req("SW-PLT-002", "NFR-004")

@@ -17,9 +17,19 @@
  *
  * Bookkeeping: `gen` periods handed out, `rem` still to generate; gen + rem = steps of the move.
  * The step ISR (level 2) owns the generator while the timer runs; the tick / thread modify it only
- * under CRIT_MOTION (FW_design §4.4). float32 only in ramp_next() (one VSQRT + one VDIV per active
- * term on the M4F, the decel term only within rguard steps of the end); the setup functions use
- * double (thread / tick context) so that the integer r0 equals the binary64 oracle.
+ * under CRIT_MOTION (FW_design §4.4). float32 only in ramp_next(); the setup functions use double
+ * (thread / tick context) so that the integer r0 equals the binary64 oracle.
+ * NFR-007 (FW_design §9.8 v0.8): ramp_next() is the bulk of the step ISR. Every square root it needs
+ * is cached one call ahead, so one call executes at most two VDIV and two VSQRT (accel or reduction
+ * term: VDIV + the VSQRT of its next index; decel term: VDIV; sqrt(rem - 1) for the next call: VSQRT):
+ *   sa = sqrt(ka), sa1 = sqrt(ka - 1)       accel index (as before)
+ *   srv = sqrt(rv), srv1 = sqrt(rv - 1)     reduction index (v0.8; was two VSQRT per call)
+ *   sr = sqrt(rem), sr1 = sqrt(rem - 1)     always valid (v0.8: set by every function that changes rem
+ *                                           outside ramp_next, kept by ramp_next; was a lazy
+ *                                           two-VSQRT initialisation inside the ISR)
+ * Each cached value is the same IEEE operation on the same operand as before (sqrtf is correctly
+ * rounded), so every period is bit-identical to v0.7 (host check: FW_design §9.8). ramp_next_inl() is
+ * the always-inlined body (step_isr() uses it, no call level); ramp_next() is the same code out of line.
  * Pure C11.
  * Implements: FW-MOT-003 (exact ramp, virtual index), FW-MOT-002 (step bookkeeping),
  *             SAF-FW-003 (controlled-stop sizing, non-decreasing intervals), FW-MOT-005 (on-the-fly)
@@ -27,6 +37,7 @@
 #ifndef PURE_RAMP_H
 #define PURE_RAMP_H
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -43,11 +54,11 @@ typedef struct {
     float    sa, sa1;          /* sqrt(ka), sqrt(ka - 1) (cache: one VSQRT per accel step) */
     bool     acc_on;           /* the accel term may still bind */
     float    rv;               /* virtual reduction index (real) */
+    float    srv, srv1;        /* sqrt(rv), sqrt(rv - 1) (valid while red and rv >= 1) */
     bool     red;              /* slowing down to cmin */
     uint32_t rem;              /* steps still to generate */
     uint32_t rguard;           /* the decel term is evaluated only while rem <= rguard */
-    float    sr, sr1;          /* sqrt(rem), sqrt(rem - 1) (valid while sr_ok) */
-    bool     sr_ok;
+    float    sr, sr1;          /* sqrt(rem), sqrt(rem - 1) (0 for rem <= 1); always valid */
     bool     mono;             /* never shorter than `last` (controlled stop) */
     float    last;             /* last generated period (float, before the carry) = c_last */
     float    prev;             /* the one before (= the running timer period while one is preloaded) */
@@ -81,8 +92,104 @@ void     ramp_set_speed(ramp_t *r, double v_steps_s, double alpha_a, double alph
  *  distance from c_last and `extra` = steps already committed in the timer and not regenerated;
  *  periods never shorter than max(c_last, floor_c). Returns rem. */
 uint32_t ramp_stop(ramp_t *r, double alpha_stop, uint32_t extra, float floor_c);
+
+/* Edits split into the constants that do not depend on the ramp position (computed once, outside
+ * CRIT_MOTION) and the position-dependent rest (FWR-10, FW_design §9.8 v0.8). ramp_set_speed() and
+ * ramp_stop() are exactly these two steps, so the results are bit-identical. */
+typedef struct {
+    float cmin, ca, cr;
+} ramp_speed_k_t;
+/** Position-independent part of ramp_set_speed() (needs only r->f and r->chw). */
+void     ramp_speed_k(const ramp_t *r, double v_steps_s, double alpha_a, double alpha_d, ramp_speed_k_t *k);
+/** Position-dependent part of ramp_set_speed(). */
+void     ramp_set_speed_k(ramp_t *r, const ramp_speed_k_t *k, double alpha_d);
+/** ramp_stop() with cd = ramp_c_of(r->f, alpha_stop) precomputed. */
+uint32_t ramp_stop_k(ramp_t *r, double alpha_stop, float cd, uint32_t extra, float floor_c);
 /** Steps of the move (gen + rem). */
 static inline uint32_t ramp_total(const ramp_t *r) { return r->gen + r->rem; }
+
+#if defined(__GNUC__)
+#define RAMP_INLINE static inline __attribute__((always_inline))
+#else
+#define RAMP_INLINE static inline
+#endif
+
+#define RAMP_U32_MAX_F 4294967040.0f   /* largest float below 2^32 */
+
+/** ramp_next() body, always inlined (step ISR, NFR-007). Same semantics as ramp_next(). */
+RAMP_INLINE uint32_t ramp_next_inl(ramp_t *r)
+{
+    float c = r->cmin;
+    float acc;
+    uint32_t n;
+    uint32_t rem = r->rem;
+    uint8_t bind = 0u;                       /* 1 = accel term, 2 = reduction term */
+
+    if (r->red) {
+        if (r->rv >= 1.0f) {
+            float p = r->cr / (r->srv + r->srv1);
+            if (p < r->cmin) {
+                c = p;
+                bind = 2u;
+            } else {
+                r->red = false;              /* reduction done: cruise */
+            }
+        } else {
+            r->red = false;
+        }
+    } else if (r->acc_on) {
+        float p = r->ca / (r->sa + r->sa1);
+        if (p > c) {
+            c = p;
+            bind = 1u;
+        } else {
+            r->acc_on = false;               /* cruise reached: the accel term never binds again */
+        }
+    }
+    if (rem != 0u && rem <= r->rguard) {
+        float p = r->cd / (r->sr + r->sr1);
+        if (p > c) {
+            c = p;
+            bind = 0u;                       /* decelerating to the end point */
+        }
+    }
+    if (bind == 1u) {
+        r->ka += 1.0f;
+        r->sa1 = r->sa;
+        r->sa = sqrtf(r->ka);
+    } else if (bind == 2u) {
+        r->rv -= 1.0f;
+        r->srv = r->srv1;                    /* sqrt(rv) of the new index = the cached sqrt(rv - 1) */
+        if (r->rv >= 1.0f) {
+            r->srv1 = sqrtf(r->rv - 1.0f);
+        }
+    }
+    if (c < r->chw) {
+        c = r->chw;
+    }
+    if (r->mono && c < r->last) {
+        c = r->last;
+    }
+    if (c > RAMP_U32_MAX_F) {
+        c = RAMP_U32_MAX_F;
+    }
+    r->prev = r->last;
+    r->last = c;
+    acc = r->carry + c;
+    if (acc > RAMP_U32_MAX_F) {
+        acc = RAMP_U32_MAX_F;
+    }
+    n = (uint32_t)acc;
+    r->carry = acc - (float)n;
+    if (rem != 0u) {
+        rem--;
+        r->rem = rem;
+        r->sr = r->sr1;
+        r->sr1 = (rem > 1u) ? sqrtf((float)(rem - 1u)) : 0.0f;
+    }
+    r->gen++;
+    return (n == 0u) ? 1u : n;
+}
 
 /* ---- planner (R4 §1.5; previews, timeouts, tests) ---- */
 typedef struct {

@@ -37,10 +37,56 @@ def _finite_pair(a: object, b: object) -> bool:
 
 
 def validate_limits(cfg: LimitConfig) -> list[Issue]:
-    """SW-LIM-002 (load side) as Issues; the travel side needs the board's soft limits (``LimitsAPI.check``)."""
-    return [Issue(f, E, c, t) for f, c, t in check_limit_config(
+    """SW-LIM-002 (load side) as Issues + the travel values that need no board (finite, enabled → present, min <
+    max); the soft-limit containment needs the board's parameters (``LimitsAPI.check``)."""
+    out = [Issue(f, E, c, t) for f, c, t in check_limit_config(
         pull_trip_n=cfg.pull_trip_n, pull_enabled=cfg.pull_enabled, push_trip_n=cfg.push_trip_n,
         push_enabled=cfg.push_enabled, warn_pct=cfg.warn_pct, fw_level_n=cfg.fw_level_n)]
+    for name, en, v in (("travel_min_mm", cfg.travel_min_enabled, cfg.travel_min_mm),
+                        ("travel_max_mm", cfg.travel_max_enabled, cfg.travel_max_mm)):
+        if en and v is None:
+            out.append(Issue(name, E, "MISSING", f"{name}: enabled without a value"))
+    if cfg.travel_min_enabled and cfg.travel_max_enabled and _finite_pair(cfg.travel_min_mm, cfg.travel_max_mm) \
+            and cfg.travel_min_mm >= cfg.travel_max_mm:                          # type: ignore[operator]
+        out.append(Issue("travel_min_mm", E, "ORDER", "travel min must be < travel max"))
+    return out
+
+
+def restore_load_limits(s: SessionSettings) -> tuple[SessionSettings, list[Issue]]:
+    """D-53 a (SW-LIM-003 v0.6.6, SWR-03): a session with both PC load limits off is restored with both on + a
+    warning (switching both off is allowed only through the no-specimen mode, which is never stored)."""
+    # Implements: SW-LIM-003 (D-53 a)
+    lim = s.limits
+    if lim.pull_enabled or lim.push_enabled:
+        return s, []
+    return replace(s, limits=replace(lim, pull_enabled=True, push_enabled=True)), [Issue(
+        "limits", W, "LOAD_LIMITS_RESTORED", "the session file had both PC load limits off: restored ON (D-53 a) — "
+                                             "use the no-specimen mode to move without a specimen")]
+
+
+def _typed(where: str, ann: str, default: Any, v: Any) -> Any:
+    """SWR-06: strict type of a session value from the dataclass default / annotation → ``FileFormatError``."""
+    if v is None:
+        if "None" in str(ann):
+            return None
+        raise FileFormatError(f"{where}: null not allowed")
+    if isinstance(default, bool) or str(ann) == "bool":
+        if not isinstance(v, bool):
+            raise FileFormatError(f"{where}: true / false expected, got {v!r}")
+        return v
+    if isinstance(default, int) and "float" not in str(ann):
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise FileFormatError(f"{where}: integer expected, got {v!r}")
+        return v
+    if isinstance(default, float) or (default is None and "float" in str(ann)):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
+            raise FileFormatError(f"{where}: number expected, got {v!r}")
+        return float(v)
+    if isinstance(default, str) or (default is None and "str" in str(ann)):
+        if not isinstance(v, str):
+            raise FileFormatError(f"{where}: text expected, got {v!r}")
+        return v
+    return v
 
 
 def validate(s: SessionSettings) -> list[Issue]:
@@ -102,7 +148,9 @@ def from_dict(d: dict[str, Any]) -> tuple[SessionSettings, list[Issue]]:
             known = {x.name for x in fields(LimitConfig)}
             issues += [Issue(f"limits.{k}", W, "UNKNOWN_KEY", f"unknown key limits.{k!r} ignored")
                        for k in v if k not in known]
-            v = replace(lim, **{k: x for k, x in v.items() if k in known})
+            lf = {x.name: x for x in fields(LimitConfig)}
+            v = replace(lim, **{k: _typed(f"limits.{k}", lf[k].type, getattr(lim, k), x) for k, x in v.items()
+                               if k in known})
         elif f.name == "bend3p" and v is not None:
             if not isinstance(v, dict):
                 raise FileFormatError("bend3p must be an object or null")
@@ -110,6 +158,8 @@ def from_dict(d: dict[str, Any]) -> tuple[SessionSettings, list[Issue]]:
                 v = Bend3pGeometry(float(v["span_mm"]), float(v["width_mm"]), float(v["thickness_mm"]))
             except (KeyError, TypeError, ValueError) as exc:
                 raise FileFormatError(f"bend3p: {exc}") from exc
+        elif f.name != "bend3p":
+            v = _typed(f.name, f.type, getattr(base, f.name), v)
         kw[f.name] = v
     try:
         s = replace(base, **kw)
@@ -122,6 +172,8 @@ def load(path: str | Path) -> tuple[SessionSettings, list[Issue]]:
     """Read and validate a session file (``FileFormatError`` on a broken / newer / invalid file)."""
     d = read_json(path, KIND, VERSION)
     s, issues = from_dict(d)
+    s, restored = restore_load_limits(s)
+    issues = issues + restored
     errors = validate(s)
     if errors:
         raise FileFormatError(f"{path}: " + "; ".join(i.text for i in errors))

@@ -17,13 +17,21 @@
 1. The PO approves (a) the gate session, (b) the bench safety procedure FW_test_plan §6.8 (F3) incl. the deltas of
    §9 below, (c) names the board (UID) and the COM port.
 2. The Orchestrator records the reference **`D-06-GATE-YYYYMMDD`** (date of the session, optional `-TAG`) as a
-   **dedicated table row** in `00_System/specs/DECISIONS.md` (or `STATUS.md`), one cell = the reference, row marked
-   *approved*, e.g. `| D-06-GATE-20261012 | 2026-10-12 | PO approved HW gate: board UID …, COM7, §6.8 bench procedure | approved (PO) |`
-   (R-HIL-02: a mention in running text, a longer tag or a row marked pending / revoked does not count).
+   **dedicated table row** in `00_System/specs/DECISIONS.md` (or `STATUS.md`): FIRST cell = the reference, LAST cell
+   (status) exactly `approved` or `approved (PO)`, e.g.
+   `| D-06-GATE-20261012 | 2026-10-12 | PO approved HW gate: board UID …, COM7, §6.8 bench procedure | approved (PO) |`
+   (R-HIL-02 / FWR-12: a mention in running text, a longer tag, or any negation / question / open state anywhere in the
+   row — "not", "no", "?", "pending", "revoked", "tbd", … — does not count). The check is per word, so a `-TAG` that
+   is itself such a word (`-NO`, `-NOT`, `-NONE`, `-TBD`, `-DRAFT`, …) refuses its own row: choose a neutral tag
+   (e.g. `-HG1`). Every row whose first cell is the reference counts (C-R1): to withdraw an approval, add a row
+   `| <ref> | <date> | … | revoked |` — any non-approving row for the same reference, in DECISIONS.md or STATUS.md,
+   cancels it. Rows inside fenced code blocks (``` / ~~~) or HTML comments are examples, never records (C-R2).
+   Only rows in a normal, unindented table count (a row indented by 4+ spaces or a tab is a code block, C-R4).
 3. The runner opens a serial port only if: `--approved` matches `D-06-GATE-YYYYMMDD[-TAG]`, is a real date, not in the
    future, ≤ 7 days old, **and is recorded as an approved row** in DECISIONS.md / STATUS.md (whole-token match); `--port` is given
-   explicitly; the operator re-types the port name; with `--board-uid` the GET_INFO UID must match (else the session
-   stops at S-00). `--twin` and `--port` are mutually exclusive; twin mode never imports pyserial.
+   explicitly; the operator re-types the port name; **`--board-uid` (24 hex digits) is required** and the GET_INFO UID,
+   dict hash and protocol version must match, else the session stops (FWR-15). `--twin` and `--port` are mutually
+   exclusive; twin mode never imports pyserial.
 4. **Flashing is never done by the tool.** Every image change is an operator step: the session closes the COM port,
    the **PO** flashes, the session re-opens the port and verifies the image (GET_INFO build string / feature bit
    `HW_MEAS`, DIAG_MEAS INFO variant, or NOT_IN_BUILD for the release image).
@@ -76,14 +84,26 @@ and the FW boots NOT_ENABLED with pulses blocked).
 .venv\Scripts\python 00_System\tools\hil\hil_session.py --port COM7 --approved D-06-GATE-20261012 ^
     --board-uid 3400xxxxxxxxxxxxxxxxxxxx --out hil_sessions\20261012_HG1
 ```
-Resume after an interruption: same `--out`, add `--from HG-xx` (results already written stay). `--list` prints the
+Resume after an interruption: same `--out`, same `--port` / `--approved` / `--board-uid`, add `--from HG-xx` (or
+`--only`): the session continues (same session id) and starts with **S-ID** (identity re-check). A run without
+`--from` / `--only`, or with a different board / approval, is a NEW session: a board session then needs a fresh
+`--out` (FWR-13). Whatever `--only` / `--from` select, the runner always runs the identity block first (S-00, or S-ID
+on a resume), runs HG-10a only between BENCH-ENTRY and BENCH-EXIT, and puts GATE-LOAD before phase 4 (FWR-15). Gates
+use only results of the current session (session id, board UID, verified image identity). `--list` prints the
 ordered plan. Answer prompts with the requested number / y / n / text; **`abort` at any prompt** (or Ctrl+C) sends
 HALT and ends the session. Report: `<out>\HG_report_target.md` (re-render: `--report <out>`); Validator E writes
 `FW_test_report_HG1.md` (plan §5.4) with it as annex.
 
 Optional flags: `--buffer-fitted` (phase 3 criteria 10…13 mA), `--power-sense-fitted` (HG-21 / HG-04 b),
 `--counts-per-n N`, `--accepted-open HG-xx:REF` (item accepted open under a §6.6 residual-risk decision; needed to pass
-the SYS-009 load gate with an open item).
+the SYS-009 load gate with an open item). REF must be recorded as a dedicated row in DECISIONS.md / STATUS.md: first
+cell = REF (e.g. `RR-HG-12-01` or `D-52`), the row names the HG item, last cell `accepted` / `accepted (PO)` /
+`approved (PO)`, no negation (FWR-13), and no other row for REF that revokes or questions it (C-R1); otherwise the
+session is refused before the port is opened. Unknown `--only` / `--from` ids are refused before the port is opened
+(O-3). The session stops before any further motion when S-00 / S-ID / an IMG step / BENCH-ENTRY ends with an error,
+FAIL or INCONCLUSIVE (e.g. "DIP applied?" answered n, a build whose suffix and FEAT_HW_MEAS disagree); after a failed
+BENCH-ENTRY, BENCH-EXIT runs first to restore the E-stop sense. Nothing (no HALT / HALT_CLEAR) is sent to a device
+whose identity has not been verified (C-R3).
 
 ## 4. Session order and expected values (FW_test_plan §6.7 / §6.8)
 
@@ -93,7 +113,8 @@ u = uncertainty added per §6.1 rule 4 (PASS if max + u ≤ budget, FAIL if max 
 ### Phase 0 — start
 | Step | What happens | Expected |
 |---|---|---|
-| S-00 | [M] names, image commit; [A] GET_INFO (dict hash 0xB7B0263F, protocol 1.0 / payload 1, UID = `--board-uid`); [M] DIP applied | as stated; wrong UID → session stops |
+| S-00 | [A] GET_INFO first (dict hash = `params.yaml` hash, protocol 1.0 / payload 1, UID = `--board-uid`); [M] names, image commit; [M] DIP applied | as stated; any identity mismatch → session stops (FWR-15) |
+| S-ID | (resume only) [A] the same identity check | mismatch → session stops |
 | IMG-MEAS | [M] PO flashes `nucleo_f446re_meas`; [A] verify | build `…-MEAS`, FEAT_HW_MEAS = 1, INFO variant MEAS |
 
 ### Phase 1 — driver PSU OFF
@@ -119,7 +140,7 @@ therefore never move the axis.
 |---|---|---|
 | P2-ENTRY | [M] PSU on, observer at the panel | – |
 | HG-32 | [A] defaults; [M] hold the E-stop > 1 s | `drv.pwr_sense_enable` = 0, `drv.k1_check_enable` = 0; only ESTOP latched (no K1_WELDED); ENABLE → E_STATE BLOCK = ESTOP only |
-| HG-06 | [A] DISABLE, STATIC_LEVEL PUL / DIR high; [M] DMM VOH at the terminal, mV over 100 Ω in series with PUL− / DIR− / ENA− (ENA: NOT_ENABLED = LED on) | bring-up: VOH ≥ 3.0 V, I_LED ≥ 6 mA (else fit the buffer first) |
+| HG-06 | [A] DISABLE (always; ENA must read disabled before any STATIC_LEVEL, FWR-09), STATIC_LEVEL PUL / DIR high; [M] DMM VOH at the terminal, mV over 100 Ω in series with PUL− / DIR− / ENA− (ENA: NOT_ENABLED = LED on) | bring-up: VOH ≥ 3.0 V, I_LED ≥ 6 mA (else fit the buffer first) |
 | HG-10cd | [M] **MCU held in reset** (B2 held / NRST to GND) + E-stop pressed → shaft free; M-1 across R_E; M-3 PA4; M-4 ENA+; release → holding (D-13); MCU running: press → FW ESTOP + ENA disabled; M-2a/c; release → still free; ESTOP_CLEAR + ENABLE → holding | M-1 ≈ 0.7 V (≥ 7 mA); M-3 ≤ 3.4 V always; M-4 4.0…4.6 V pressed; M-2a ≈ 0 mA, M-2c ≤ 13 mA; **must PASS before any bypass (§6.8 P-2)** |
 | HG-28 | [A] un-homed jog 1 mm/s × 3 s; [M] direction (+x away from START?), caliper travel; [A] HOME; [M] confirm, [A] HOME with `motion.dir_invert` inverted (runs to the END switch at ≤ 5 mm/s), restore, re-HOME; [M] SAVE if dir_invert changed | direction correct (else dir_invert flipped and repeated); scale ± 10 %; HOMED; inverted → HOME_WIRING / HOME_NOT_FOUND within `home.max_travel_um` |
 | HG-07 | [J] J-EVT ← PA3 (RX); [A] DISABLE ([M] shaft free) → probe on the ENABLE frame (PSC 1799) → JOG during settle refused (E_BUSY 2) → [M] holding → first PUL stamp | first PUL/DIR − ENA edge ≥ 500 ms (u ≈ 12 µs) |

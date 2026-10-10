@@ -16,7 +16,7 @@ import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from bend_stand.calc.path import PathPoint, advance, planned_path as _path
+from bend_stand.calc.path import PathPoint, advance, contact_x, planned_path as _path
 from bend_stand.calc.trim import move_time_s
 from bend_stand.core.sequencer.model import MAX_PLAN_STEPS, Loop, Sequence, StepKind
 
@@ -25,6 +25,7 @@ LOAD_TRIM_EST_S = 1.0                  # plan estimate of the trim phase of a lo
 HOME_V_MM_S = 10.0                     # plan estimate of homing (fast seek + approach)
 HOME_FIXED_S = 5.0
 TARE_EXTRA_S = 1.5                     # tare: ≥ 1 s after the last move + evaluation
+SIDE_MIN_N = 0.5                       # |F| that fixes the loaded side of the specimen (OI-UM-06)
 
 
 class PlanTooLong(ValueError):
@@ -142,6 +143,16 @@ def expand(seq: Sequence, ctx: PlanContext | None = None) -> Plan:
     out: list[PlannedStep] = []
     windows = 0
     infinite_loops = [lp for lp in seq.loops if lp.count == 0]
+    # OI-UM-06: specimen line through the contact point; force 0 on the unloaded side. The loaded side is the sign
+    # of the start force, else of the first non-zero LOAD target, else of the first non-zero planned force.
+    x_c = contact_x(x, f, k_est, seq.pull_dir)
+    side: int | None = None
+    if math.isfinite(f) and abs(f) >= SIDE_MIN_N:
+        side = 1 if f > 0 else -1
+    else:
+        lt = next((float(s.target) for s in seq.steps if StepKind(s.kind) == StepKind.LOAD and s.target is not None
+                   and math.isfinite(float(s.target)) and float(s.target) != 0.0), None)
+        side = None if lt is None else (1 if lt > 0 else -1)
     for n, (i, iters) in enumerate(iter_exec(seq, infinite=False)):
         if n >= MAX_PLAN_STEPS:
             raise PlanTooLong(f"more than {MAX_PLAN_STEPS} executed steps")
@@ -149,7 +160,12 @@ def expand(seq: Sequence, ctx: PlanContext | None = None) -> Plan:
         kind = StepKind(s.kind)
         x0, f0 = x, f
         target = s.target if s.target is not None and math.isfinite(float(s.target)) else None
-        nx, nf, known = advance(kind.value, x, f, target, k_est, seq.pull_dir, c.home_x_mm)
+        nx, nf, known = advance(kind.value, x, f, target, k_est, seq.pull_dir, c.home_x_mm, x_contact=x_c,
+                                side=side)
+        if kind == StepKind.TARE:
+            x_c = nx                                  # the force reference restarts at the tare position
+        elif side is None and math.isfinite(nf) and abs(nf) >= SIDE_MIN_N:
+            side = 1 if nf > 0 else -1
         a = float(s.accel_mm_s2) if s.accel_mm_s2 and s.accel_mm_s2 > 0 else float(c.a_default_mm_s2)
         v = seq.speed(s)
         t_move = 0.0

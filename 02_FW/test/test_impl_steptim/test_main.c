@@ -6,7 +6,12 @@
  * unless a test holds it (a level 0/1 ISR or a PRIMASK section pre-empting the step ISR).
  * Invariants checked at every halt position: hal count == completed pulses, one stop_gen increment
  * per halt, CLEAN never cuts a pulse (no runt), TRUNCATE reports a cut pulse.
- * Verifies: SAF-FW-002 (CLEAN halt), SAF-FW-004 (no uncounted pulse, DEF-M2-01), SAF-FW-005 a
+ * v0.8 (FW_design §9.8 / review FWR-01, FWR-02, FWR-05): the E-stop fixed reaction
+ * step_estop_reaction() is equivalent to hal_step_abort() + hal_ena_set(false) at every CNT position;
+ * idle halts bump the stop generation; a halt before the atomic arm is caught by the recheck before
+ * the first edge; a stretch while an update is pending keeps the running-period bookkeeping.
+ * Verifies: SAF-FW-002 (CLEAN halt), SAF-FW-004 (no uncounted pulse, DEF-M2-01), SAF-FW-005 a,
+ *           NFR-007 (optimised E-stop path equivalent)
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -205,6 +210,8 @@ static void reset_model(void)
     m_primask = 0u;
     s_count = 0;
     s_running = false;
+    s_late = false;
+    memset(&m_gpioa, 0, sizeof m_gpioa);
 }
 
 /* run until the k-th update event (ISR held for that one when hold) */
@@ -333,9 +340,175 @@ static void sweep(bool abort)
 void test_sweep_stop_now(void) { sweep(false); }
 void test_sweep_abort(void) { sweep(true); }
 
+/* v0.8: step_estop_reaction() == hal_step_abort() + hal_ena_set(false), every 7th CNT position over
+ * two periods, with and without a pending update ISR (the same deterministic model run twice) */
+typedef struct {
+    uint32_t done, cut, rise, gen, ccmr1, cr1, sr, bsrr;
+    int32_t  count;
+    bool     running;
+} obs_t;
+
+static obs_t estop_case(uint32_t off, bool hold, bool reaction)
+{
+    obs_t o;
+    uint32_t g0;
+    reset_model();
+    start(1);
+    g0 = tgt_hal_step_stop_gen();
+    run_to_update(3u, hold);
+    if (!hold) {
+        run(off);
+    }
+    m_gpioa.BSRR = 0u;
+    if (reaction) {
+        step_estop_reaction();
+    } else {
+        (void)tgt_hal_step_abort();
+        tgt_hal_ena_set(false);
+    }
+    out_eval();
+    o.ccmr1 = m_tim2.CCMR1;
+    o.cr1 = m_tim2.CR1;
+    o.sr = m_tim2.SR;
+    o.bsrr = m_gpioa.BSRR;
+    o.gen = tgt_hal_step_stop_gen() - g0;             /* one per halt */
+    o.count = tgt_hal_step_count();
+    m_hold_isr = false;
+    if ((m_tim2.SR & TIM_SR_UIF) != 0u) {
+        serve_isr();
+    }
+    run(20000u);
+    o.done = m_done;
+    o.cut = m_cut;
+    o.rise = m_rise;
+    o.running = tgt_hal_step_running();
+    TEST_ASSERT_EQUAL_INT32((int32_t)m_done, tgt_hal_step_count());   /* SAF-FW-004 */
+    return o;
+}
+
+void test_estop_reaction_equals_abort_and_ena(void)
+{
+    uint32_t off, n = 0u;
+    for (off = 0u; off < 6000u; off += 7u) {
+        uint32_t hold;
+        for (hold = 0u; hold < 2u; hold++) {
+            obs_t a, b;
+            if (hold != 0u && off != 0u) {
+                continue;
+            }
+            a = estop_case(off, hold != 0u, false);
+            b = estop_case(off, hold != 0u, true);
+            TEST_ASSERT_EQUAL_UINT32(a.done, b.done);
+            TEST_ASSERT_EQUAL_UINT32(a.cut, b.cut);
+            TEST_ASSERT_EQUAL_UINT32(a.rise, b.rise);
+            TEST_ASSERT_EQUAL_UINT32(a.gen, b.gen);
+            TEST_ASSERT_EQUAL_UINT32(a.ccmr1, b.ccmr1);
+            TEST_ASSERT_EQUAL_UINT32(a.cr1, b.cr1);
+            TEST_ASSERT_EQUAL_UINT32(a.sr, b.sr);
+            TEST_ASSERT_EQUAL_UINT32(a.bsrr, b.bsrr);
+            TEST_ASSERT_EQUAL_INT32(a.count, b.count);
+            TEST_ASSERT_EQUAL(a.running, b.running);
+            TEST_ASSERT_FALSE(b.running);
+            TEST_ASSERT_EQUAL_UINT32(1u << PIN_ENA_BIT, b.bsrr);   /* ENA -> disabled (ena_invert 0) */
+            n++;
+        }
+    }
+    TEST_ASSERT_TRUE(n > 850u);
+}
+
+/* idle: every stop primitive bumps the generation (FWR-01); the reaction also releases a
+ * STATIC_LEVEL hold and drives ENA like hal_ena_set(false) */
+void test_idle_halts_bump_generation(void)
+{
+    uint32_t g;
+    hal_step_cfg_t cfg = {PW, 1800u, false, false};
+    (void)tgt_hal_step_init(&cfg);
+    g = tgt_hal_step_stop_gen();
+    (void)tgt_hal_step_stop_now();
+    TEST_ASSERT_EQUAL_UINT32(g + 1u, tgt_hal_step_stop_gen());
+    (void)tgt_hal_step_abort();
+    TEST_ASSERT_EQUAL_UINT32(g + 2u, tgt_hal_step_stop_gen());
+    tgt_g_meas_static = 1u;
+    m_tim2.CCMR1 = OC1M_FORCE_INACTIVE | TIM_CCMR1_OC1M_0 | TIM_CCMR1_OC1PE;   /* forced active */
+    step_estop_reaction();
+    TEST_ASSERT_EQUAL_UINT32(g + 3u, tgt_hal_step_stop_gen());
+    TEST_ASSERT_EQUAL_UINT8(0u, tgt_g_meas_static);
+    TEST_ASSERT_EQUAL_UINT32(OC1M_FORCE_INACTIVE, OC_MODE());
+    TEST_ASSERT_EQUAL_UINT32(1u << PIN_ENA_BIT, m_gpioa.BSRR);
+    TEST_ASSERT_FALSE(tgt_hal_step_running());
+}
+
+/* FWR-01 / FWR-02 core protocol (hw_start): a halt after the gate capture and before the atomic arm
+ * leaves the timer armed; the recheck stops it before the first edge (dir_setup = 1800 ticks) */
+void test_halt_before_arm_caught_by_recheck(void)
+{
+    uint32_t pass;
+    for (pass = 0u; pass < 2u; pass++) {
+        uint32_t gen;
+        hal_step_cfg_t cfg = {PW, 1800u, false, false};
+        reset_model();
+        (void)tgt_hal_step_init(&cfg);
+        tgt_hal_step_set_dir(1);
+        gen = tgt_hal_step_stop_gen();                 /* gate capture */
+        if (pass == 0u) {
+            step_estop_reaction();                     /* E-stop edge in the window (idle) */
+        } else {
+            (void)tgt_hal_step_stop_now();             /* limit edge in the window (idle) */
+        }
+        tgt_hal_step_start(3000u);
+        m_arr_sh = m_tim2.ARR;
+        m_ccr_sh = m_tim2.CCR1;
+        m_tim2.SR &= ~TIM_SR_UIF;
+        TEST_ASSERT_TRUE(tgt_hal_step_running());      /* armed atomically */
+        run(10u);                                      /* a few ticks of pre-emption */
+        TEST_ASSERT_NOT_EQUAL_UINT32(gen, tgt_hal_step_stop_gen());
+        (void)tgt_hal_step_stop_now();                 /* recheck */
+        run(20000u);
+        TEST_ASSERT_FALSE(tgt_hal_step_running());
+        TEST_ASSERT_EQUAL_UINT32(0u, m_rise);
+        TEST_ASSERT_EQUAL_INT32(0, tgt_hal_step_count());
+    }
+}
+
+/* FWR-05: a stretch while an update is pending (its ISR masked by CRIT_MOTION) extends the period
+ * that update started, and the pending ISR takes it as the running period: a CLEAN stop inside that
+ * period's pulse completes it (no runt, counted) */
+void test_stretch_with_pending_update(void)
+{
+    uint32_t g;
+    const uint32_t c1 = 6000u, c2 = 6400u;
+    start(1);
+    run_to_update(3u, true);                           /* update 3 pending: s_pre's period running */
+    TEST_ASSERT_TRUE((m_tim2.SR & TIM_SR_UIF) != 0u);
+    tgt_hal_step_set_period_now(c1);
+    TEST_ASSERT_TRUE(s_late);
+    TEST_ASSERT_EQUAL_UINT32(c1, s_late_cur);
+    m_arr_sh = c1 - 1u;                                /* the model applies the direct (ARPE = 0) write */
+    m_ccr_sh = c1 - PW;
+    tgt_hal_step_set_period(c2);                       /* the core's next preload */
+    TEST_ASSERT_EQUAL_UINT32(c1, s_late_cur);          /* not overwritten by the preload */
+    m_hold_isr = false;
+    serve_isr();
+    TEST_ASSERT_EQUAL_UINT32(c1, s_cur);               /* bookkeeping = the interval really running */
+    TEST_ASSERT_FALSE(s_late);
+    while (m_tim2.CNT < c1 - PW + 10u) {               /* into c1's pulse */
+        tick();
+    }
+    g = tgt_hal_step_stop_gen();
+    TEST_ASSERT_TRUE(tgt_hal_step_stop_now());         /* CLEAN: the running pulse completes */
+    run(20000u);
+    TEST_ASSERT_EQUAL_UINT32(0u, m_cut);               /* no runt */
+    TEST_ASSERT_EQUAL_INT32((int32_t)m_done, tgt_hal_step_count());
+    TEST_ASSERT_EQUAL_UINT32(g + 1u, tgt_hal_step_stop_gen());
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_estop_reaction_equals_abort_and_ena);
+    RUN_TEST(test_idle_halts_bump_generation);
+    RUN_TEST(test_halt_before_arm_caught_by_recheck);
+    RUN_TEST(test_stretch_with_pending_update);
     RUN_TEST(test_run_last_counts_exact);
     RUN_TEST(test_abort_with_pending_update);
     RUN_TEST(test_stop_now_with_pending_update);

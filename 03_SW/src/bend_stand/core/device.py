@@ -87,6 +87,7 @@ class DeviceSettings:
     auto_reconnect: bool = True
     heartbeat: bool = True
     seq_seed: int | None = None
+    rx_log_len: int = 100_000                 # Reader receive-stamp log (hook c); small outside test runs (OBS-P3-04)
 
 
 class Device:
@@ -176,7 +177,7 @@ class Device:
         self.reset_time_pairing()
         reader = Reader(tr, self.clock, on_response=channel.on_response, on_async=self._on_async,
                         on_error=self._on_transport_error, beat=lambda t: self.liveness.beat("reader", t),
-                        thread_init=_raise_priority)
+                        thread_init=_raise_priority, rx_log_len=self.settings.rx_log_len)
         confirmer = StopConfirmer(channel, self.clock, on_confirmed=self._stop_confirmed,
                                   on_unconfirmed=self._stop_unconfirmed, poll_status=self._poll_now,
                                   stream_on=lambda: self.stream_on)
@@ -681,7 +682,12 @@ class Device:
             if f.exception() is not None or f.result() is None:
                 finish(ClearResult(name, True, False, "NOT_CONFIRMED", text=f"{name} not confirmed — click again"))
                 return
-            st = P.decode_status(f.result().body)
+            try:
+                st = P.decode_status(f.result().body)
+            except ValueError as exc:                   # SWR-18: the ClearResult always resolves
+                finish(ClearResult(name, True, False, "NOT_CONFIRMED", text=f"{name} not confirmed (STATUS "
+                                                                            f"undecodable: {exc}) — click again"))
+                return
             self._apply_status(st, f.result().t_host_ns, f.result().t_sent_ns)
             new_latch = any(self.event_counts.get(e, 0) > n for e, n in ev0.items())
             if cmd == Cmd.HALT_CLEAR:

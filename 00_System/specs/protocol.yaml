@@ -33,7 +33,7 @@
 # =====================================================================================
 
 schema_version: 1
-icd_version: "0.7.4"
+icd_version: "0.7.5"
 proto_major: 1
 proto_minor: 0
 payload_version: 1
@@ -188,7 +188,7 @@ tables:
       - {name: DRV_UNPOWERED, bit: 8, desc: "only with the optional power sense (drv.pwr_sense_enable, default 0 since CR-03 / D-41): the DRV_POWER input reads 'off' (D-28, D-29c)"}
       - {name: DRIVER_ALARM, bit: 9, desc: "ALM start-block (SAF-FW-026, D-28): ALM active and driver power present (sense disabled → assumed present); new motion starts only (MOVE_ABS, MOVE_UNTIL_LOAD, HOME, JOG ≠ 0 while not jogging)"}
       - {name: PAUSED, bit: 10, desc: "PAUSED latched (D-30): MOVE_ABS, MOVE_UNTIL_LOAD, HOME and JOG ≠ 0 (incl. refreshes of a running jog) refused; cleared by RESUME (clears only PAUSED) or HALT_CLEAR (clears HALT and PAUSED) (D-31)"}
-      - {name: MEAS_STATE, bit: 11, desc: "DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED (Appendix C, D-40c)"}
+      - {name: MEAS_STATE, bit: 11, desc: "DIAG_MEAS op not allowed in the current motion state: HANG needs a running motion, STATIC_LEVEL needs NOT_ENABLED and, for sel PUL, the ENA output at the disabled level (Appendix C, D-40c, FWR-09)"}
 
   # ---------------------------------------------------------------- request fields
   - id: stop_mode
@@ -563,8 +563,8 @@ tables:
       - {name: NOINIT, value: 5, desc: ".noinit block (last PUL, heartbeat, hang start, previous-boot record, boot counter; survives a reset)", sel: "0 read, 1 clear", a: "0", b: "0", retry: "RETRY (read) / VERIFY (clear)"}
       - {name: STIM_RUN, value: 6, desc: "stimulus series on the J-STIM output (MT-7)", sel: "bit 0 polarity (0 high pulse, 1 low pulse), bits 1-7 hold time 1…127 ms", a: "pulses 1…1000", b: "seed", retry: VERIFY}
       - {name: HANG, value: 7, desc: "test-image hang injection while moving (IWDG evidence)", sel: "meas_hang_where", a: "duration 0…10000 ms (0 = until the IWDG resets)", b: "0", retry: VERIFY}
-      - {name: STATIC_LEVEL, value: 8, desc: "drive PUL or DIR statically for the DMM (only NOT_ENABLED; released before the next command is executed)", sel: "meas_pin", a: "level 0/1", b: "0", retry: VERIFY}
-      - {name: DWT, value: 9, desc: "DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0)", sel: "0 read, 1 reset", a: "section 0…31 (0…22 defined, App. C table C.1)", b: "0", retry: "RETRY (read) / VERIFY (reset)"}
+      - {name: STATIC_LEVEL, value: 8, desc: "drive PUL or DIR statically for the DMM (only NOT_ENABLED; PUL only with ENA at the disabled level; released before the next command is executed)", sel: "meas_pin", a: "level 0/1", b: "0", retry: VERIFY}
+      - {name: DWT, value: 9, desc: "DWT per-section cycle statistics (HW_MEAS_DWT builds; else w0 = 0)", sel: "0 read, 1 reset", a: "section 0…31 (0…23 defined, App. C table C.1)", b: "0", retry: "RETRY (read) / VERIFY (reset)"}
 
   - id: meas_src
     kind: enum
@@ -592,7 +592,7 @@ tables:
     items:
       - {name: TRIGGER, value: 0, desc: "the first event edge after arming starts the probe counter (single shot)"}
       - {name: RESET, value: 1, desc: "every event edge restarts the probe counter (last event wins)"}
-      - {name: PWM_INPUT, value: 2, desc: "PUL period and high width per pulse (min/max over the pulses since arming)"}
+      - {name: PWM_INPUT, value: 2, desc: "PUL period and high width per pulse (min/max over the pulses since arming; a period that overflowed the 16-bit capture = 0xFFFFFFFF)"}
 
   - id: meas_probe_flags
     kind: bitset

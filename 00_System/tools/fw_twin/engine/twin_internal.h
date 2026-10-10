@@ -85,6 +85,10 @@ typedef struct {
     uint32_t period_cur, period_pre;         /* ticks */
     vt_t step_rise, step_end;
     bool step_fault_next;
+    /* inject step_stall (ICD v0.7.5, tools/README "Move stall"): the step timer of the running move is frozen in
+     * its low phase until sstall_until (VT_NEVER = until the move ends) or the next halt; the running period's
+     * rise/end are shifted by the frozen time when it resumes. Injected while idle: armed for the next start. */
+    vt_t sstall_until, sstall_from, sstall_armed_ns; bool sstall_active, sstall_frozen, sstall_armed;
     /* ---- world ---- */
     double spm_world, shift_um, x0_um;
     int64_t wsteps;                          /* world steps integrated from PUL + DIR pin (REQ-C-M2-06) */
@@ -133,6 +137,8 @@ void tw_tx_kick(void);                       /* start the next TX frame if the l
 void tw_flash_save(void);
 void tw_edge(const char *pin, int level);
 void tw_step_counted(void);                  /* after every count change: world (limits) update */
+void tw_step_stall_sync(void);               /* inject step_stall: freeze / resume the step timer at T.now */
+void tw_step_stall_inject(vt_t dur_ns);      /* inject step_stall: 0 = until the move ends */
 double tw_x_um(void);
 
 /* seam v1.2 / v1.3 functions the twin provides (declared here in case A's headers lag behind) */

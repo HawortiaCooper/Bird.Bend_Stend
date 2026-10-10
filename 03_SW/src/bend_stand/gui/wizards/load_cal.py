@@ -43,7 +43,12 @@ class LoadCalWizard(SafeWizard):
     KIND = "load_cal"
     TITLE = "Load calibration"
     START_GATE = GateId.CAL_LOAD_START
-    CONFIRM_CID = "C-06"
+    CONFIRM_CID = "C-06"                                       # WARN linearity (SW-CAL-007)
+    # Implements: SW-CAL-007 (D-50 a, SRS v0.6.5) — K plausibility: the engine's FIT confirmation K_IMPLAUSIBLE gets
+    # its own dialog (C-14, assertion "weights, cell and AFE gain checked"); "weight not detected" is an engine error
+    # on the point page (AWAIT_OPERATOR, Repeat / Continue with another mass) and needs no GUI rule.
+    CONFIRM_CIDS = {"K_IMPLAUSIBLE": "C-14"}
+    INFO_PREFIXES = ("nominal unknown",)                       # "nominal unknown: K plausibility not checked"
 
     def build_start_config(self, form: QFormLayout) -> None:
         try:

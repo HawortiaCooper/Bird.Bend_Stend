@@ -103,10 +103,9 @@ void on_input_edge(uint8_t id, bool level, uint32_t t_us)
     r->edge = true;
 }
 
-static in_rec_t take(uint8_t id)
+static in_rec_t take_nl(uint8_t id)                    /* caller holds CRIT_HALT */
 {
     in_rec_t c;
-    CRIT_BEGIN(HAL_CRIT_HALT);                         /* <= 0.2 us snapshot (FW_design §4.4) */
     c.edge = g_fw.in.rec[id].edge;
     c.act_edge = g_fw.in.rec[id].act_edge;
     c.t_us = g_fw.in.rec[id].t_us;
@@ -114,8 +113,89 @@ static in_rec_t take(uint8_t id)
     c.was_running = g_fw.in.rec[id].was_running;
     g_fw.in.rec[id].edge = false;
     g_fw.in.rec[id].act_edge = false;
+    return c;
+}
+
+static in_rec_t take(uint8_t id)
+{
+    in_rec_t c;
+    CRIT_BEGIN(HAL_CRIT_HALT);                         /* <= 0.2 us snapshot (FW_design §4.4) */
+    c = take_nl(id);
     CRIT_END();
     return c;
+}
+
+/* FWR-17 / FWR-18 / FWR-19 (FW_design §4.4, §5.3, §9.12): the E-stop / START / END records are taken
+ * with the shortest possible PRIMASK window. A level-0/1 handler writes a record's payload (t_us, steps,
+ * was_running) only while its act_edge is false, so:
+ * 1. outside the window: note act_edge and copy the payload (stable if act_edge was already set);
+ * 2. inside the window (take_halt_flags(), only flag loads / stores): take and clear edge / act_edge -
+ *    except a record whose act_edge appeared after step 1 (payload maybe stale): it is left pending,
+ *    whole, for the next tick;
+ * A fixed reaction before the window is folded in this tick; one after it leaves a pending record (left
+ * in step 2 or written later), and motion_tick() decides no segment end / restart while a record is
+ * pending (safety_edges_pending()). The stop generation is captured in motion_tick() after it read the
+ * timer state (FWR-20), so a planned segment end inside the tick cannot kill the next segment. */
+#if defined(__GNUC__)
+#define SAFETY_NOINLINE __attribute__((noinline))
+#else
+#define SAFETY_NOINLINE
+#endif
+
+/* inside the window: one record's flags -> bit 0 edge, bit 1 act_edge; 0 and nothing cleared for a
+ * record whose act_edge appeared after the payload copy (left pending, whole, for the next tick) */
+static inline uint8_t take_bits(volatile in_rec_t *src, bool pre_act)
+{
+    bool a = src->act_edge;
+    uint8_t v;
+    if (a && !pre_act) {
+        return 0u;
+    }
+    v = (uint8_t)((src->edge ? 1u : 0u) | (a ? 2u : 0u));
+    src->edge = false;
+    src->act_edge = false;
+    return v;
+}
+
+/* the CRIT_HALT window of the tick's record take (isr_wcet.py path fn:take_halt_flags): only flag loads
+ * and stores at fixed addresses; pre: bit k = act_edge of record k before the payload copy */
+SAFETY_NOINLINE static uint32_t take_halt_flags(uint32_t pre)
+{
+    uint32_t out;
+    CRIT_BEGIN(HAL_CRIT_HALT);
+    out = take_bits(&g_fw.in.rec[IO_ESTOP_OPEN_BIT], (pre & 1u) != 0u);
+    out |= (uint32_t)take_bits(&g_fw.in.rec[IO_LIMIT_START_BIT], (pre & 2u) != 0u) << 2;
+    out |= (uint32_t)take_bits(&g_fw.in.rec[IO_LIMIT_END_BIT], (pre & 4u) != 0u) << 4;
+    CRIT_END();
+    return out;
+}
+
+static void take_halt_inputs(in_rec_t r[3])
+{
+    static const uint8_t ids[3] = {(uint8_t)IO_ESTOP_OPEN_BIT, (uint8_t)IO_LIMIT_START_BIT,
+                                   (uint8_t)IO_LIMIT_END_BIT};
+    uint32_t pre = 0u, bits;
+    uint8_t k;
+    for (k = 0u; k < 3u; k++) {
+        const volatile in_rec_t *s = &g_fw.in.rec[ids[k]];
+        if (s->act_edge) {
+            pre |= 1u << k;
+        }
+        r[k].t_us = s->t_us;                           /* stable while act_edge is set */
+        r[k].steps = s->steps;
+        r[k].was_running = s->was_running;
+    }
+    bits = take_halt_flags(pre);
+    for (k = 0u; k < 3u; k++) {
+        r[k].edge = ((bits >> (2u * k)) & 1u) != 0u;
+        r[k].act_edge = ((bits >> (2u * k)) & 2u) != 0u;
+    }
+}
+
+bool safety_edges_pending(void)
+{
+    return g_fw.in.rec[IO_ESTOP_OPEN_BIT].act_edge || g_fw.in.rec[IO_LIMIT_START_BIT].act_edge ||
+           g_fw.in.rec[IO_LIMIT_END_BIT].act_edge;
 }
 
 static void vclear(uint16_t cause, uint32_t t_us)
@@ -236,13 +316,14 @@ void safety_tick(uint32_t now_ms, uint32_t now_us)
 {
     uint16_t raw = hal_inputs_raw();
     uint8_t rel = g_fw.p.io.release_ms;
-    in_rec_t r;
+    in_rec_t r, rh[3];
     bool estop_open, a;
     uint8_t i;
     g_fw.in.raw = raw;
+    take_halt_inputs(rh);                              /* + stop generation (FWR-17 / FWR-18) */
 
     /* 1. E-stop sense (SAF-FW-005/006) */
-    r = take((uint8_t)IO_ESTOP_OPEN_BIT);
+    r = rh[0];
     estop_open = active_of(raw, (uint8_t)IO_ESTOP_OPEN_BIT);
     if (r.act_edge || (estop_open && (!g_fw.lat.estop || g_fw.ena_on || motion_active()))) {
         estop_trip(&r, now_us);
@@ -277,13 +358,21 @@ void safety_tick(uint32_t now_ms, uint32_t now_us)
         uint8_t lim = (i == 0u) ? (uint8_t)LIM_START : (uint8_t)LIM_END;
         int8_t toward = (i == 0u) ? -1 : 1;
         bool latched = (i == 0u) ? g_fw.lat.limit_start : g_fw.lat.limit_end;
-        r = take(bit);
+        r = rh[1u + i];
         a = active_of(raw, bit);
         if (r.act_edge) {
             limit_hit(lim, r.steps, r.t_us);
         } else if (a && !latched && motion_dir() == toward) {
             (void)hal_step_stop_now();                 /* backup: edge missed (line masked) */
             limit_hit(lim, hal_step_count(), now_us);
+        } else if (a && latched && motion_dir() == toward && !motion_stopping() &&
+                   g_fw.motion_state != (uint8_t)MS_HOMING) {
+            /* FWR-03 (b), defence in depth: a motion toward an active, latched switch (cannot be
+             * started by the checked command path; level-based, independent of the edge record) */
+            uint8_t sc = (i == 0u) ? (uint8_t)SC_LIMIT_START : (uint8_t)SC_LIMIT_END;
+            (void)hal_step_stop_now();
+            motion_stop(sc, false, (uint8_t)MD_STOPPED);
+            vclear(sc, now_us);
         }
         if (relf_sample(&g_fw.in.lim_rel[i], a, r.edge, rel)) {
             CRIT_BEGIN(HAL_CRIT_DATA);
@@ -300,6 +389,11 @@ void safety_tick(uint32_t now_ms, uint32_t now_us)
             motion_stop((uint8_t)SC_LIMIT_WIRING, false, (uint8_t)MD_STOPPED);
             vclear(SC_LIMIT_WIRING, now_us);
         }
+    } else if (safety_active((uint8_t)IO_LIMIT_START_BIT) && safety_active((uint8_t)IO_LIMIT_END_BIT) &&
+               motion_active() && !motion_stopping()) {
+        /* FWR-03 (b): both switches active with LIMIT_WIRING already latched and a motion running */
+        motion_stop((uint8_t)SC_LIMIT_WIRING, false, (uint8_t)MD_STOPPED);
+        vclear(SC_LIMIT_WIRING, now_us);
     }
 
     /* 4. PAUSE button (SAF-FW-023, FW-SW-003) */

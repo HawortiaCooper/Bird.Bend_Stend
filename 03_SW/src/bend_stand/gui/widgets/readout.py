@@ -15,6 +15,7 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QPushButton, QTableWidget, QTableWidgetItem, \
     QVBoxLayout, QWidget
@@ -105,9 +106,11 @@ class ReadoutDock(SafeDock):
             item = self.table.item(r, c)
             if item.text() != text:
                 item.setText(text)
-        color = STATE_COLORS.get(state, "#ffe0b0")
-        brush = QBrush(QColor(color)) if color else QBrush()
-        self.table.item(r, 5).setBackground(brush)
+        item = self.table.item(r, 5)
+        if item.data(Qt.ItemDataRole.UserRole) != state:      # OBS-P3-02: no model change / repaint when unchanged
+            color = STATE_COLORS.get(state, "#ffe0b0")
+            item.setBackground(QBrush(QColor(color)) if color else QBrush())
+            item.setData(Qt.ItemDataRole.UserRole, state)
 
     def state_of(self, key: str) -> str:
         r = self.keys().index(key)

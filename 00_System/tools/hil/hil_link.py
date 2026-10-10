@@ -63,19 +63,142 @@ APPROVAL_RE = re.compile(r"^D-06-GATE-(\d{4})(\d{2})(\d{2})(?:-[A-Z0-9]{1,16})?$
 APPROVAL_FILES = ("00_System/specs/DECISIONS.md", "00_System/STATUS.md")
 
 
-def approval_row(text: str, ref: str) -> str | None:
-    """R-HIL-02: the reference must be recorded in a DEDICATED markdown table row — one cell equal to the reference
-    as a whole token (backticks / bold stripped) and the row marked 'approved' — not just occur somewhere (a mention
-    like 'D-06-GATE-20261012 pending' or a longer tag 'D-06-GATE-20261012-X' does not count)."""
+# FWR-12 (FW_code_review.md): a recorded row must state its status positively and unambiguously. Any negation,
+# question or open state anywhere in the row refuses it ("not approved", "approved: no", "approved?", "tbd", …).
+NEGATION_RE = re.compile(r"\?|n't\b|\b(not|no|never|none|unapproved|disapproved|denied|pending|withdrawn|revoked|"
+                         r"rejected|proposed|tbd|tba|awaiting|expired|cancell?ed|draft|unconfirmed|"
+                         r"to be confirmed)\b", re.IGNORECASE)
+APPROVED_STATES = ("approved", "approved (po)")
+ACCEPTED_STATES = ("accepted", "accepted (po)", "accepted (orchestrator)", "approved", "approved (po)")
+UID_RE = re.compile(r"^[0-9A-Fa-f]{24}$")          # STM32F446 96-bit UID as 24 hex digits (GET_INFO uid)
+OPEN_REF_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){1,6}$")     # e.g. D-52, RR-HG-12-01
+
+
+def _cells(line: str) -> list[str] | None:
+    s = line.strip()
+    if not (s.startswith("|") and s.endswith("|") and len(s) > 1):
+        return None
+    return [c.strip().strip("`*").strip() for c in s.strip("|").split("|")]
+
+
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+
+
+def table_lines(text: str):
+    """Markdown lines that can be table rows: lines inside fenced code blocks (``` / ~~~, C-R2), inside HTML
+    comments (<!-- ... -->) and lines indented by >= 4 columns (indented code block, C-R4; a tab counts to the next
+    multiple of 4) are skipped - an example or template row there is not a record. Only rows of a normal, unindented
+    table count."""
+    fence = None
+    comment = False
     for line in text.splitlines():
-        s = line.strip()
-        if not (s.startswith("|") and s.endswith("|")):
+        m = FENCE_RE.match(line)
+        if fence is not None:
+            if m and m.group(1) == fence:
+                fence = None
             continue
-        cells = [c.strip().strip("`*").strip() for c in s.strip("|").split("|")]
-        if ref in cells and re.search(r"\bapproved\b", s, re.IGNORECASE) and not re.search(
-                r"\b(pending|withdrawn|revoked|rejected|proposed)\b", s, re.IGNORECASE):
-            return s
+        if m:
+            fence = m.group(1)
+            continue
+        if comment:
+            if "-->" in line:
+                comment = False
+                line = line.split("-->", 1)[1]
+            else:
+                continue
+        while "<!--" in line:
+            head, _, tail = line.partition("<!--")
+            if "-->" in tail:
+                line = head + tail.split("-->", 1)[1]
+            else:
+                line = head
+                comment = True
+        if _indent(line) >= 4:
+            continue                  # C-R4: indented code block (record rows are never indented)
+        yield line
+
+
+def _indent(line: str) -> int:
+    """Leading indentation in columns (a tab advances to the next multiple of 4, CommonMark)."""
+    col = 0
+    for ch in line:
+        if ch == " ":
+            col += 1
+        elif ch == "\t":
+            col += 4 - col % 4
+        else:
+            break
+    return col
+
+
+def ref_rows(text: str, ref: str) -> list[str]:
+    """Every table row (outside fences / comments) whose FIRST cell is the reference (backticks / bold stripped)."""
+    out = []
+    for line in table_lines(text):
+        cells = _cells(line)
+        if cells and cells[0] == ref:
+            out.append(line.strip())
+    return out
+
+
+def _clean(row: str, states: tuple[str, ...]) -> bool:
+    cells = _cells(row) or []
+    return len(cells) >= 3 and cells[-1].lower() in states and not any(NEGATION_RE.search(c) for c in cells)
+
+
+def decide_rows(rows: list[str], states: tuple[str, ...], must_mention: str | None = None) -> str | None:
+    """C-R1: ALL rows recorded for a reference must state it positively - a later (or any other) row that revokes,
+    withdraws, questions or otherwise does not confirm the same reference cancels it. Returns the deciding row (one
+    that also mentions `must_mention`, if given) or None."""
+    if not rows or not all(_clean(r, states) for r in rows):
+        return None
+    for r in rows:
+        if not must_mention or re.search(rf"(?<![\w-]){re.escape(must_mention)}(?![\w-])", r):
+            return r
     return None
+
+
+def recorded_row(text: str, ref: str, states: tuple[str, ...], must_mention: str | None = None) -> str | None:
+    """A DEDICATED markdown table row for `ref` (outside code fences / comments): the FIRST cell equals the reference
+    as a whole token (backticks / bold stripped), the row has >= 3 cells, the LAST cell (status) is exactly one of
+    `states` (case-insensitive), no cell contains a negation / question / open state (NEGATION_RE), and - if given -
+    the row mentions `must_mention`. Every OTHER row for the same reference must satisfy the same (C-R1: a revoking
+    row cancels the approval). Returns the row or None."""
+    return decide_rows(ref_rows(text, ref), states, must_mention)
+
+
+def recorded_in_files(ref: str, states: tuple[str, ...], must_mention: str | None = None,
+                      repo: Path = REPO) -> str | None:
+    """recorded_row() over DECISIONS.md AND STATUS.md together: a revocation in either file cancels the record."""
+    rows: list[str] = []
+    for rel in APPROVAL_FILES:
+        try:
+            rows += ref_rows((repo / rel).read_text(encoding="utf-8"), ref)
+        except OSError:
+            continue
+    return decide_rows(rows, states, must_mention)
+
+
+def approval_row(text: str, ref: str) -> str | None:
+    """R-HIL-02 / FWR-12: the D-06 reference must be recorded in a DEDICATED markdown table row
+    `| D-06-GATE-YYYYMMDD[-TAG] | <date> | <scope> | approved (PO) |`: first cell = the reference as a whole token,
+    status cell (last) exactly 'approved' / 'approved (PO)', and nothing in the row negates, questions or leaves it
+    open. A mention elsewhere, a longer tag, 'not approved', 'approved: no', 'approved?' do not count."""
+    return recorded_row(text, ref, APPROVED_STATES)
+
+
+def check_accepted_open(item: str, ref: str, *, repo: Path = REPO) -> str:
+    """FWR-13: `--accepted-open HG-xx:REF` is valid only if REF is recorded (DECISIONS.md / STATUS.md) as a dedicated
+    accepted row that names the HG item. Returns the row; raises InterlockError."""
+    if not re.fullmatch(r"HG-\d{2}[a-z]{0,2}", item or ""):
+        raise InterlockError(f"--accepted-open: item {item!r} is not an HG id (HG-xx)")
+    if not ref or not OPEN_REF_RE.match(ref):
+        raise InterlockError(f"--accepted-open {item}: reference {ref!r} is not a decision / residual-risk id")
+    row = recorded_in_files(ref, ACCEPTED_STATES, must_mention=item, repo=repo)
+    if row:
+        return row
+    raise InterlockError(f"--accepted-open {item}:{ref}: not recorded as an accepted row naming {item} in "
+                         f"{' or '.join(APPROVAL_FILES)} (§6.6 residual-risk decision by the Orchestrator / PO)")
 
 
 def check_approval(ref: str | None, *, today: _dt.date | None = None, max_age_days: int = 7,
@@ -96,18 +219,12 @@ def check_approval(ref: str | None, *, today: _dt.date | None = None, max_age_da
         raise InterlockError(f"D-06: approval {ref} is dated in the future ({d} > {today})")
     if (today - d).days > max_age_days:
         raise InterlockError(f"D-06: approval {ref} is older than {max_age_days} days — ask the PO to renew it")
-    recorded = None
-    for rel in APPROVAL_FILES:
-        try:
-            recorded = approval_row((repo / rel).read_text(encoding="utf-8"), ref.strip())
-        except OSError:
-            continue
-        if recorded:
-            break
+    recorded = recorded_in_files(ref.strip(), APPROVED_STATES, repo=repo)
     if not recorded:
         raise InterlockError(f"D-06: approval {ref} is not recorded as an approved row in {' or '.join(APPROVAL_FILES)} "
                              "(the Orchestrator adds '| <ref> | <date> | PO approved HW gate … | approved (PO) |' "
-                             "before any session)")
+                             "before any session; any other row for the same reference that does not approve it - "
+                             "revoked, withdrawn, … - cancels it, C-R1)")
     return d
 
 

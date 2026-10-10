@@ -1,7 +1,7 @@
 # P3 readiness — what is done, what the product owner needs to do
 
-**Date:** 2026-10-05 · **State:** P2 complete — M1…M4 ACCEPTED WITH CONDITIONS; every remaining condition needs the PO, the bench or the reference PC.
-**Baseline:** SRS v0.6.4 (172 active requirements) · ICD v0.7.4 (dict 6, hash 0xF8BCDCB8) · FW_design v0.7 · SW_design v0.6 · SW_design_GUI v0.6 · FW_test_plan v0.4.3 · SW_test_plan v0.5.
+**Date:** 2026-10-10 (first issue 2026-10-05) · **State:** P2 complete — M1…M4 ACCEPTED WITH CONDITIONS; pre-P3 tasks 1–7 done (independent FW + SW code reviews closed, packaging, manual, dev-PC perf); every remaining condition needs the PO, the bench or the reference PC.
+**Baseline:** SRS v0.6.6 (172 active requirements) · ICD v0.7.5 (dict 6, hash 0xF8BCDCB8, no wire change since 0.7.4) · FW v0.8.5 (FW_design v0.8.5) · SW_design v0.6.8 · SW_design_GUI v0.6.1 · FW_test_plan v0.4.11 · SW_test_plan v0.5.3.
 
 ## 1. Evidence on the simulator / FW twin (no hardware, D-06)
 | Area | Result |
@@ -15,6 +15,17 @@
 
 Reports: `02_FW/docs/FW_test_report_M1…M4.md`, `03_SW/docs/SW_test_report_M1…M4.md`.
 
+## 1a. Pre-P3 tasks 1–7 (2026-10-08…10)
+| Area | Result |
+|---|---|
+| Independent FW + HIL + generator review (Validator E) | 21 findings (1 High) fixed by A/C/E and re-verified; **GO WITH CONDITIONS** (`02_FW/docs/FW_code_review.md` v1.2); FW host suites 243/243, validator 58/58 |
+| Independent SW review (Validator F) | 37 findings (6 S2) — 36 closed and re-verified, 1 S4 backlog; **ACCEPTED WITH CONDITIONS** (`03_SW/docs/SW_code_review.md` v1.4); full suite 3630/3630 ×2 (fixed + random order) |
+| ISR timing | path-based static bounds with bus wait states (`02_FW/tools/isr_wcet.py`); E-stop → PUL inactive ≤ 2.3 µs worst case (budget 100 µs); NFR-007 decided by DWT at HG-18 (D-51/D-52) |
+| Windows distribution | `03_SW/packaging/build_dist.ps1`: one-folder build, no Python needed, manual + quick card included, hash-pinned dependencies, smoke 9/9; installer needs Inno Setup 6 |
+| Operator documentation | `03_SW/docs/USER_MANUAL.md` + `QUICK_REFERENCE.md`, 40 screenshots, docs-drift test |
+| Dev-PC performance (informative) | at low host load all budgets met (paint p95 38 ms, STOP click 19 ms, Pause 5 ms, limit→STOP 4 ms, 1 h soak 0 losses); latency grows above ~60–80 % host CPU |
+| Traceability | 173 requirements: 0 without design / test case / code tag / test citation (HW/inspection-only listed) |
+
 ## 2. What the product owner needs to do
 
 ### A. Hardware gate (FW_test_plan §6, runbook `00_System/tools/hil/HW_GATE_RUNBOOK.md`)
@@ -24,10 +35,10 @@ Bench procedure §6.8 is **approved** (D-49 b). To run the gate:
 3. **Give a date** → the Orchestrator records the dedicated `D-06-GATE-YYYYMMDD` approval row; only then do the HIL scripts open a COM port.
 4. **During the session** you flash the three images (release, HW_MEAS, HW_MEAS_DWT) and perform the manual steps; Validator E drives the scripts.
 
-Open items to be decided at the gate: HG-18 measures the E-stop handler (static bound 1.15 µs vs 1 µs budget) and the step ISR (2.4 µs vs 2 µs); an overrun becomes a defect. First motion = a short slow jog checking direction and scale.
+Open items to be decided at the gate: HG-18 measures the E-stop reaction (≤ 1 µs), the step ISR (≤ 2 µs), the level-1 handlers (≤ 2.5 µs each, step ISR + largest ≤ 5 µs, D-52) and the IRQ-masked windows (≤ 1 µs; conservative static bounds 1.14–1.79 µs, OI-FW-51); an overrun becomes a defect (fixed-point ramp prepared as remedy for the step ISR, D-51). Bring the PC incident log `%APPDATA%\BirdBendStand\logs\bend_stand.log` from every gate run. First motion = a short slow jog checking direction and scale.
 
 ### B. Reference (lab) PC
-Send the spec (CPU, RAM, screen, Windows version) and give access for: plot refresh ≥ 20 fps (NFR-001), STOP click and Pause/Break → frame ≤ 50 ms (NFR-002/003), 1 h soak (NFR-004, also decides MC3-6: the occasional false LINK LOST seen only on the loaded dev PC), system-wide Pause/Break hotkey.
+Send the spec (CPU, RAM, screen, Windows version; a CPU below ~75 % of an i7-10700's single-thread speed will likely miss NFR-001/002 with all channels) and run `powershell -ExecutionPolicy Bypass -File 03_SW\tests\perf\run_ref_pc.ps1 -Out D:\bbs_perf_ref` (≈ 2 h 10 min, idle PC, interactive session; send the folder back) for: plot refresh ≥ 20 fps (NFR-001), STOP click and Pause/Break → frame ≤ 50 ms (NFR-002/003), 1 h soak (NFR-004, also decides MC3-6: the occasional false LINK LOST seen only on the loaded dev PC), system-wide Pause/Break hotkey.
 
 ### C. Demonstrations (with Validator F)
 Fresh install (DM-02) · full workflow on the simulator (DM-01) · two-monitor layout restore and 4-pane smoothness (DM-03/DM-11) · NVM buttons (DM-05) · Manual tab (DM-07) · sequence chart with live marker (DM-08) · Pause/Resume (DM-09) · HTML report (DM-10) · calibration wizards with the real weights (at the HW gate).
@@ -39,3 +50,11 @@ Fresh install (DM-02) · full workflow on the simulator (DM-01) · two-monitor l
 - Calibration with 1 kg + 10 kg covers 5 % FS → LOW_SPAN warning; forces beyond 3× the largest weight are marked extrapolated.
 - BREAK at standstill (D-49 a) is evaluated from t_reached + 100 ms; a break in the first 100 ms after a move is caught only by the FW load limit / NOT_ON_TARGET.
 - ALM / PEND are reported only (plus the ALM start-block, D-28); automatic ALM reaction is a later release.
+- PC on-screen STOP latency depends on the GUI thread under heavy host load; the Pause/Break key (own thread) is the robust stop path (OBS-P3-02).
+
+## 4. Further PO decisions (from tasks 1–7)
+- Is the 600 s window on 4 plot windows required at ≥ 20 fps (OBS-P3-03; dev PC reaches ~6–15 fps)? Lighter "all channels" layout / OpenGL (OBS-P3-02)?
+- Driver-alarm reset procedure (OI-UM-02): manual proposes E-stop → 48 V off/on → release → Clear E-STOP → Enable → HOME.
+- Interval of the periodic D-42 ENA-cut check (OI-UM-04; manual says "start of every test campaign").
+- Code signing of the distribution (F-B-PKG-02); recordings-folder picker in the GUI (F-B-PKG-04).
+- Optionally prepare the fixed-point step ramp now, so a second FW image is ready at the gate (OI-FW-45).

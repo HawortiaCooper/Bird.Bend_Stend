@@ -98,4 +98,8 @@ extern uint32_t fake_wdg_kicks, fake_wdg_timeout_ms;
 extern int32_t  fake_crit_depth, fake_crit_max_depth;
 void fake_sample(uint32_t t_us, int32_t raw);      /* calls on_afe_sample at t_us */
 
+/* FWR-17 core tests: run once inside the next tick, after safety_tick() took the input records
+ * (hal_uart_peek() is the sniffer's call in link_tick()) */
+extern void (*fake_peek_hook)(void);
+
 #endif /* FAKE_HAL_H */

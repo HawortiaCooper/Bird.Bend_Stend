@@ -34,7 +34,7 @@ import collections
 import logging
 import math
 import threading
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -62,6 +62,8 @@ RESUME_CONFIRM_NS = 500 * MS
 IDLE_WAIT_NS = 5 * S
 TAIL_NS = 1 * S                            # recording tail after the end (§10.3)
 TRACE_MAX = 200_000
+RUN_LOG_MAX_EVENTS = 5_000                 # SWR-28: bounded run log (data.csv E rows keep every event)
+RUN_LOG_MAX_ITEMS = 20_000                 # windows / results kept in memory and in sequence_runs (newest)
 HOME_TIMEOUT_S = 180.0
 SLIP_FRAC = 0.05
 BREAK_FRAC = 0.20
@@ -70,6 +72,12 @@ SLIP_FLOOR_N = 0.005 * FS_N
 ACTIVE = ("PREPARING", "RUNNING", "PAUSED", "WAITING_OPERATOR", "STOPPING")
 ENDED = ("FINISHED", "STOPPED", "ABORTED", "ERROR")
 DS, DF = INT_DS, INT_DF
+
+
+def _fn(v: float) -> str:
+    """Force for operator texts, 0.1 N, never "-0.0" (OI-UM-01)."""
+    t = f"{v:.1f}"
+    return "0.0" if t == "-0.0" else t
 
 
 class _Ended(Exception):
@@ -116,8 +124,8 @@ class HoldBreakGuard:
             self.recent.popleft()
         peak = max(v for _t, v in self.recent)
         if self.max_abs >= self.arm and peak - a > BREAK_FRAC * self.max_abs:
-            return (f"load dropped by {peak - a:.1f} N within 0.5 s at standstill (> 20 % of the running maximum "
-                    f"{self.max_abs:.1f} N)")
+            return (f"load dropped by {_fn(peak - a)} N within 0.5 s at standstill (> 20 % of the running maximum "
+                    f"{_fn(self.max_abs)} N)")
         return None
 
 
@@ -160,6 +168,7 @@ class _Run:
     step_idx: int | None = None
     loop_iters: tuple[int, ...] = ()
     step_t0_ns: int = 0
+    t_reached: int | None = None             # device time (t_us_u) the current step reached its target
     k_est: float = 50.0
     trim_iter: int = 0
     message: str = ""
@@ -183,10 +192,13 @@ class _Run:
     alm_prev: bool = False
     valid_on: bool = False
     fail_flags: list[str] = field(default_factory=list)
-    results: list[StepResult] = field(default_factory=list)
-    windows: list[dict[str, Any]] = field(default_factory=list)
-    events: list[dict[str, Any]] = field(default_factory=list)
+    results: collections.deque[StepResult] = field(default_factory=lambda: collections.deque(maxlen=RUN_LOG_MAX_ITEMS))
+    windows: collections.deque[dict[str, Any]] = field(
+        default_factory=lambda: collections.deque(maxlen=RUN_LOG_MAX_ITEMS))
+    events: collections.deque[dict[str, Any]] = field(
+        default_factory=lambda: collections.deque(maxlen=RUN_LOG_MAX_EVENTS))
     scale_log: list[dict[str, Any]] = field(default_factory=list)
+    dropped: dict[str, int] = field(default_factory=dict)      # SWR-28: entries dropped from the bounded logs
     last_scale: tuple[Any, Any] | None = None
     t_start_utc: str = ""
     collecting: bool = True
@@ -202,9 +214,9 @@ class SequenceExecutor:
         self._run: _Run | None = None
         self._last: _Run | None = None
         self._next_pub_ns = 0
-        self._last_pub: SeqStatus | None = None
         self._job: Any = None
         self.report_pending: _Run | None = None   # report to build when the operator's recording stops
+        self.closing = False                      # application shutdown (SWR-07): no recording tail, no report
 
     # ============================================================================== properties
     @property
@@ -242,7 +254,7 @@ class SequenceExecutor:
         with self._lock:
             self._run = run
         be.owner = OWNER
-        self._publish(force=True)
+        self._publish()
         self._job = self.runner.submit(self._main, run)
 
     def on_pause(self, source: str | None = None) -> None:
@@ -261,7 +273,7 @@ class SequenceExecutor:
             run.int_seq += 1
             run.message = "paused — Resume re-issues the interrupted step"
         self._event(run, "SEQ_PAUSE", f"source={source or '?'} exec={run.exec_idx}")
-        self._publish(force=True)
+        self._publish()
 
     def request_resume(self, source: str) -> bool:
         run = self._run
@@ -290,7 +302,7 @@ class SequenceExecutor:
                 run.state = "STOPPING"
             run.guard = None
             run.int_seq += 1
-        self._publish(force=True)
+        self._publish()
         return True
 
     def stop(self, source: str = "sequence") -> StopResult:
@@ -433,32 +445,37 @@ class SequenceExecutor:
             g.max_abs = max(g.max_abs, abs(f))
             barm = max(0.05 * abs(g.target), GUARD_ARM_N) if g.target is not None else GUARD_ARM_N
             if g.max_abs >= barm and abs(f) < (1.0 - BREAK_FRAC) * g.max_abs:
-                self._guard_trip(run, "BREAK_DETECTED", f"load dropped to {f:.1f} N from its running maximum "
-                                                        f"{g.max_abs:.1f} N (> 20 %)")
+                self._guard_trip(run, "BREAK_DETECTED", f"load dropped to {_fn(f)} N from its running maximum "
+                                                        f"{_fn(g.max_abs)} N (> 20 %)")
                 return
         ref = abs(g.target) if g.kind == "load" and g.target is not None else abs(g.ext)
         arm = max(SLIP_FRAC * ref, GUARD_ARM_N)
         if max(abs(g.f_start), abs(g.ext)) >= arm:
             thr = max(SLIP_FRAC * ref, SLIP_FLOOR_N)
             if g.exp * (g.ext - f) > thr:
-                self._guard_trip(run, "SLIP", f"load moved opposite to the motion by {abs(g.ext - f):.1f} N "
-                                              f"(> {thr:.1f} N) from {g.ext:.1f} N")
+                self._guard_trip(run, "SLIP", f"load moved opposite to the motion by {_fn(abs(g.ext - f))} N "
+                                              f"(> {_fn(thr)} N) from {_fn(g.ext)} N")
 
     # ============================================================================== status
     def tick(self, now: int) -> None:
         """Supervisor tick: ``seq.status`` at 20 Hz while running (SW-SCH-002) + on change."""
         run = self._run
         if run is not None and run.state in ACTIVE and now >= self._next_pub_ns:
-            self._publish(force=True)
+            self._publish()
 
-    def _publish(self, force: bool = False) -> None:
+    def _publish(self) -> None:
+        """``seq.status`` now (on every change of the run) and again <= 50 ms later from the Supervisor tick."""
         st = self.status()
         self._next_pub_ns = self._be.clock.monotonic_ns() + STATUS_PERIOD_NS
-        if force or st != self._last_pub:
-            self._last_pub = st
-            self._be.events.publish("seq.status", st)
+        self._be.events.publish("seq.status", st)
 
     def status(self) -> SeqStatus:
+        """Snapshot of the run, taken under the executor lock: step indices, label and phase are always changed
+        together under the same lock, so a status never pairs a new step's label with the previous step's phase."""
+        with self._lock:
+            return self._status_locked()
+
+    def _status_locked(self) -> SeqStatus:
         run = self._run
         if run is None:
             return SeqStatus()
@@ -551,11 +568,25 @@ class SequenceExecutor:
             run.valid_on = False
         return t
 
+    def _clear_valid_at_end(self, run: _Run, reason: str) -> Job:
+        """SWR-04 (SW-SEQ-004): a run that may have left VALID = 1 (refused ramp step, stop without the FW auto-clear,
+        link failure) clears it at its end — once directly, after a link failure as soon as the board answers."""
+        # Implements: SW-SEQ-004 (SWR-04)
+        if reason not in ("LINK_LOST", "ERROR") and self._be.device.connected:
+            try:
+                yield from self._be.device.set_valid_job(False)
+                run.valid_on = False
+                self._event(run, "VALID_OFF", f"sequence end ({reason})")
+                return
+            except Exception as exc:  # noqa: BLE001 — retried below while the board does not answer
+                log.warning("SET_VALID 0 at the sequence end failed: %s", exc)
+        yield from self._clear_valid_after_link_loss(run)
+
     def _clear_valid_after_link_loss(self, run: _Run) -> Job:
         """SWC-M4-03: a run that ended on a link failure while VALID may be 1 clears it as soon as the board answers
         again (SET_VALID 0 is the only frame sent after the end; ≤ 60 s, then the reconnect hook takes over)."""
         be = self._be
-        deadline = self._now() + 60 * S
+        deadline = self._now() + (0 if self.closing else 60 * S)
         while run.valid_on and self._now() < deadline:
             if be.device.connected:
                 try:
@@ -574,7 +605,7 @@ class SequenceExecutor:
         return run.last_t_u + d
 
     def _event(self, run: _Run, name: str, text: str) -> None:
-        run.events.append({"t_us_u": run.last_t_u, "name": name, "text": text})
+        _push(run, "events", {"t_us_u": run.last_t_u, "name": name, "text": text})
         self._be.record_event(name, text)
 
     def _f_now(self, run: _Run, n: int = T.MEAN_SAMPLES) -> tuple[float, int | None]:
@@ -594,14 +625,15 @@ class SequenceExecutor:
             yield from self._prepare(run)
             for exec_idx, (i, iters) in enumerate(iter_exec(run.seq)):
                 self._check(run)
-                with self._lock:
+                with self._lock:                           # new step: label and phase change together
                     run.exec_idx, run.step_idx, run.loop_iters, run.trim_iter = exec_idx, i, iters, 0
+                    run.phase, run.t_reached = "COMMAND", None
                     run.step_t0_ns = self._now()
                 step = run.seq.steps[i]
                 self._event(run, "SEQ_STEP", f"exec={exec_idx} step={i + 1} uid={step.uid} kind="
                                              f"{StepKind(step.kind).value} target={step.target} "
                                              f"iters={'.'.join(map(str, iters)) or '-'}")
-                self._publish(force=True)
+                self._publish()
                 while True:
                     try:
                         yield from self._run_step(run, exec_idx, i, iters)
@@ -610,6 +642,7 @@ class SequenceExecutor:
                         self._discard_window(run, "PAUSE")
                         yield from self._wait_resume(run)
                         with self._lock:
+                            run.phase, run.t_reached = "COMMAND", None     # the step is re-run from its command
                             run.step_t0_ns = self._now()
             self._set_end(run, "FINISHED", "COMPLETED", "sequence completed")
         except _Ended:
@@ -642,7 +675,7 @@ class SequenceExecutor:
                 run.state, run.phase = "RUNNING", "COMMAND"
         self._event(run, "SEQ_START", f"name={run.seq.name or '-'} steps={len(run.seq.steps)} "
                                       f"x_zero={run.x_zero:.4f} ref={run.seq.travel_ref}")
-        self._publish(force=True)
+        self._publish()
         self._check(run)
         yield None
 
@@ -660,14 +693,11 @@ class SequenceExecutor:
         while True:
             with self._lock:
                 run.phase = "PAUSED"
-            self._publish(force=True)
-            seen = run.int_seq
-            yield Poll(lambda: run.end is not None or run.resume_req is not None or run.int_seq != seen, 10**18)
+            self._publish()
+            yield Poll(lambda: run.end is not None or run.resume_req is not None, 10**18)
             if run.end is not None:
                 raise _Ended()
             src = run.resume_req
-            if src is None:
-                continue
             with self._lock:
                 run.phase = "RESUMING"
             fut = be.device.clear_async(pg.Cmd.RESUME)
@@ -699,7 +729,7 @@ class SequenceExecutor:
                     raise _Ended()
                 run.ctl, run.state, run.paused_source, run.message = "RUN", "RUNNING", None, "resumed"
             self._event(run, "SEQ_RESUME", f"source={src} exec={run.exec_idx}")
-            self._publish(force=True)
+            self._publish()
             return
 
     # ---- step dispatch -------------------------------------------------------------------------------
@@ -710,21 +740,15 @@ class SequenceExecutor:
             yield from self._travel(run, exec_idx, i, iters)
         elif kind == StepKind.LOAD:
             yield from self._load(run, exec_idx, i, iters)
-        elif kind == StepKind.HOLD:
-            t_r = run.last_t_u
-            if t_r is None:
-                yield from self._wait_dev(run, 0, self._now() + 2 * S, "data")
-                t_r = run.last_t_u or 0
-            yield from self._dwell(run, exec_idx, i, iters, t_r, hold=True)
+        elif kind == StepKind.HOLD:                        # t_reached = the newest sample (>= 1 sample needed)
+            yield from self._wait_dev(run, 0, self._now() + 2 * S, "data")
+            yield from self._dwell(run, exec_idx, i, iters, int(run.last_t_u or 0), hold=True)
         elif kind == StepKind.HOME:
             yield from self._home(run)
         elif kind == StepKind.TARE:
             yield from self._tare(run)
         else:
             yield from self._mark(run, step)
-
-    def _cap_planned_s(self, step: Any) -> float:
-        return float(step.settle_s) + float(step.capture_s)
 
     # ---- motion ----------------------------------------------------------------------------------------
     def _motion(self, run: _Run, ticket: Any, timeout_s: float, guard: _Guard | None, phase: str) -> Job:
@@ -742,7 +766,7 @@ class SequenceExecutor:
             raise _Ended()
         with self._lock:
             run.phase, run.guard = phase, guard
-        self._publish(force=True)
+        self._publish()
         ok = yield from self._poll(run, ticket.done, int(timeout_s * S))
         run.guard = None
         if not ok:
@@ -756,8 +780,10 @@ class SequenceExecutor:
         out = ticket.result()
         if out.kind == "REFUSED_PAUSED":
             yield from self._poll(run, lambda: run.ctl == "PAUSE", 2 * S)   # the PAUSED indication follows
-            self._check(run)
-            raise _Paused()
+            self._check(run)                                 # -> _Paused: the step is re-issued after Resume
+            self._set_end(run, "STOPPED", "STEP_REFUSED", "move refused (BLOCK PAUSED) without a PAUSED indication "
+                                                          f"{out.text}".rstrip())
+            raise _Ended()
         if out.kind != "DONE" or out.done is None:
             self._check(run)
             self._set_end(run, "STOPPED", "STEP_REFUSED", f"move not executed: {out.kind} {out.text}".strip())
@@ -830,6 +856,7 @@ class SequenceExecutor:
         """settle → capture (VALID window) → hold, all measured from ``t_r`` (device time); the standstill break
         guard (D-49 a) watches the whole dwell."""
         step = run.seq.steps[i]
+        run.t_reached = int(t_r)                            # also for a step that ends before its capture window
         settle = int(round(float(step.settle_s) * 1e6))
         cap = 0 if settle_only else int(round(float(step.capture_s) * 1e6))
         dwell_s = float(step.settle_s) + (0.0 if settle_only else float(step.capture_s))
@@ -852,13 +879,13 @@ class SequenceExecutor:
             with self._lock:
                 run.phase = "SETTLE"
                 run.window = win
-            self._publish(force=True)
+            self._publish()
             yield from self._wait_dev(run, t0, deadline, "the capture start")
             rate = be.pipeline.latest_copy().rate_sps or 80.0
             period = int(1e6 / rate)
             with self._lock:
                 run.phase = "CAPTURE"
-            self._publish(force=True)
+            self._publish()
             t_on32 = yield from self._set_valid(run, True)
             win.t_on = self._unwrap(run, t_on32)
             self._event(run, "VALID_ON", f"sequence window exec={exec_idx} t0={t0} t1={t1}")
@@ -872,7 +899,7 @@ class SequenceExecutor:
         t_end = t_r + int(round(dwell_s * 1e6))
         with self._lock:
             run.phase = "HOLD" if cap > 0 or hold else "SETTLE"
-        self._publish(force=True)
+        self._publish()
         if run.last_t_u is None or run.last_t_u < t_end:
             yield from self._wait_dev(run, t_end, deadline, "the end of the step time")
 
@@ -886,7 +913,7 @@ class SequenceExecutor:
         sw = SeqWindow(w.exec_idx, w.uid, w.loop_iters, (w.t0 / 1e6, w.t1 / 1e6),
                        None if w.t_on is None else w.t_on / 1e6, None if w.t_off is None else w.t_off / 1e6, True,
                        reason)
-        run.windows.append(self._win_dict(w, run, discarded=True, reason=reason))
+        _push(run, "windows", self._win_dict(w, run, discarded=True, reason=reason))
         self._be.events.publish("seq.window", sw)
         self._event(run, "SEQ_WINDOW_DISCARDED", f"exec={w.exec_idx} reason={reason}")
 
@@ -911,7 +938,7 @@ class SequenceExecutor:
                           rate_sps=median_rate_sps(in_t), target_n=tgt, tol_n=tol, ramp=ramp)
         run.windows_done += 1
         d = self._win_dict(w, run)
-        run.windows.append(d)
+        _push(run, "windows", d)
         self._be.events.publish("seq.window", SeqWindow(w.exec_idx, w.uid, w.loop_iters, (w.t0 / 1e6, w.t1 / 1e6),
                                                         None if w.t_on is None else w.t_on / 1e6,
                                                         None if w.t_off is None else w.t_off / 1e6))
@@ -925,7 +952,7 @@ class SequenceExecutor:
         self._add_result(run, res)
 
     def _add_result(self, run: _Run, res: StepResult) -> None:
-        run.results.append(res)
+        _push(run, "results", res)
         self._be.events.publish("seq.step_result", res)
         self._event(run, "SEQ_RESULT", f"exec={res.exec_idx} uid={res.uid} n={res.n} F={res.f_mean_n:.4f} "
                                        f"x={res.x_mean_mm:.4f} flags={'|'.join(res.flags) or '-'}")
@@ -940,8 +967,9 @@ class SequenceExecutor:
         self._add_result(run, StepResult(
             run.exec_idx, run.step_idx, step.uid, step.label, kind.value, run.loop_iters, step.target,
             {"travel": "mm", "load": "N"}.get(kind.value, ""), run.seq.tol(step) if kind == StepKind.LOAD else None,
-            flags, k_est_n_mm=run.k_est, f_end_n=f_end, x_end_mm=float("nan") if xe is None else xe - run.x_off,
-            trim_iterations=run.trim_iter, text=text))
+            flags, t_reached_s=None if run.t_reached is None else run.t_reached / 1e6, k_est_n_mm=run.k_est,
+            f_end_n=f_end, x_end_mm=float("nan") if xe is None else xe - run.x_off, trim_iterations=run.trim_iter,
+            text=text))
 
     # ---- load step (SW-SEQ-006) ------------------------------------------------------------------------
     def _bound_mm(self, direction: int) -> float | None:
@@ -998,9 +1026,9 @@ class SequenceExecutor:
                     f_b, _ = self._f_now(run)
                     run.fail_flags.append("NOT_REACHED")
                     self._fail_result(run, ("NOT_REACHED",), f"load {f_t:g} N not reached at the approach bound "
-                                                             f"{x_bound:.3f} mm (F = {f_b:.1f} N)")
+                                                             f"{x_bound:.3f} mm (F = {_fn(f_b)} N)")
                     self._set_end(run, "STOPPED", "NOT_REACHED", f"step {i + 1}: load {f_t:g} N not reached at the "
-                                                                 f"approach bound (F = {f_b:.1f} N)")
+                                                                 f"approach bound (F = {_fn(f_b)} N)")
                     raise _Ended()
                 if done.reason != "LOAD_THRESHOLD":
                     self._set_end(run, "STOPPED", "STEP_REFUSED", f"approach ended {done.reason}")
@@ -1019,7 +1047,7 @@ class SequenceExecutor:
             for it in range(int(s.trim_max_iter) + 1):
                 with self._lock:
                     run.phase, run.trim_iter = "TRIM", it
-                self._publish(force=True)
+                self._publish()
                 yield from self._wait_dev(run, t_done + int(T.SETTLE_AFTER_DONE_S * 1e6), self._now() + 5 * S,
                                           "the trim settle time")
                 f_m, t_m = self._f_now(run)
@@ -1075,10 +1103,7 @@ class SequenceExecutor:
         be = self._be
         with self._lock:
             run.phase = "TARE"
-        self._publish(force=True)
-        last_move = None
-        for (t, _x, _f, _r) in run.recent:
-            last_move = t
+        self._publish()
         # SW-TARE-003: ≥ 1 s after the last move (device time)
         yield from self._poll(run, lambda: not be._gate_snapshot().moved_recently, 3 * S)  # noqa: SLF001
         win = be.session.get().tare_window_s
@@ -1098,7 +1123,6 @@ class SequenceExecutor:
         if not ok:
             self._set_end(run, "STOPPED", "TARE_REFUSED", "FW thresholds not verified after the tare")
             raise _Ended()
-        del last_move
 
     def _mark(self, run: _Run, step: Any) -> Job:
         self._event(run, "SEQ_MARK", step.label or "mark")
@@ -1106,7 +1130,7 @@ class SequenceExecutor:
             with self._lock:
                 run.state, run.phase, run.continue_req = "WAITING_OPERATOR", "WAIT_OPERATOR", False
                 run.message = f"waiting for the operator: {step.label or 'Continue'}"
-            self._publish(force=True)
+            self._publish()
             yield from self._poll(run, lambda: run.continue_req, 10**18)
             with self._lock:
                 run.state, run.continue_req, run.message = "RUNNING", False, ""
@@ -1130,22 +1154,26 @@ class SequenceExecutor:
         be.motion.resync()
         self._event(run, "SEQ_END", f"state={end[0]} reason={end[1]} {end[2]}")
         be.events.log(f"sequence {end[0]}: {end[2]}", logging.INFO if end[0] == "FINISHED" else logging.WARNING)
-        self._publish(force=True)
-        if run.valid_on and end[1] in ("LINK_LOST", "ERROR"):
-            yield from self._clear_valid_after_link_loss(run)
+        self._publish()
+        if run.valid_on:                            # SWR-04: VALID never left at 1 after a run, whatever the end
+            yield from self._clear_valid_at_end(run, end[1])
         log_entry = self.run_log(run)
         if run.started_recording and be.recorder.state in ("RECORDING", "FAILED"):
-            yield Sleep(TAIL_NS)
+            if not self.closing:
+                yield Sleep(TAIL_NS)
             run.collecting = False
             be.recorder.meta.setdefault("sequence_runs", []).append(log_entry)
+            if self.closing:                        # SWR-07: the sidecar says the application closed mid-run
+                be.recorder.meta["closed_during_sequence"] = True
             be.record_stop()
-            self._build_report(run)
+            if not self.closing:                    # shutdown: rebuilt offline from the recording (SW-REP-003)
+                self._build_report(run)
         else:
             run.collecting = False
             if be.recorder.state in ("RECORDING", "FAILED"):
                 be.recorder.meta.setdefault("sequence_runs", []).append(log_entry)
                 self.report_pending = run
-        self._publish(force=True)
+        self._publish()
         return None
 
     def _build_report(self, run: _Run) -> None:
@@ -1169,7 +1197,7 @@ class SequenceExecutor:
         run, self.report_pending = self.report_pending, None
         if run is not None:
             self._build_report(run)
-            self._publish(force=True)
+            self._publish()
 
     def run_log(self, run: _Run) -> dict[str, Any]:
         """Sidecar entry ``meta.json`` → ``sequence_runs[]``: everything the offline report needs (SW-REP-003)."""
@@ -1180,7 +1208,16 @@ class SequenceExecutor:
                 "message": end[2], "k_est_final_n_mm": run.k_est, "pull_dir": run.seq.pull_dir,
                 "windows": list(run.windows), "results": [result_to_dict(r) for r in run.results],
                 "events": list(run.events), "scale_log": list(run.scale_log),
-                "x_off_mm": run.x_off}
+                "x_off_mm": run.x_off, "truncated": dict(run.dropped)}
+
+
+def _push(run: _Run, name: str, item: Any) -> None:
+    """SWR-28: append to a bounded run-log deque; the oldest entry is dropped and counted (an endless loop must not
+    grow the process / the sidecar without bound)."""
+    dq = getattr(run, name)
+    if dq.maxlen is not None and len(dq) >= dq.maxlen:
+        run.dropped[name] = run.dropped.get(name, 0) + 1
+    dq.append(item)
 
 
 def result_from_window(ws: Any, *, exec_idx: int, step_idx: int, uid: str, label: str, kind: str,
@@ -1197,10 +1234,6 @@ def result_from_window(ws: Any, *, exec_idx: int, step_idx: int, uid: str, label
                       f.min, f.max, f.se, f.drift, x.mean, x.std, x.drift, r.mean, r.std, r.min, r.max, r.se, r.drift,
                       dict(ws.stats), None if t_reached is None else t_reached / 1e6, (t0 / 1e6, t1 / 1e6), k_est,
                       f_end, x_end, ws.ramp, trim_iter, "")
-
-
-def replace_result(res: StepResult, **kw: Any) -> StepResult:
-    return replace(res, **kw)
 
 
 __all__ = ["SequenceExecutor", "OWNER", "result_from_window", "STATUS_PERIOD_NS"]

@@ -218,10 +218,11 @@ static void probe_arm(uint8_t mode, bool falling, uint16_t psc)
         TIM8->CCMR2 = 0u;
         TIM8->CCER = TIM_CCER_CC1E | TIM_CCER_CC1P | TIM_CCER_CC2E;
         TIM8->SMCR = (6u << TIM_SMCR_TS_Pos) | (4u << TIM_SMCR_SMS_Pos);  /* TI2FP2 resets the counter */
+        TIM8->CR1 = TIM_CR1_URS;                 /* OBS-M3-01: UIF only on a counter overflow */
         TIM8->EGR = TIM_EGR_UG;
         TIM8->SR = 0u;
         TIM8->DIER = TIM_DIER_CC2IE;
-        TIM8->CR1 = TIM_CR1_CEN;
+        TIM8->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
     } else {
         TIM8->CCMR1 = TIM_CCMR1_CC1S_0 | TIM_CCMR1_CC2S_0;              /* IC1 <- TI1, IC2 <- TI2 */
         TIM8->CCMR2 = TIM_CCMR2_CC3S_0 | TIM_CCMR2_CC4S_0;
@@ -252,6 +253,14 @@ void TIM8_CC_IRQHandler(void)                 /* PWM-input statistics (lowest pr
     }
     p = TIM8->CCR2;                           /* period (clears CC2IF) */
     h = TIM8->CCR1;                           /* high width of the previous pulse */
+    if ((TIM8->SR & TIM_SR_UIF) != 0u) {
+        /* OBS-M3-01: the 16-bit counter (reset at each rising edge, URS = 1) overflowed since the
+         * previous capture: the period is >= 65 536 probe ticks and CCR2 has wrapped. Recorded as
+         * 0xFFFFFFFF, so the max word shows "out of range" instead of a silently wrapped value
+         * (choose a larger probe prescaler). The high width never wraps (PW <= 100 us < 364 us). */
+        TIM8->SR = ~TIM_SR_UIF;
+        p = 0xFFFFFFFFu;
+    }
     if (s_pwm_first) {
         /* DEF-HG-01: the first rising edge after arming measures the time since arming (CCR2) and a
          * stale CCR1 - not a PUL period / width; it only starts the measurement (not counted) */
@@ -401,7 +410,7 @@ void EXTI2_IRQHandler(void)                    /* HANG ISR1: level-1 storm */
         EXTI->SWIER = 1u << 2;
     } else {
         s_hang_storm = false;
-        EXTI->IMR &= ~(1u << 2);
+        exti_imr_set(2u, false);
     }
 }
 
@@ -422,7 +431,7 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
     memset(resp, 0, PROTO_MEAS_BODY_LEN);
     if (op != (uint8_t)MEAS_OP_STATIC_LEVEL && g_meas_static != 0u) {
         g_meas_static = 0u;                    /* STATIC_LEVEL released before any other op */
-        TIM2->CCMR1 = (TIM2->CCMR1 & ~TIM_CCMR1_OC1M) | TIM_CCMR1_OC1M_2;
+        TIM2->CCMR1 = TIM_CCMR1_OC1PE | TIM_CCMR1_OC1M_2;   /* constant: force inactive (OBS-RC-3) */
     }
     switch (op) {
     case MEAS_OP_INFO:
@@ -534,22 +543,28 @@ size_t hal_meas_cmd(const uint8_t *req, size_t n, uint8_t *resp, size_t max)
             NVIC_EnableIRQ(TIM8_UP_TIM13_IRQn);
         } else {
             s_hang_storm = true;
-            EXTI->IMR |= 1u << 2;
+            exti_imr_set(2u, true);
             NVIC_EnableIRQ(EXTI2_IRQn);
             EXTI->SWIER = 1u << 2;
         }
         break;
-    case MEAS_OP_STATIC_LEVEL:                 /* only NOT_ENABLED (core); timer stopped */
+    case MEAS_OP_STATIC_LEVEL: {               /* only NOT_ENABLED, PUL only with ENA disabled (core) */
+        /* OBS-RC-3: check + constant write + flag in one PRIMASK section, so an E-stop reaction
+         * (level 0: force inactive, flag 0) lands entirely before or after it and is never undone */
+        uint32_t pm = __get_PRIMASK();
+        __disable_irq();
         if ((TIM2->CR1 & TIM_CR1_CEN) == 0u) {
             if (sel == (uint8_t)MEAS_PIN_PUL) {
-                TIM2->CCMR1 = (TIM2->CCMR1 & ~TIM_CCMR1_OC1M) |
+                TIM2->CCMR1 = TIM_CCMR1_OC1PE |
                               ((a != 0u) ? (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_0) : TIM_CCMR1_OC1M_2);
             } else {
                 gpio_write(PIN_DIR_PORT, PIN_DIR_BIT, a != 0u);
             }
             g_meas_static = 1u;                /* released at the next op, hal_step_start, hal_ena_set */
         }
+        __set_PRIMASK(pm);
         break;
+    }
 #if defined(HW_MEAS_DWT) && HW_MEAS_DWT
     case MEAS_OP_DWT: {                        /* section a (checked 0...31 by the core) */
         dwt_stat_t d;

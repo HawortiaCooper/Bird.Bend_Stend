@@ -56,7 +56,7 @@ class TestHooks:
         if "pipeline" not in self._stalled:
             be.pipeline.step(now)
         if "supervisor" not in self._stalled:
-            be.device.tick(now)
+            be._tick(now)  # noqa: SLF001 — the whole Supervisor body (SWR-20: jog refresh, seq tick, liveness …)
         if "worker" not in self._stalled:
             be.worker.step(now)
         if "sequencer" not in self._stalled:

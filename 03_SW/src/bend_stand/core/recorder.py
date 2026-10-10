@@ -106,6 +106,18 @@ def _csv_text(s: str) -> str:
     return re.sub(r"[,\r\n]+", ";", str(s))
 
 
+#: first characters a spreadsheet treats as the start of a formula (CSV / formula injection, OWASP)
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_cell(s: object) -> str:
+    """One operator-text CSV field (marks in ``samples.csv``): separators / line breaks removed as in ``_csv_text``
+    and a leading ``= + - @ TAB CR`` neutralised with a ``'`` prefix, so a spreadsheet shows the text instead of
+    evaluating it (review finding SWR-23). Implements: SW-ACQ-003"""
+    t = _csv_text(str(s))
+    return "'" + t if t.startswith(_FORMULA_START) else t
+
+
 def _g(v: float) -> str:
     return "nan" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:.9g}"
 
@@ -128,7 +140,7 @@ def append_sample(path: Path, row: SampleRow) -> None:
     custom = ";".join(f"{k}={v}" for k, v in m.custom)
     vals = (row.utc, f"{row.t_dev_s:.6f}", f"{row.window_s:g}", str(row.n), _g(row.f_mean), _g(row.f_std),
             str(row.f_n), _g(row.x_mean), _g(row.x_std), _g(row.raw_mean), _g(row.raw_std), str(row.raw_n),
-            _csv_text(m.specimen), _csv_text(m.number), _csv_text(m.operator), _csv_text(m.notes), _csv_text(custom))
+            csv_cell(m.specimen), csv_cell(m.number), csv_cell(m.operator), csv_cell(m.notes), csv_cell(custom))
     with open(path, "a", encoding="utf-8", newline="\n") as f:
         if new:
             f.write(",".join(SAMPLE_COLUMNS) + "\n")
@@ -178,6 +190,10 @@ class Recorder:
         self._last_t_dev: float | None = None
         self._gap: list[int] | None = None          # [count, first t_us_u, last t_us_u] of a queue overflow
         self._warned_fill = False
+        self._closing = False                       # SWR-05: the recording has ended (rows after it: not part of it)
+        self.rows_after_end = 0
+        self._end_host_ns: int | None = None        # SWD-P3-01: newest receive stamp of the previous recording
+        self.rows_stale = 0                         # rows received before that end instant, delivered after a start
         self._next_free_check = 0
         self.mark_edits: list[dict[str, Any]] = []
 
@@ -194,10 +210,16 @@ class Recorder:
         wall = wall_utc_iso(self.clock)
         folder = unique_folder(root_p, folder_name(wall, specimen, number))
         self.folder = folder
-        self.rows = self.rows_lost = 0
+        with self._cv:                              # SWR-05: nothing of a previous recording survives a start
+            self._q.clear()
+            self._gap = None
+            self._warned_fill = False
+            self._closing = False
+            self.rows_stale = 0
+            if self._end_host_ns is not None:
+                self._last_host = max(self._last_host, self._end_host_ns)
+        self.rows = self.rows_lost = self.rows_after_end = 0
         self.failure = None
-        self._gap = None
-        self._warned_fill = False
         self.mark_edits = []
         self._next_free_check = self.clock.monotonic_ns() + FREE_CHECK_NS
         self.meta = {"schema": "bird.bend.recording", "schema_version": 1, "start_utc": wall,
@@ -214,7 +236,8 @@ class Recorder:
             f.write(f"# {k} {_csv_text(str(v)).replace(chr(10), ' ')}\n")
         f.write(",".join(COLUMNS) + "\n")
         self._f = f
-        self.state = "RECORDING"
+        with self._cv:                              # SWD-P3-01: state changes under the enqueue lock
+            self.state = "RECORDING"
         if not self.clock.is_lockstep:
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, name="bend-recorder", daemon=True)
@@ -223,6 +246,11 @@ class Recorder:
         return folder
 
     def stop(self, extra_meta: Mapping[str, Any] | None = None) -> Path | None:
+        """End the recording. Rows received until the end instant (``_closing`` set, after the first sidecar write)
+        are written — none is left in the queue for the next recording; rows received after it are not part of this
+        recording (``rows_after_end``, informative). The sidecar is rewritten if the final drain changed the counts
+        (SWR-05)."""
+        # Implements: SW-ACQ-002, SW-ACQ-004 (every frame exactly once, never dropped silently; SWR-05)
         if self.state not in ("RECORDING", "FAILED"):
             return None
         self._stop.set()
@@ -232,6 +260,20 @@ class Recorder:
         if t is not None:
             t.join(2.0)
         self.step()
+        f = self._f
+        if f is not None:
+            try:
+                f.flush()
+            except OSError as exc:  # pragma: no cover
+                self._failed(exc)
+        self.meta.update(dict(extra_meta or {}))
+        self.meta["mark_edits"] = list(self.mark_edits)
+        self.meta["stop_utc"] = wall_utc_iso(self.clock)
+        counts = self._write_sidecar()
+        with self._cv:
+            self._closing = True                     # the end instant: later rows are not part of this recording
+            self._end_host_ns = self._last_host       # newest receive stamp that belongs to this recording
+        self.step()                                  # rows received while the sidecar was written
         f, self._f = self._f, None
         if f is not None:
             try:
@@ -240,21 +282,27 @@ class Recorder:
                 f.close()
             except OSError as exc:  # pragma: no cover
                 self._failed(exc)
-        complete = self.failure is None and self.rows_lost == 0
-        self.meta.update(dict(extra_meta or {}))
-        self.meta["mark_edits"] = list(self.mark_edits)
-        self.meta["stop_utc"] = wall_utc_iso(self.clock)
-        self.meta["integrity"] = {"complete": complete, "rows_written": self.rows, "rows_lost": self.rows_lost,
-                                  "failures": [self.failure] if self.failure else []}
+        if self._counts() != counts:
+            self._write_sidecar()
+        with self._cv:
+            self.state = "IDLE"
+        self._publish()
+        return self.folder
+
+    def _counts(self) -> tuple[int, int, str | None]:
+        return self.rows, self.rows_lost, self.failure
+
+    def _write_sidecar(self) -> tuple[int, int, str | None]:
+        counts = self._counts()
+        self.meta["integrity"] = {"complete": self.failure is None and self.rows_lost == 0, "rows_written": self.rows,
+                                  "rows_lost": self.rows_lost, "failures": [self.failure] if self.failure else []}
         folder = self.folder
         if folder is not None:
             try:
                 atomic_write_json(folder / "meta.json", self.meta)
             except (OSError, ValueError) as exc:  # pragma: no cover
                 log.error("sidecar rewrite failed: %s", exc)
-        self.state = "IDLE"
-        self._publish()
-        return folder
+        return counts
 
     def fail(self, exc: BaseException, after_rows: int = 0) -> None:
         """Test hook (g): raise ``exc`` from the next write after ``after_rows`` more rows."""
@@ -280,12 +328,23 @@ class Recorder:
         self._enqueue(_SwRow(0, self._last_t_u, self._last_t_dev, name, text), None)
 
     def _enqueue(self, item: DataRow | _EventRow | _SwRow, t_host: int | None) -> None:
-        if self.state != "RECORDING":
-            if self.state == "FAILED":
-                self.rows_lost += 1
-            return
+        """Pipeline / any thread. The decision (end instant, state, stale row) and the append happen under one lock
+        hold together with the state changes of ``start`` / ``stop`` (SWD-P3-01): a row can no longer pass the check
+        for one recording and land in the next. A row received before the previous recording's end instant but
+        delivered after a new start is not part of the new recording (``rows_stale``)."""
+        # Implements: SW-ACQ-002, SW-ACQ-004 (every frame exactly once, in its recording; SWD-P3-01)
         warn = False
         with self._cv:
+            if self._closing:                       # after the end instant of a stopping recording (SWR-05)
+                self.rows_after_end += 1
+                return
+            if self.state != "RECORDING":
+                if self.state == "FAILED":
+                    self.rows_lost += 1
+                return
+            if t_host is not None and self._end_host_ns is not None and int(t_host) <= self._end_host_ns:
+                self.rows_stale += 1
+                return
             if t_host is None:
                 assert isinstance(item, _SwRow)
                 item.t_host_ns = self._last_host

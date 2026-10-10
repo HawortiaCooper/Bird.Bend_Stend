@@ -79,6 +79,8 @@ class SafeWizard(SafeDialog):
     TITLE = "Wizard"
     START_GATE: GateId | None = None
     CONFIRM_CID = "C-05"
+    CONFIRM_CIDS: Mapping[str, str] = {}          # ConfirmRequest.code → dialog id (overrides CONFIRM_CID)
+    INFO_PREFIXES: tuple[str, ...] = ()           # warnings that are information only
 
     noSpecimenRequested = Signal()
     message = Signal(str, str)
@@ -310,6 +312,13 @@ class SafeWizard(SafeDialog):
         st = self.state
         if st is None or not st.can_continue:
             return
+        if st.needs_confirmation is not None:     # a pending engine confirmation is answered in its dialog (SAF-SW-004),
+            dlg = self.confirm_dialog             # never by a plain continue_() (it would only return an error)
+            if dlg is not None and getattr(dlg, "outcome", "") == "pending" and dlg.isVisible():
+                dlg.raise_()
+            else:
+                self._confirm_continue(st.needs_confirmation)
+            return
         vals = self.inputs()
         try:
             self.engine.continue_(vals or None, confirmed=False)
@@ -331,8 +340,17 @@ class SafeWizard(SafeDialog):
             self.message.emit(f"{self.TITLE}: {_err_text(exc)}", "warn")
         self.refresh()
 
+    def confirm_cid(self, req: Any) -> str:
+        """Confirmation dialog for an engine ``ConfirmRequest`` (display mapping on ``req.code``; default
+        :attr:`CONFIRM_CID`)."""
+        return self.CONFIRM_CIDS.get(str(getattr(req, "code", "") or ""), self.CONFIRM_CID)
+
+    def is_info(self, warning: str) -> bool:
+        """Warnings shown as information (grey "(i)") instead of "⚠" — display mapping, default none."""
+        return any(str(warning).startswith(p) for p in self.INFO_PREFIXES)
+
     def _confirm_continue(self, req: Any) -> None:
-        dlg = make_confirm(self, self.CONFIRM_CID, text=getattr(req, "text", None) or None)
+        dlg = make_confirm(self, self.confirm_cid(req), text=getattr(req, "text", None) or None)
         vals = self.inputs()
         dlg.confirmed.connect(lambda: self._continue_confirmed(vals))
         self.confirm_dialog = dlg
@@ -462,7 +480,8 @@ class SafeWizard(SafeDialog):
                     lo, hi = min(xs + [0.0]), max(xs)
                     self.fit_line.setData([lo, hi], [k * lo + b, k * hi + b])
         msgs = [f"<span style='color:#a00000'>✗ {e}</span>" for e in st.errors]
-        msgs += [f"<span style='color:#805000'>⚠ {w}</span>" for w in st.warnings]
+        msgs += [f"<span style='color:#606060'>(i) {w}</span>" if self.is_info(w)
+                 else f"<span style='color:#805000'>⚠ {w}</span>" for w in st.warnings]
         self.messages.setText("<br>".join(msgs))
         self.messages.setVisible(bool(msgs))
         abort = ""

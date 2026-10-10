@@ -56,8 +56,9 @@ def test_seam_contract_equals_readme():
     assert d == [] or d[0].startswith("02_FW/src/hal/hal_*.h absent"), d
 
 
-def test_build_log_and_probe_identity(tw):
-    log = (TOOLS / "fw_twin" / "build" / "build_probe.log").read_text(encoding="utf-8")
+def test_build_log_and_probe_identity(tw, probe_exe):
+    # OBS-RC-8: the log lies next to the private binary (build.private_build_dir(): $BEND_TWIN_BUILD_DIR or a temp dir)
+    log = (probe_exe.parent / "build_probe.log").read_text(encoding="utf-8")
     assert "exit: 0" in log
     info = TwinLink(tw).cmd("GET_INFO")["info"]
     assert info["build"] == "PROBE-NOT-FW" and "TWIN" in info["features"]
@@ -672,3 +673,105 @@ def test_specimen_m4_relaxed_one_sided_specimen_never_reverses(tw):
     tw.advance_ms(5000)
     w = _spec_at(tw, 500)
     assert w["load_n"] == pytest.approx(25.0 - w["relax_n"]) and w["load_n"] < 0
+
+
+# ---------------------------------------------------------------------------------------------- move stall (v0.7.5)
+def _pul(tw: Twin, since_us: float = 0.0, level: int | None = None) -> list[dict]:
+    e = [x for x in tw.act("query", what="edges", since_us=since_us)["edges"] if x["pin"] == "PUL"]
+    return [x for x in e if level is None or x["level"] == level]
+
+
+def _to_low_phase(tw: Twin) -> None:
+    while _pul(tw)[-1]["level"] == 1:                              # stall call in the low phase (exact shift)
+        tw.advance_us(1)
+
+
+def test_step_stall_freezes_the_step_output_and_resumes_the_plan(tw):
+    """ICD v0.7.5 vocabulary `inject step_stall` (tools/README "Move stall"): no pulse, no count, no world motion,
+    still running for `duration_ms`; afterwards the rest of the running period and the unchanged plan: exactly one
+    rise interval grows by the frozen time, the train ends complete."""
+    link = TwinLink(tw)
+    _train(tw, link, 100, 9000)                                    # 100 us period
+    tw.advance_us(2_000)
+    _to_low_phase(tw)
+    q0, x0, t_call = tw.act("query", what="pulses"), tw.act("query", what="world")["x_um_true"], tw.now_us
+    assert tw.act("inject", fault="step_stall", duration_ms=10)["ok"]
+    tw.advance_ms(9)
+    q = tw.act("query", what="pulses")
+    assert q["running"] and q["step_stalled"] and q["pos_steps"] == q0["pos_steps"] and q["count"] == q0["count"]
+    assert tw.act("query", what="world")["x_um_true"] == x0 and _pul(tw, t_call) == []
+    tw.advance_ms(20)
+    q = tw.act("query", what="pulses")
+    assert q["count"] == 100 and q["pos_steps"] == 100 and not q["running"] and not q["step_stalled"]
+    assert tw.act("query", what="world")["x_um_true"] == pytest.approx(125.0)
+    beg = [s for s in tw.seam_log if s["call"] == "step_stall_begin"]
+    end = [s for s in tw.seam_log if s["call"] == "step_stall_end"]
+    assert len(beg) == len(end) == 1 and beg[0]["t_us"] == pytest.approx(t_call)
+    assert float(beg[0]["args"]) == pytest.approx(t_call + 10_000.0)
+    assert float(end[0]["args"]) == pytest.approx(10_000.0) and end[0]["t_us"] == pytest.approx(t_call + 10_000.0)
+    rises = [x["t_us"] for x in _pul(tw, level=1)]
+    gaps = [b - a for a, b in zip(rises, rises[1:])]
+    assert [g for g in gaps if g > 150.0] == [pytest.approx(10_100.0, abs=0.01)]
+    assert all(g == pytest.approx(100.0, abs=0.01) for g in gaps if g <= 150.0)
+
+
+def test_step_stall_high_phase_and_armed_while_idle(tw):
+    """A pulse already high completes (and counts) before the freeze; injected while idle the stall is armed and
+    starts with the next move (its first pulse only after `duration_ms`); a negative duration is refused."""
+    link = TwinLink(tw)
+    assert tw.act("inject", fault="step_stall", duration_ms=-1)["ok"] is False
+    _train(tw, link, 50, 9000)
+    tw.advance_us(1_000)
+    while _pul(tw)[-1]["level"] == 0:
+        tw.advance_us(1)
+    n_at, t_call = tw.act("query", what="pulses")["pos_steps"], tw.now_us
+    tw.act("inject", fault="step_stall", duration_ms=5)
+    tw.advance_ms(1)
+    fall = _pul(tw, level=0)[-1]["t_us"]
+    beg = [s for s in tw.seam_log if s["call"] == "step_stall_begin"][-1]
+    assert tw.act("query", what="pulses")["pos_steps"] == n_at + 1 and beg["t_us"] == pytest.approx(fall)
+    tw.advance_ms(10)
+    q = tw.act("query", what="pulses")
+    assert q["pos_steps"] == 50 and not q["running"]
+    end = [s for s in tw.seam_log if s["call"] == "step_stall_end"][-1]
+    assert float(end["args"]) == pytest.approx(t_call + 5_000.0 - fall, abs=0.01)     # frozen from the fall
+    tw.act("inject", fault="step_stall", duration_ms=8)            # idle: armed for the next start
+    assert tw.act("query", what="pulses")["step_stall_armed"]
+    tw.advance_ms(3)
+    t_s = tw.now_us
+    _train(tw, link, 10, 9000)
+    tw.advance_ms(5)
+    q = tw.act("query", what="pulses")
+    assert _pul(tw, t_s) == [] and q["running"] and q["step_stalled"] and not q["step_stall_armed"]
+    tw.advance_ms(10)
+    first = _pul(tw, t_s, level=1)[0]["t_us"]
+    assert first >= t_s + 8_000.0 and tw.act("query", what="pulses")["pos_steps"] == 60
+
+
+def test_step_stall_until_a_stop_and_reset(tw):
+    """Without `duration_ms` (or 0) the stall lasts until the move ends: a stop (probe HALT → hal_step_stop_now,
+    CLEAN) halts the frozen timer at once at the frozen position (seam log `step_stall_halted`) and ends the stall,
+    so the next move runs normally; an MCU reset drops an armed stall."""
+    link = TwinLink(tw)
+    _train(tw, link, 200, 9000)
+    tw.advance_us(3_000)
+    _to_low_phase(tw)
+    n0 = tw.act("query", what="pulses")["pos_steps"]
+    tw.act("inject", fault="step_stall")
+    tw.advance_ms(500)
+    assert tw.act("query", what="pulses")["step_stalled"]
+    t_h = tw.now_us
+    link.cmd("HALT")
+    q = tw.act("query", what="pulses")
+    assert not q["running"] and not q["step_stalled"] and q["pos_steps"] == n0
+    assert [s for s in tw.seam_log if s["call"] == "step_stall_halted"]
+    tw.advance_ms(20)
+    assert _pul(tw, t_h) == []
+    _train(tw, link, 10, 9000)
+    tw.advance_ms(5)
+    assert tw.act("query", what="pulses")["pos_steps"] == n0 + 10
+    tw.act("inject", fault="step_stall", duration_ms=1000)
+    assert tw.act("query", what="pulses")["step_stall_armed"]
+    tw.act("reset", cause="pin")
+    tw.advance_ms(5)
+    assert tw.act("query", what="pulses")["step_stall_armed"] is False

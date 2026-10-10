@@ -12,6 +12,7 @@ Implements: SW-PLT-002, SAF-SW-005 (indicator change events), NFR-004 (bounded h
 from __future__ import annotations
 
 import collections
+import heapq
 import logging
 import threading
 from collections.abc import Callable
@@ -23,6 +24,9 @@ from bend_stand.core.observers import ObserverList, is_weakly_held
 
 log = logging.getLogger("bend_stand.events")
 MAX_EVENTS = 10_000
+#: OBS-P3-04: high-rate topics keep their own short history, so they cannot fill the 10 000 records with
+#: ≈ 0.8 kB status snapshots (20 Hz ``seq.status`` ≈ 13 MB) and push the rare events out
+HIGH_RATE_HISTORY: dict[str, int] = {"seq.status": 2_000}
 
 Observer = Callable[[EventRecord], None]
 
@@ -38,7 +42,9 @@ class EventBus:
         self._subs: dict[str, ObserverList[Observer]] = {}
         self._topic_of: dict[Token, str] = {}
         self._next = 1
-        self._history: collections.deque[EventRecord] = collections.deque(maxlen=maxlen)
+        self._history: collections.deque[tuple[int, EventRecord]] = collections.deque(maxlen=maxlen)
+        self._hot: dict[str, collections.deque[tuple[int, EventRecord]]] = {
+            t: collections.deque(maxlen=n) for t, n in HIGH_RATE_HISTORY.items()}
         self.published = 0
 
     def subscribe(self, topic: str, cb: Observer, *, weak: bool = True) -> Token:
@@ -64,8 +70,9 @@ class EventBus:
     def publish(self, topic: str, payload: Any = None) -> EventRecord:
         rec = EventRecord(topic, self.clock.monotonic_ns(), payload)
         with self._lock:
-            self._history.append(rec)
             self.published += 1
+            hot = self._hot.get(topic)
+            (hot if hot is not None else self._history).append((self.published, rec))
             lists = [self._subs.get(topic), self._subs.get("*")]
         for lst in lists:
             if lst is not None:
@@ -74,9 +81,11 @@ class EventBus:
 
     def history(self, topic: str | None = None, limit: int | None = None) -> list[EventRecord]:
         with self._lock:
-            items = list(self._history)
-        if topic is not None:
-            items = [e for e in items if e.topic == topic]
+            if topic is not None and topic in self._hot:
+                items = [r for _n, r in self._hot[topic]]
+            else:
+                merged = heapq.merge(self._history, *self._hot.values()) if topic is None else iter(self._history)
+                items = [r for _n, r in merged if topic is None or r.topic == topic]
         return items[-limit:] if limit else items
 
     def log(self, text: str, level: int = logging.INFO, **data: Any) -> EventRecord:

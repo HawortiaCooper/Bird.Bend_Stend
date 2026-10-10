@@ -38,6 +38,7 @@
 #define MDWT_HX_READ        20u  /* one HX711 shift-in (24 + 1...3 bits, BASEPRI windows inside) */
 #define MDWT_EMPTY_PAIR     21u  /* calibration: empty stamp pair (16 at boot) */
 #define MDWT_REC_CALL       22u  /* calibration: one record call (16 at boot) */
+#define MDWT_ISR_ESTOP_CB   23u  /* EXTI3 deferred E-stop core callback (level 1, v0.8) */
 #define MDWT_CALIB_SCRATCH  31u  /* internal: target of the calibration record calls (kept 0) */
 #define MDWT_SECTIONS       32u
 

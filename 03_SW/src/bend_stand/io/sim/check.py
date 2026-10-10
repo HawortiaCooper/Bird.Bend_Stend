@@ -25,7 +25,7 @@ from bend_stand.calc.paramrules import set_violation
 from bend_stand.core import params_gen as pgen
 from bend_stand.core import protocol_gen as pg
 
-STATE_SCHEMA = 3                       # ICD v0.7: + unhomed_origin_um (D-43 b); stop_btn_* ignored (v0.5)
+STATE_SCHEMA = 4                       # ICD v0.7: + unhomed_origin_um (D-43 b); v0.7.5: + ena_on (D-50 c)
 B = pg.Block
 MOVING = ("MOVE_ABS", "JOG", "MOVE_UNTIL_LOAD", "HOMING", "STOPPING")
 MOTION = (pg.Cmd.MOVE_ABS, pg.Cmd.MOVE_UNTIL_LOAD, pg.Cmd.HOME)
@@ -33,7 +33,7 @@ MOTION = (pg.Cmd.MOVE_ABS, pg.Cmd.MOVE_UNTIL_LOAD, pg.Cmd.HOME)
 
 @dataclass
 class SimCheckState:
-    """Acceptance-relevant FW state (ICD §6; ``check_vectors.json`` state keys, schema 2)."""
+    """Acceptance-relevant FW state (ICD §6; ``check_vectors.json`` state keys, state_schema 4)."""
 
     params: dict[str, Any] = field(default_factory=dict)     # key → value (complete table in the simulator)
     motion_state: str = "IDLE"
@@ -58,6 +58,7 @@ class SimCheckState:
     nvm_record_valid: bool = True
     paused: bool = False
     unhomed_origin_um: int = 0                 # D-43 b: position latched when the axis became un-homed (schema 3)
+    ena_on: bool = True                        # D-50 c / ICD v0.7.5 (h): ENA output at the enabled level (schema 4)
 
     @classmethod
     def from_vector(cls, defaults: Mapping[str, Any], state: Mapping[str, Any], schema: int) -> SimCheckState:

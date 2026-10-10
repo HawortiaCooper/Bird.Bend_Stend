@@ -169,6 +169,19 @@ class FakeReports:
         self.results: dict[str, Any] = {}
         self.build_error: BaseException | None = None
         self.pending: Future | None = None
+        self.root_path: str | None = None            # scripted ``root()``; None = session value / default
+
+    def root(self) -> str:
+        """GRQ-B-31 b (B's ``reports.root()``): effective recordings folder — the scripted path, else the owner's
+        session ``recordings_root``, else the default ``Documents/BirdBendStand/recordings``. A query: not logged."""
+        if self.root_path:
+            return self.root_path
+        try:
+            r = self._o.session.get().recordings_root if self._o is not None else None
+        except AttributeError:
+            r = None
+        import pathlib  # noqa: PLC0415
+        return str(r) if r else str(pathlib.Path.home() / "Documents" / "BirdBendStand" / "recordings")
 
     def _rec(self, name: str, *args: Any, **kwargs: Any) -> None:
         if self._o is not None:
