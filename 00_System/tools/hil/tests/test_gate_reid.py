@@ -207,3 +207,56 @@ def test_twin_sessions_are_not_affected(tmp_path):
     assert hil_session.unidentified_reason(ctx, "HG-19", before=True) is None
     assert hil_session.unidentified_reason(ctx, "HG-19", before=False) is None
     assert json.dumps(hil_session.MANUAL_RESTORE)
+
+
+# ------------------------------------------------------------------------------------------- O-GR-6 restore text
+def _first_off(text: str) -> int:
+    t = text.lower()
+    hits = [t.find(x) for x in ("48 v off", "48 v psu off", "switch the 48 v off") if t.find(x) >= 0]
+    return min(hits) if hits else -1
+
+
+def test_loaded_restore_releases_the_load_before_48v_off():
+    """O-GR-6: in phase 4 (or with the spring fitted) the manual restore keeps the driver holding (48 V ON, USB
+    unplugged) and releases the load mechanically BEFORE the 48 V goes off; never '48 V OFF' first."""
+    ctx = SimpleNamespace(shared={})
+    for phase in (4, 5):
+        t = hil_session.manual_restore(ctx, phase)
+        low = t.lower()
+        assert "keep the 48 v on" in low and "release the load" in low
+        assert _first_off(t) > low.index("release the load") > low.index("keep the 48 v on")
+    ctx.shared["load_applied"] = True                       # spring fitted earlier than phase 4
+    assert hil_session.manual_restore(ctx, 2) == hil_session.MANUAL_RESTORE_LOADED
+    ctx.shared["load_applied"] = False                      # removed again (HG-25 NOSPEC), unloaded phase
+    t = hil_session.manual_restore(ctx, 1)
+    assert t == hil_session.MANUAL_RESTORE and _first_off(t) >= 0
+
+
+def test_session_stop_in_phase_4_prints_the_loaded_restore(monkeypatch, capsys, today_env):
+    """End to end: HG-15 (phase 4) ends with the device unidentified (e.g. a wrong board after the power cycle) - the
+    session stops and the printed restore is the loaded one."""
+    ran = []
+
+    def fake_run_item(ctx, item_id, title, fn, req="", method=""):
+        ran.append(item_id)
+        if item_id == "S-00":                               # scripted identity: image verified in this session
+            ctx.image = "meas"
+            ctx.session["images"]["meas"] = "scripted|" + UID
+        it = ctx.begin(item_id, title, req, method)
+        if item_id == "HG-15":
+            ctx.identified = False
+            it.error = "REFUSED: board UID differs after the power cycle (scripted)"
+        else:
+            ctx.identified = True
+            ctx.check(hb.check_true("ran", True, "scripted"))
+        return ctx.end()
+
+    monkeypatch.setattr(hil_session, "SerialTransport", FakeTr)
+    monkeypatch.setattr(hil_session.P, "run_item", fake_run_item)
+    rc = hil_session.main(["--port", "COM7", "--approval", str(today_env["file"]), "--delivery",
+                           str(today_env["delivery"]), "--out", str(today_env["tmp"] / "s4"), "--only", "HG-15,HG-25",
+                           "--no-export"])
+    err = capsys.readouterr().err
+    assert rc == 2 and ran[-1] == "HG-15" and "HG-25" not in ran, ran
+    restore = err[err.index("Make the bench safe"):]
+    assert "keep the 48 V ON" in restore and _first_off(restore) > restore.lower().index("release the load")

@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 RUNNER_NAME = "BirdBendStand-GateRunner"
-RUNNER_VERSION = "1.2.0"
+RUNNER_VERSION = "1.2.1"
 
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent

@@ -2219,6 +2219,7 @@ def hg27(ctx: Ctx) -> None:
 
 # ============================================================================================ phase 4 (load)
 def fit_spring(ctx: Ctx) -> None:
+    ctx.shared["load_applied"] = True                 # O-GR-6: a manual restore must release the load first
     ctx.op.instruct("SPRING", "Fit the spring specimen (contact ahead of the table in +x); hand at the E-stop",
                     twin=lambda tw: tw.act("specimen", kind="spring", k_n_per_mm=ctx.cfg["spring_k_n_per_mm"],
                                            x_contact_um=ctx.cfg["spring_contact_um"]))
@@ -2439,6 +2440,7 @@ def hg25(ctx: Ctx) -> None:
     if not cal.value:
         ctx.check(hb.not_measured("speed envelope", "after travel calibration", "travel calibration not done"))
         return
+    ctx.shared["load_applied"] = False
     op.instruct("NOSPEC", "Remove the spring specimen (unloaded speed envelope)",
                 twin=lambda tw: tw.act("specimen", kind="none"))
     sp = spm(ctx)

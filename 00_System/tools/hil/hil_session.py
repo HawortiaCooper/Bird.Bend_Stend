@@ -199,6 +199,23 @@ IDENTITY_ITEMS = P.IDENTITY_ITEMS
 #: what the operator does by hand when the session stops with the device unidentified (no BENCH-EXIT is sent)
 MANUAL_RESTORE = ("Make the bench safe by hand: 48 V PSU OFF; if the E-stop sense was bypassed, remove J-STIM, "
                   "reconnect the sense plug and remove the tag (§6.8 P-8); then report to the product owner")
+#: O-GR-6: with a load applied (spring preloaded, phase 4) an unpowered driver lets the spring back-drive the axis, so
+#: the driver keeps HOLDING while the load is released mechanically (D-13 / D-45 a: with the Nucleo unpowered ENA
+#: falls back to "enabled" through the 10 kΩ pull-down and no pulse is possible), and the 48 V goes OFF last
+MANUAL_RESTORE_LOADED = (
+    "Make the bench safe by hand - A LOAD MAY BE ON THE AXIS (spring specimen): keep the 48 V ON (the driver holds "
+    "the axis); unplug the Nucleo USB (no pulses possible, the driver keeps holding, D-13 / D-45 a); everybody out of "
+    "the line of the spring; release the load mechanically: slowly loosen the spring anchor at the load-cell end until "
+    "the spring is slack, then remove the spring (load-release step L-1, picture B8; skip it if no spring is fitted); "
+    "only then switch the 48 V OFF; if the E-stop sense was bypassed, restore it (§6.8 P-8); then report to the "
+    "product owner")
+
+
+def manual_restore(ctx: P.Ctx, phase: int) -> str:
+    """O-GR-6: the restore text for a stop with the device unidentified - load released first when a load may be
+    applied (phase 4, or the runner fitted the spring and did not remove it yet)."""
+    loaded = phase >= 4 or bool(getattr(ctx, "shared", {}).get("load_applied"))
+    return MANUAL_RESTORE_LOADED if loaded else MANUAL_RESTORE
 
 
 def stop_reason(item_id: str, it) -> str | None:
@@ -576,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
                 it.error = f"REFUSED: {why0}"
                 ctx.end()
                 print(f"    {it.error}", flush=True)
-                print(f"REFUSED: {why0} — session stopped. {MANUAL_RESTORE}", file=sys.stderr)
+                print(f"REFUSED: {why0} — session stopped. {manual_restore(ctx, s.phase)}", file=sys.stderr)
                 rc_ = 2
                 break
             it = P.run_item(ctx, s.id, s.title, s.fn, s.req, s.method)
@@ -590,7 +607,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"--- {ex.id}: {ex.title} (restore before stopping)", flush=True)
                     P.run_item(ctx, ex.id, ex.title, ex.fn, ex.req, ex.method)
                 print(f"REFUSED: {why} — session stopped before any further motion"
-                      + ("" if ctx.identified or ctx.twin else f". {MANUAL_RESTORE}"), file=sys.stderr)
+                      + ("" if ctx.identified or ctx.twin else f". {manual_restore(ctx, s.phase)}"), file=sys.stderr)
                 rc_ = 2
                 break
     except (KeyboardInterrupt, OperatorAbort) as e:

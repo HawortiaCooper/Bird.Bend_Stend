@@ -2,7 +2,7 @@
 
 | Doc | GATE_RUNNER |
 |---|---|
-| Version | 1.2 (2026-10-14) — C's re-review C-GR-4 / C-GR-5: a board session stops when any item ends with the device unidentified and refuses to start a non-identity item while it is unidentified; HG-15 power cycle re-identifies. 1.1 (2026-10-14) — GR-2 plain-language prompts and the final pictures B1–B9 (GR-3); bench facts verified at S-00 (GR3-2); C's review C-GR-1…3 (approved options only, analysis anchors, whole-bundle runner hash); design limits (a) revocation, (b) results-zip anchor. 1.0 — first version |
+| Version | 1.2.1 (2026-10-14) — O-GR-6: phase-dependent manual restore (load released before the 48 V goes off); proposed load-release step L-1 (pending PO). 1.2 (2026-10-14) — C's re-review C-GR-4 / C-GR-5: a board session stops when any item ends with the device unidentified and refuses to start a non-identity item while it is unidentified; HG-15 power cycle re-identifies. 1.1 (2026-10-14) — GR-2 plain-language prompts and the final pictures B1–B9 (GR-3); bench facts verified at S-00 (GR3-2); C's review C-GR-1…3 (approved options only, analysis anchors, whole-bundle runner hash); design limits (a) revocation, (b) results-zip anchor. 1.0 — first version |
 | Owner | Validator E (00_System/tools/hil; the Integrator reviews independently). Packaging: B. Pictures: A. Approval files: Orchestrator |
 | Basis | D-57 (PO: operator alone, frozen runner), D-06, D-41, D-42, D-45, D-52, D-56; FW_test_plan v0.4.13 §6 / §6.7 / §6.8; HW_GATE_RUNBOOK v0.4 |
 
@@ -85,8 +85,19 @@ The operator can drop photos into `<out>/photos/`; a later `--from` run re-expor
     check right after the re-open.
   - **Session rule (C-GR-4, belt and braces):** in a board session, any item that ends with the device unidentified
     stops the session (rc 2), and no item other than S-00 / S-ID / IMG-* may start while it is unidentified. BENCH-EXIT
-    is sent only to an identified device; otherwise the runner prints the manual restore (48 V OFF; if the sense was
-    bypassed: remove J-STIM, reconnect the sense plug, remove the tag, §6.8 P-8) and the operator reports.
+    is sent only to an identified device; otherwise the runner prints the manual restore and the operator reports.
+  - **Manual restore is phase-dependent (O-GR-6):**
+    - *no load* (phases 0–3, spring not fitted): 48 V OFF; if the sense was bypassed: remove J-STIM, reconnect the
+      sense plug, remove the tag (§6.8 P-8);
+    - *load possible* (phase 4 / 5, or the runner fitted the spring and has not removed it): **keep the 48 V ON** so
+      the driver holds; unplug the Nucleo USB (no pulses possible; ENA falls back to holding through the 10 kΩ
+      pull-down, D-13 / D-45 a); everybody out of the spring line; release the load mechanically (**L-1**: slowly
+      loosen the spring anchor at the load-cell end until the spring is slack, then remove it, picture B8); **only
+      then** 48 V OFF; P-8 if the sense was bypassed. An unpowered driver would let the preloaded spring (≥ 98 N)
+      back-drive the axis.
+    - **L-1 is a proposal:** §6.8 (PO-approved) has no mechanical load-release step; it was written for the
+      stimulus trials without a specimen. The Orchestrator puts L-1 to the PO; until then the runner text says what
+      L-1 is.
 - **Bench and load gates:** BENCH-ENTRY directly before and BENCH-EXIT directly after HG-10a; a failed BENCH-ENTRY
   runs BENCH-EXIT first. GATE-LOAD comes before phase 4. Results count only from the current session.
 - **Flashing:** every prompt names the approved `.hex` file with its build string and SHA-256 prefix:
