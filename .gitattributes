@@ -10,3 +10,5 @@
 # operator delivery packages: firmware images byte-exact (hashes in SHA256SUMS.txt)
 04_Delivery/**/*.hex -text
 04_Delivery/**/*.bin binary
+# checksum lists stay LF on every checkout (CRLF breaks `sha256sum -c`: the file name gets a trailing CR)
+04_Delivery/**/*SHA256SUMS*.txt text eol=lf

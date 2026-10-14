@@ -34,3 +34,5 @@ desktop.ini
 # Frozen gate runner built into the gate kit (D-57, GR-1; 03_SW/packaging/gate_runner) — tracked by Orchestrator decision only
 04_Delivery/**/BirdBendStand-GateRunner/
 04_Delivery/**/BirdBendStand-GateRunner*.zip
+# PC application zip in the bring-up package (built from the commit, see pc_software/SHA256SUMS.txt — tracked)
+04_Delivery/**/pc_software/*.zip

@@ -7,3 +7,7 @@ for them (00_System/tools/hil/HW_GATE_RUNBOOK.md). After the gate the release im
 (../BringUp_FW0.8.6/firmware/BBS_FW_0.8.6_release.hex of the operator package) is flashed
 again (IMG-REL / HG-30). Hashes: SHA256SUMS.txt here; build identity: BUILD_INFO.txt here.
 GET_INFO build string ends in -MEAS / -DWT and the feature list contains HW_MEAS.
+Gate runner: BirdBendStand-GateRunner/BirdBendStand-GateRunner.exe (1.2.1+g948b92e, zip
+BirdBendStand-GateRunner-1.2.1-g948b92e.zip; no Python needed) - runner sha256
+c1ad469cded3ae80db004a6664741d69cb6307588d2f6bddf577a81afb573eb3 (= --version = make_approval.py --runner-exe);
+zip hash in GATE_RUNNER_SHA256SUMS.txt.

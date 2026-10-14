@@ -228,7 +228,8 @@ def main(argv: list[str] | None = None) -> int:
         "GET_INFO build string ends in -MEAS / -DWT and the feature list contains HW_MEAS.\n",
         encoding="ascii", newline="\n")
     # BUILD_INFO
-    pio_ver = run([str(ROOT / ".venv" / "Scripts" / "pio.exe"), "--version"]).strip()
+    pio_exe = ROOT / ".venv" / "Scripts" / "pio.exe"   # project venv; a plain clone uses pio from PATH
+    pio_ver = run([str(pio_exe) if pio_exe.exists() else (shutil.which("pio") or "pio"), "--version"]).strip()
     gcc_ver = run([str(TOOLBIN / "arm-none-eabi-gcc.exe"), "--version"]).splitlines()[0]
     oc_ver = run([str(OBJCOPY), "--version"]).splitlines()[0]
     gen = (FW / "src" / "gen" / "proto_gen.h").read_text(encoding="utf-8")
@@ -292,8 +293,17 @@ def _write_build_info(fwdir, info, args, fwv, icd, pmaj, pmin, pay, dict_hash, d
     t.append("TC-SYS-009-02 check_meas_build.py PASS (measurement images: core / pure / gen objects and the safety handlers")
     t.append("byte-identical to the release image); FW host suites (implementer + validator, 251 test cases) green.")
     t.append("Note: GET_INFO 'build' = YYYYMMDD-HHMM (gate images YYMMDD-HHMM-MEAS / -DWT) of SOURCE_DATE_EPOCH (UTC) if set, else")
-    t.append("the local build minute. Rebuild byte-identically: same tree, same toolchain, set SOURCE_DATE_EPOCH to the value")
-    t.append("above, then `pio run -e <env>` with a private PLATFORMIO_BUILD_DIR and this script.")
+    t.append("the local build minute. The git hash is NOT compiled into the image (it is only reported here), so the same")
+    t.append("source tree + toolchain + SOURCE_DATE_EPOCH gives byte-identical images from any commit containing that tree.")
+    t.append("")
+    t.append("Rebuild recipe (Git Bash, PlatformIO 6.2 and the toolchain above; no board needed):")
+    t.append(f"  git clone <repo> bbs && git -C bbs checkout {args.commit[:7]}")
+    t.append(f"  export SOURCE_DATE_EPOCH={sde or '<value above>'}")
+    t.append("  export PLATFORMIO_BUILD_DIR=<empty private folder>")
+    t.append("  for e in nucleo_f446re nucleo_f446re_meas nucleo_f446re_meas_dwt; do pio run -d bbs/02_FW -e $e; done")
+    t.append("  python bbs/02_FW/tools/make_delivery.py --build-dir $PLATFORMIO_BUILD_DIR [--compare-build-dir <2nd build>] \\")
+    t.append(f"      --out <pkg> --gate-out <gate kit> --label {args.label} --commit <full hash>")
+    t.append("  then compare with SHA256SUMS.txt (sha256sum -c SHA256SUMS.txt in the image folder).")
     (fwdir / "BUILD_INFO.txt").write_text("\n".join(t) + "\n", encoding="utf-8", newline="\n")
     print("wrote", fwdir / "SHA256SUMS.txt", "and BUILD_INFO.txt")
 

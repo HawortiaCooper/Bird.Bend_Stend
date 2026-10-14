@@ -1,0 +1,6 @@
+# BirdBendStand-GateRunner 1.2.1+g948b92e (commit 948b92e), frozen one-folder build (03_SW/packaging/gate_runner).
+# Runner bundle hash = BirdBendStand-GateRunner.exe --version = make_approval.py --runner-exe (gate_res.bundle_sha256
+# over the exe and every file below _internal); pin this value in the approval file:
+#   runner sha256 c1ad469cded3ae80db004a6664741d69cb6307588d2f6bddf577a81afb573eb3
+# Zip of the folder (sha256sum -c GATE_RUNNER_SHA256SUMS.txt):
+55ebd0f86b485d4e80d83b94d98bd0712f60e4716ee0aaacca60fc1d4c6714f1 *BirdBendStand-GateRunner-1.2.1-g948b92e.zip
