@@ -49,6 +49,9 @@ def _isolated_gui_state(tmp_path, monkeypatch):
     monkeypatch.setenv("BEND_STAND_GUI_SETTINGS", str(tmp_path / "gui.ini"))
     # B5-10/11: calibration, session and preset files of a real Backend go to a per-test data root (never %APPDATA%)
     monkeypatch.setenv("BEND_STAND_DATA_DIR", str(tmp_path / "data"))
+    # B-SAFE-01/02: recordings and bring-up packages never go to the real Documents folder
+    monkeypatch.setenv("BEND_STAND_RECORDINGS_DIR", str(tmp_path / "recordings"))
+    monkeypatch.setenv("BEND_STAND_BRINGUP_DIR", str(tmp_path / "bringup_packages"))
     prev = stop_mod.stop_handler()
     yield
     safe_dialog.FILE_DIALOG_HOOK[0] = None

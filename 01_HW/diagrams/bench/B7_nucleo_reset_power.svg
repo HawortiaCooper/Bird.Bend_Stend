@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="297mm" height="210mm" viewBox="0 0 1485 1050" font-family="Arial, Helvetica, sans-serif">
+<title>Bird Bend Stand wiring — sheet 7: Nucleo RESET and power cycle (HG-14 / HG-15)</title>
+<rect x="0" y="0" width="1485" height="1050" fill="#ffffff"/>
+<rect x="15.0" y="15.0" width="1455.0" height="1020.0" fill="none" stroke="#222" stroke-width="1.6"/>
+<text x="30.0" y="52.0" font-size="22" fill="#123a6b" font-weight="bold">B7 — Nucleo RESET and power cycle (HG-14 / HG-15)</text>
+<text x="1455.0" y="52.0" font-size="13" fill="#555" text-anchor="end">Bird Bend Stand — HW-gate bench pictures</text>
+<rect x="60.0" y="130.0" width="340.0" height="460.0" fill="#e8f5e9" stroke="#1b5e20" stroke-width="2" rx="6"/>
+<rect x="70.0" y="140.0" width="320.0" height="110.0" fill="#f1f8e9" stroke="#555" stroke-width="1" stroke-dasharray="4,3" rx="4"/>
+<text x="80.0" y="160.0" font-size="11.5" fill="#000" font-weight="bold">ST-LINK/V2-1 part</text>
+<rect x="200.0" y="118.0" width="60.0" height="34.0" fill="#ffd54f" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="230.0" y="140.0" font-size="11" fill="#000" text-anchor="middle" font-weight="bold">USB</text>
+<circle cx="100.0" cy="200.0" r="7" fill="#ef5350" stroke="#333" stroke-width="1.2"/>
+<text x="112.0" y="205.0" font-size="10.5" fill="#000">LD1 COM</text>
+<circle cx="100.0" cy="228.0" r="7" fill="#ef5350" stroke="#333" stroke-width="1.2"/>
+<text x="112.0" y="233.0" font-size="10.5" fill="#000">LD3 PWR</text>
+<rect x="310.0" y="190.0" width="60.0" height="26.0" fill="#ffd54f" stroke="#333" stroke-width="1"/>
+<text x="340.0" y="208.0" font-size="10.5" fill="#000" text-anchor="middle" font-weight="bold">JP5</text>
+<circle cx="130.0" cy="320.0" r="18" fill="#1e88e5" stroke="#0d47a1" stroke-width="2"/>
+<text x="130.0" y="356.0" font-size="10.5" fill="#000" text-anchor="middle">B1 USER</text>
+<circle cx="320.0" cy="320.0" r="18" fill="#212121" stroke="#ffd54f" stroke-width="5"/>
+<text x="320.0" y="356.0" font-size="11" fill="#000" text-anchor="middle" font-weight="bold">B2 RESET</text>
+<circle cx="230.0" cy="390.0" r="7" fill="#66bb6a" stroke="#333" stroke-width="1.2"/>
+<text x="242.0" y="395.0" font-size="10.5" fill="#000">LD2</text>
+<rect x="68.0" y="270.0" width="18.0" height="300.0" fill="#424242" stroke="#333" stroke-width="1"/>
+<rect x="374.0" y="270.0" width="18.0" height="300.0" fill="#424242" stroke="#333" stroke-width="1"/>
+<text x="230.0" y="570.0" font-size="11.5" fill="#000" text-anchor="middle" font-weight="bold">NUCLEO-F446RE (MB1136)</text>
+<text x="280.0" y="114.0" font-size="13" fill="#000" font-weight="bold">USB cable (ST-LINK): power + COM port</text>
+<text x="60.0" y="625.0" font-size="13" fill="#b71c1c" font-weight="bold">B2 RESET (black) = NRST: the reset button</text>
+<text x="60.0" y="648.0" font-size="11.5" fill="#000">JP5 = U5V: the USB cable powers the board</text>
+<rect x="60.0" y="668.5" width="306.8" height="16.5" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="65.0" y="681.0" font-size="9.5" fill="#b26a00" font-weight="bold">board layout schematic — positions per UM1724 ASSUMED</text>
+<rect x="560.0" y="110.0" width="900.0" height="520.0" fill="#fafafa" stroke="#888" stroke-width="1.2" rx="4"/>
+<text x="572.0" y="136.0" font-size="16" fill="#123a6b" font-weight="bold">What the runner asks (HG-14, HG-15)</text>
+<text x="572.0" y="170.0" font-size="13" fill="#000">NRST reset (HG-15): press B2 RESET once, about 1 s, release. The COM port stays; the runner</text>
+<text x="572.0" y="187.2" font-size="13" fill="#000">re-synchronises. The driver keeps holding (D-13); the FW boots NOT_ENABLED, axis NOT homed.</text>
+<text x="572.0" y="204.3" font-size="13" fill="#000"></text>
+<text x="572.0" y="221.5" font-size="13" fill="#000">Nucleo power cycle (HG-15): unplug the USB cable at the Nucleo for ≥ 5 s, plug it back in.</text>
+<text x="572.0" y="238.6" font-size="13" fill="#000">The COM port disappears and comes back; the runner closes and re-opens it.</text>
+<text x="572.0" y="255.8" font-size="13" fill="#000">If Windows gives a different COM number, the runner stops; restart it with the new --port,</text>
+<text x="572.0" y="273.0" font-size="13" fill="#000">--from HG-15 and the same --out.</text>
+<text x="572.0" y="290.1" font-size="13" fill="#000">With JP5 = E5V (external 5 V DC-DC, D-22): switch that 5 V off / on instead — the USB alone</text>
+<text x="572.0" y="307.3" font-size="13" fill="#000">then does not power the board.</text>
+<text x="572.0" y="324.4" font-size="13" fill="#000"></text>
+<text x="572.0" y="341.6" font-size="13" fill="#000">IWDG reset (HG-14 / HG-15): no hand action — the runner injects a HANG. Pulses stop within</text>
+<text x="572.0" y="358.8" font-size="13" fill="#000">100 ms; the board resets within 90 ms (LD2 restarts its slow blink).</text>
+<text x="572.0" y="375.9" font-size="13" fill="#000"></text>
+<text x="572.0" y="393.1" font-size="13" fill="#000">The 48 V PSU stays as the prompt says (the driver holds through every MCU reset, D-13).</text>
+<text x="572.0" y="410.2" font-size="13" fill="#000">HG-15 runs with the spring preloaded (picture B8): keep hands off the table and the spring.</text>
+<rect x="560.0" y="650.0" width="900.0" height="90.0" fill="#fff3f3" stroke="#b71c1c" stroke-width="1.6" rx="4"/>
+<text x="572.0" y="676.0" font-size="13" fill="#b71c1c" font-weight="bold">Never press B1 (blue USER) for a reset, never unplug the 48 V PSU or the driver cables</text>
+<text x="572.0" y="700.0" font-size="13" fill="#b71c1c">for an MCU reset, and never use the ST-LINK reset of STM32CubeProgrammer during a session.</text>
+<rect x="1005.0" y="925.0" width="465.0" height="110.0" fill="#fff" stroke="#222" stroke-width="1.6"/>
+<line x1="1005" y1="953" x2="1470" y2="953" stroke="#222" stroke-width="1"/>
+<line x1="1305" y1="925" x2="1305" y2="953" stroke="#222" stroke-width="1"/>
+<text x="1013.0" y="944.0" font-size="13" fill="#123a6b" font-weight="bold">HW-gate bench pictures (D-57)</text>
+<text x="1313.0" y="944.0" font-size="13" fill="#000" font-weight="bold">Picture B7 / 9</text>
+<text x="1013.0" y="969.0" font-size="11" fill="#000" font-weight="bold">Nucleo RESET and power cycle (HG-14 / HG-15)</text>
+<text x="1013.0" y="984.0" font-size="10" fill="#000">Version 1.1 · 2026-10-14 · owner Implementer A (01_HW)</text>
+<text x="1013.0" y="998.0" font-size="8.5" fill="#000">Source: wiring.md v0.7.1 §6.1/§11.1 · FW_test_plan §6/§6.8 · HW_GATE_RUNBOOK v0.4 · pinout.md v0.6</text>
+<text x="1013.0" y="1011.0" font-size="9" fill="#555">Generated by 01_HW/diagrams/bench/gen_bench_svg.py — do not edit the SVG/PNG</text>
+<text x="1013.0" y="1024.0" font-size="9.5" fill="#b71c1c" font-weight="bold">NOT A CERTIFIED SAFETY DESIGN — bench aid for the HW gate (D-06-GATE)</text>
+</svg>

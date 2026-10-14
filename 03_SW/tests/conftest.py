@@ -9,7 +9,9 @@
   ``sys.path`` for tests only), ``fake_clock``.
 - Rule (SW_test_plan §1 rule 4): every test under ``tests/unit`` carries ``@pytest.mark.req(...)``.
 - **Private data folder** (autouse, M3): ``BEND_STAND_DATA_DIR`` points at a fresh folder per test, so calibration,
-  session and preset files never touch %APPDATA% and never leak between tests.
+  session and preset files never touch %APPDATA% and never leak between tests; ``BEND_STAND_BRINGUP_DIR`` keeps
+  bring-up packages (D-56 a) and ``BEND_STAND_RECORDINGS_DIR`` recordings out of the operator's Documents
+  folder.
 
 Origin: Thrust_Stand_HAW/03_SW/tests/unit/conftest.py @37c87471 (adapted: repo paths, D-06 guard, options).
 
@@ -86,6 +88,12 @@ def _private_data_dir(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyt
     and files written by one test (e.g. an accepted calibration) never leak into another (order independence)."""
     _DATA_COUNTER[0] += 1
     monkeypatch.setenv("BEND_STAND_DATA_DIR", str(tmp_path_factory.getbasetemp() / f"appdata-{_DATA_COUNTER[0]}"))
+    # D-56 a: bring-up packages never go to the operator's Documents folder
+    monkeypatch.setenv("BEND_STAND_BRINGUP_DIR",
+                       str(tmp_path_factory.getbasetemp() / f"appdata-{_DATA_COUNTER[0]}" / "bringup_packages"))
+    # data safety (2026-10-14 incident, B-SAFE-02): recordings never go to the operator's Documents folder either
+    monkeypatch.setenv("BEND_STAND_RECORDINGS_DIR",
+                       str(tmp_path_factory.getbasetemp() / f"appdata-{_DATA_COUNTER[0]}" / "recordings"))
     yield
 
 

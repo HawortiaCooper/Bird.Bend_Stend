@@ -3,7 +3,7 @@
 | Item | Value |
 |---|---|
 | Document | `03_SW/docs/SW_code_review.md` |
-| Version | 1.5 — 2026-10-10 (§8.9 D-54 a / c) · 1.4 — 2026-10-10 (§8.8 round 6, final HW-gate verdict) · 1.3 — 2026-10-10 (§8.7 add-on) · 1.2 — 2026-10-09 (§8 fix verification) · 1.1 — 2026-10-09 (re-check against the working tree after B's tasks 4/7, D's GUI follow-ups and packaging, §7.1) · 1.0 — 2026-10-08 |
+| Version | 1.7 — 2026-10-14 (§8.10 re-verification: SWD-P3-02…09 closed, bring-up assistant ACCEPTED) · 1.6 — 2026-10-14 (§8.10 bring-up engine, D-56) · 1.5 — 2026-10-10 (§8.9 D-54 a / c) · 1.4 — 2026-10-10 (§8.8 round 6, final HW-gate verdict) · 1.3 — 2026-10-10 (§8.7 add-on) · 1.2 — 2026-10-09 (§8 fix verification) · 1.1 — 2026-10-09 (re-check against the working tree after B's tasks 4/7, D's GUI follow-ups and packaging, §7.1) · 1.0 — 2026-10-08 |
 | Author | Validator F (SW) |
 | Anchor | commit **e600169** ("P2 complete …"). Every `file:line` below is a line of that commit (`git show e600169:<path>`), paths relative to `03_SW/src/bend_stand/` unless stated otherwise |
 | Baseline | SRS v0.6.4, ICD v0.7.4, SW_design v0.6, SW_design_GUI v0.6 |
@@ -897,10 +897,118 @@ mode, stops, latches, link loss, homing failure, cancel all end it with the PC l
 closed**. Not covered by F: the GUI side of the `NO_SPECIMEN_MOUNTED` confirmation (Enter / Space never confirm,
 SAF-SW-004) — D's GUI tests.
 
+### 8.10 Bring-up engine and pulse-integrity check (OI-F-BRU-01, D-56; 2026-10-14)
+
+**Scope.** B's hand-back: `core/bringup.py`, `api.BringupAPI` (status, sections, steps, step, start, select, submit,
+mark, create_package_async, run_action, cancel_action, close_session, resume, sessions), the schemas in
+`bend_stand/resources/*.schema.json`, CLI `bringup-export`, SW_design v0.6.12 §25; A's step content
+`bringup_steps.json` 1.1 (121 steps). B changed the engine during the verification (E's review list "B-BRU-04":
+freshness rule, abort / fail table, numeric qualification speed); the results below are for the tree at the end of the
+runs; line numbers = working tree of 2026-10-14 14:21 (`bringup.py` sha256 cb6109ec…). Method and per-TC results: SW_test_plan v0.5.8 §3.15 (execution table). Evidence: wire (`ref_codec`), simulator /
+twin world, F's own re-hash of every package member and F's own schema-subset validator.
+
+**Pulse-integrity rules (§25.4) — verified independently.** Shipped parameters = SRS SYS-011 (3 baseline re-homes,
+max|d0| ≤ 100 µm, 10 × 5 ↔ 285 mm, |d1| ≤ max(30, 2·max|d0|), 1 repeat, `fail_text` "buffer board required"); the
+speed is `motion.v_max_travel_um_s` (30 mm/s) on every MOVE_ABS, no SET_PARAM during a run; every HOME is issued on a
+homed axis (last DATA before it: HOMED); d0 / d1 = the EVENT HOMED values of the wire; |d1| = the world's lost travel
+± 2 µm (sim, twin); verdicts equal F's rule for ±20 / ±60 / 300 µm and for a 40 µm baseline scatter (limit 80 µm: 60
+passes, 95 fails); 150 µm baseline → "START switch mounting", no round trip, not a counted repeat; FAIL → repeat →
+FAIL → "buffer board required" in the step, `bringup.json` and the HTML, third click REPEAT_EXHAUSTED with nothing
+sent; E-stop, ALM, link loss, a limit stop, the operator's STOP, HALT and Cancel (STOP on the wire) during the round
+trips end the run with no automatic restart; the click is refused with exactly the normal gate in 8 states (not
+enabled, not homed, HALT, PAUSED, FAULT, LOAD_INPUT_INVALID, moving, owner conflict); unconfirmed → BRINGUP_MOTION + the
+HOME gate's own CONFIRM items, nothing moves. A's firmware on the twin gives the same verdicts (HOME_DRIFT from the FW).
+
+**Defects** (reproducers in `tests/validation/test_v_bringup.py`, strict xfail unless fixed):
+
+| ID | Sev | Owner | Finding | Where | Evidence | Fix hint |
+|---|---|---|---|---|---|---|
+| SWD-P3-02 | S3 | B | **fixed in round** — with the link down a DATA-bit condition (`clear`) passed on the zeroed / last bits: an automatic step PASS without board evidence | `_evaluate` / `_value_of` of the hand-back version | `test_tc_sw_bru_001_02_no_evaluation_without_the_link` failed on the hand-back tree (probe: PASS with link DISCONNECTED, `device.latest()` = (0, 0x9000)); passes after B-BRU-04 item 7 (`_board_fresh`) | — (regression test kept) |
+| SWD-P3-03 | S3 | A (content), B | an identity mismatch (other FW build / dictionary) or a board value other than expected never FAILs: the step waits forever with "waiting for the board identity …" and shows no observed value — an operator alone cannot tell a wrong image from a slow link | `bringup_steps.json` 6.3 (only `fail_if` HW_MEAS), 6.7, 12.4; engine: a stage of static values has no fail path | `…_identity_and_parameter_mismatch_fail_with_the_observed_value`: simulator build `SIM-ICD0.7.5` ≠ `20261010-2135`, 6.3 still WAITING after 3 s | A: `fail_if` with `ne` for build / fw_version / dict hash (and the 6.7 parameters); or B: a stage whose conditions are all `info` / `param` FAILs with the observed values once the identity is known (GET_INFO done) |
+| SWD-P3-04 | S3 | B | another board UID in a resumed session is only logged (`BOARD_CHANGED`, `boards_seen`): status and report keep the first UID, the results of two boards mix silently | `bringup.py:1551` `_set_board`; `render_html` shows `board` only | `…_002_03_other_board_uid_is_flagged`: second UID absent from `report.html`, `BuStatus.board_uid` = first board | warn in the assistant (status field + CONFIRM "continue this session with board X?" on the next operator action) and list every board seen in the report header |
+| SWD-P3-05 | S4 | B | `report.html` of the package has no Content-Security-Policy (the recording reports carry `_CSP` since SWR-11) | `bringup.py:965` `render_html` | `…_003_02_html_carries_the_csp_of_swr11` | reuse `report._CSP` in the head |
+| SWD-P3-06 | S3 | A (content), B | SYS-011: an I_LED reading < 6 mA (10.1.3 / 10.1.4 / 10.1.5) is FAIL with the value, but neither the step nor the record says "buffer board required" (the pulse check does) — the PO's package does not state the SYS-011 consequence of (a) | `bringup_steps.json` 10.1.3–10.1.5; engine has no `fail_text` for measure steps | `…_sys_011_04_i_led_fail_states_buffer_board_required` | A: expected / instruction "below → buffer board required"; better B: optional `fail_text` for any step, rendered in the record and the HTML on FAIL |
+| SWD-P3-07 | S3 | B | `collect_files` trusts the recordings entries of `session.json`: a `root` + `folder` outside the data folders written into the file are packed (SW-BRU-003 "only files from the app's own data folders") | `bringup.py:870–871` (`rec_roots` from the session) | `…_003_03_session_reference_outside_is_not_packed`: `recordings/secret/SECRET_REFERENCE.txt` in the zip (CLI `bringup-export`) | accept a recordings root only if it is a configured / default recordings root of this installation and the folder carries the recorder's `meta.json` with this session's `bringup` tag |
+| SWD-P3-08 | S4 | B | a `session.json` with wrong member types (steps not an object, a step record not an object) makes `resume()` raise `AttributeError` to the GUI (at start-up `Backend.start` catches it and logs) instead of `SESSION_UNREADABLE` | `bringup.py:1505–1517` `_load_session` (`rec.setdefault`) | `…_002_03_corrupt_session_file[steps_wrong_type / step_record_wrong_type]` | type-check the loaded document (schema or isinstance checks) and treat any failure as `FileFormatError` |
+| SWD-P3-09 | S4 | B | a board reset with default parameters logs a false incident "253 FW EVENT(s) lost": the FW queues PARAMS_DEFAULTED (seq 0) before BOOT (seq 1) (ICD §6.4 "parameters per §11.3; EVENT BOOT queued"), the gap rule exempts only a BOOT that comes first — the guide resets the board 3 × before the first Save (8.1, 8.7, 12.3), so every bring-up package carries false loss lines | `core/pipeline.py:265` | `test_board_reset_with_default_parameters_is_not_an_event_loss` (wire: seq 0 PARAMS_DEFAULTED, 1 BOOT — nothing lost) | judge the gap only after the frame after a seq restart, or treat seq 0 as a new epoch (a real loss across a reset cannot be told anyway) |
+
+**Observations (no defect):** OBS-F-BRU-01 (C, simulator): `drv_power off` does not set the ALM input (the real driver
+reports ALM while unpowered, guide 6.8 / 7.8); the walk-through sets both. OBS-F-BRU-02 (B): SW_design §25.4 still
+describes `speed_mm_s` "travel_limit" and a SPEED_CAP refusal as a step FAIL with the raw text; the code now takes a
+number and refuses before motion (`SPEED_BELOW_QUALIFICATION`, step not done) and makes a limit stop / BOOT a FAIL —
+update §25.4 (tests accept both until then). GUI parts of
+TC-SW-BRU-001-03 / 003-06 / 004-03 are covered only by D's tests against the fake backend — F checks them at DM-12.
+
+**Data safety (Orchestrator item, incident 2026-10-14).** Every Backend built by the validation suite goes through
+B's `core.testing.isolated_settings` (harness `safe_settings` for `lockstep_backend` / `realtime_backend`, the kill-test
+child, `test_v_review.py`, `test_v_static.py`, `tests/perf/perf_gui.py`; a key passed as None is dropped so it can never
+mean "the application's own folder"). New test `test_harness_outside_pytest_never_touches_the_user_folders`: the harness
+as a plain script (no BEND_STAND_* env; fake APPDATA, USERPROFILE, TEMP) runs a bring-up session, a recording, a package,
+a Save and a real-clock connect — nothing appears under APPDATA or the profile; the package lands in the temp folder.
+Negative check (scratch, not kept): the same steps with a bare `BackendSettings` create
+`%APPDATA%/BirdBendStand/bringup/sessions/…` — the test detects a leak. `_reports/trace.json` is now written only by a run of
+the whole validation directory and with LF line ends (B's run had rewritten it with CRLF only; regenerated by the final
+run).
+
+**Runs.**
+| Run | Tree | Result |
+|---|---|---|
+| `test_v_bringup.py`, fixed order and random order (during development, content 1.1) | engine 13:26, content 1.1 | 69 passed, 7 xfailed each |
+| full `tests/validation`, fixed order (`-p no:randomly`) | engine 13:26, content 1.1 | 731 passed, 7 xfailed (1147 s) |
+| full `tests/validation`, random order (`--randomly-seed=2792799991`) | same | 731 passed, 8 xfailed (970 s; + SWD-P3-09 reproducer) |
+| full `tests/validation`, fixed order — **discarded** | engine and step file edited during the run (B 14:21, A 14:19 / 14:30) | 52 failed / 32 errors, all `TypeError` in `check_definitions` of a half-written tree + the old I_LED limits; re-run below |
+| `test_v_bringup.py`, fixed order, after the I_LED test follows SRS SYS-011 (a) (repeat band 0.45…0.60 V) | engine `bringup.py` sha256 cb6109ec…, step file content **1.3** sha256 713b35f1… | 70 passed, 8 xfailed |
+| **final** full `tests/validation`, fixed order, every group armed (no pending markers, 0 skipped), private twin build dir | same, unchanged during the run | **732 passed, 8 xfailed (SWD-P3-03, -04, -05, -06, -07, -08 × 2, -09), 0 failed** (935 s); `_reports/trace.json` regenerated (LF) |
+
+**Verdict (OI-F-BRU-01): ACCEPTED WITH CONDITIONS** — the engine does what SW-BRU-001…004 and SYS-011 (b) require on
+the wire and in the world; no S1 / S2. Conditions before the operator uses the assistant on the stand: SWD-P3-03 and
+SWD-P3-06 (A content, cheap), SWD-P3-04 and SWD-P3-07 (B); SWD-P3-05 / -08 / -09 may follow (S4).
+
+**Re-verification (2026-10-14, after B's fix round — SW_design v0.6.13 §25, `tests/unit/core/test_bringup_review.py` —
+and A's step file content 1.4).** Tree: `core/bringup.py` sha256 939318dd…, `core/pipeline.py` ba8ec5c2…,
+`bringup_steps.json` 75a56d9e… (content 1.4), unchanged during the runs. B removed the seven strict-xfail markers of
+`test_v_bringup.py` (16:20; a role edited an F-owned file — the markers only, confirmed: every test body, the defect
+markers and the parametrisation are F's; noted for the process). F's checks of each fix:
+
+| ID | Fix (read) | F's evidence | Status |
+|---|---|---|---|
+| SWD-P3-02 | `_board_fresh` (link CONNECTED + board data newer than the stage / last connect / BOOT) | regression test passes | **CLOSED** |
+| SWD-P3-03 | A 1.4: `fail_if` `ne` for build / FW / dict hash / proto / payload (6.3, 12.4) and every 6.7 parameter, label with the expected value | reproducer passes: 6.3 FAIL within 3 s, text "build (expected 20261010-2135) = SIM-ICD0.7.5" | **CLOSED** |
+| SWD-P3-04 | `BuStatus.board_mismatch`; the session refuses entries / marks / evaluation while another board is connected; report header lists every board seen + a "Board changed" line | reproducer strengthened (the earlier `"BOARD" in str(status)` clause was vacuous): `board_mismatch` names the new UID, submit and mark refused, step state unchanged, second UID in `report.html` | **CLOSED** (D adds the GUI banner) |
+| SWD-P3-05 | `report.html` carries the SWR-11 CSP | reproducer passes | **CLOSED** |
+| SWD-P3-06 | A 1.4: 10.1.3–10.1.5 expected text "below … → FAIL: buffer board required (SYS-011, D-56 b)", shown in `bringup.json` and the HTML row; no step-level `fail_text` for entry steps | reproducer passes. Judgement: sufficient — the FAIL row of the record carries the SYS-011 consequence next to the value; a step-level fail text would be nicer (only on FAIL) but is not required by SYS-011 | **CLOSED** |
+| SWD-P3-07 | `app_recording_roots`: only the default root and the roots stored in the app's session files; `session.json` roots are never trusted | reproducer passes (planted folder + root outside → not packed); the session's own recording still packed (003-03) | **CLOSED** |
+| SWD-P3-08 | `_check_session` type checks → `FileFormatError` → `SESSION_UNREADABLE` | reproducers ×2 pass | **CLOSED** |
+| SWD-P3-09 | `pipeline._event`: seq 0 with a boot-time event = new baseline | reproducer passes (no FW_EVENTS_LOST on PIN reset with defaulted parameters) | **CLOSED** |
+
+OBS-F-BRU-01 / -02 reported fixed by B (simulator ALM follows the driver supply; SW_design §25.4 updated) — the
+walk-through still sets both inputs (harmless). **001-01 walk-through with content 1.4:** 6.3 / 12.4 now FAIL at once
+on the simulator's identity by design; the walk keeps giving the simulator the release identity by substituting the
+wire identity into the stage **and** the `fail_if` conditions of those two steps (the only change of the shipped
+file); the mismatch FAIL itself is covered by the SWD-P3-03 test — both directions verified, 121/121 PASS.
+
+**R-2 (E): order dependency of `test_tc_sys_011_04_i_led_entries` — not reproduced.** 16 seeds (101 … 1616) of
+`tests/unit/core/test_bringup.py` + the I_LED tests, and 4 seeds (31, 47, 59, 73) of both whole files in random
+order, isolated per-test data dirs: the I_LED test never failed (seeds 101–404 failed only on the then-stale strict
+xfail markers of SWD-P3-06 and on B's own `test_package_manifest_html_json_and_data_folders` while B was editing; from
+505 on all green; the full-file seeds 176 passed each). No shared engine state found (no module-level cache in
+`core/bringup.py`; B's tests monkeypatch only). Most likely cause: the run fell into A's step-file edit between content
+1.1 and 1.3 (10.1.3 / 10.1.4 limits 0.60 → 0.45 V) — the same assertion ("ENA and DIR I_LED steps … expected") failed
+in F's discarded run of that window; the test reads the shipped file at test start while the backend loads it at
+construction, so a file swap between the two can fail it. No fix needed beyond the content-driven test (v0.5.8).
+
+**Final runs (armed, `--arm all`, private twin build dir):** fixed order **740 passed, 0 xfailed, 0 failed** (1042 s); random order (`--randomly-seed=1002634176`) **740 passed** (982 s); `_reports/trace.json` regenerated (LF).
+
+**Final verdict — bring-up assistant (SW-BRU-001…004, SYS-011 SW side): ACCEPTED.** All F defects closed, no open
+item of F's; remaining outside F: the GUI banner for a board mismatch (D, in progress) and the GUI parts of
+TC-SW-BRU-001-03 / 003-06 / 004-03, which F checks at DM-12 with the packaged application.
+
 ## 9. Change history
 
 | Version | Date | Author | Change |
 |---|---|---|---|
+| 1.7 | 2026-10-14 | Validator F | §8.10 re-verification: SWD-P3-02…09 closed (B's round, A content 1.4), R-2 not reproduced (20 seeds), final armed runs fixed + random; bring-up assistant ACCEPTED |
+| 1.6 | 2026-10-14 | Validator F | §8.10: bring-up engine + pulse-integrity check verified (group BRU armed); SWD-P3-02 (fixed in round) … SWD-P3-09; verdict ACCEPTED WITH CONDITIONS |
 | 1.5 | 2026-10-10 | Validator F | §8.9: D-54 a / c verified (D54A armed, F's cases 05–09 + D-54 c); new SWR-38 (S3) |
 | 1.4 | 2026-10-10 | Validator F | §8.8: round 6 verified (SWR-19, 29–32, 34–37 closed; SWR-17 part 2 accepted backlog); shorter test-only logs do not weaken any validation hook; final full suite 2 × 3630 passed (fixed + random); final SW verdict for the HW gate ACCEPTED WITH CONDITIONS |
 | 1.3 | 2026-10-10 | Validator F | §8.7: SWR-05 closed on the final recorder (SWD-P3-01, + SWR-33), independent threaded stop / start test; liveness filter judged — new SWR-37 (S3, no ceiling) with reproducer; owners of SWR-29 … 37; SWR-31 closed (XPASS); PR-4 soak not re-run (machine busy) |

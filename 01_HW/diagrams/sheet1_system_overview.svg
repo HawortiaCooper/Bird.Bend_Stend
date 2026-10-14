@@ -1,0 +1,303 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="297mm" height="210mm" viewBox="0 0 1485 1050" font-family="Arial, Helvetica, sans-serif">
+<title>Bird Bend Stand wiring — sheet 1: System overview</title>
+<rect x="0" y="0" width="1485" height="1050" fill="#ffffff"/>
+<rect x="15.0" y="15.0" width="1455.0" height="1020.0" fill="none" stroke="#222" stroke-width="1.6"/>
+<text x="30.0" y="50.0" font-size="20" fill="#123a6b" font-weight="bold">Sheet 1 — System overview</text>
+<text x="1455.0" y="50.0" font-size="13" fill="#555" text-anchor="end">Bird Bend Stand — wiring diagram</text>
+<rect x="25.0" y="70.0" width="1060.0" height="225.0" fill="#fdf1f1" stroke="#e3a0a0" stroke-width="1" rx="4"/>
+<text x="35.0" y="88.0" font-size="10.5" fill="#b71c1c" font-weight="bold">48 V / MAINS DOMAIN — PSU 0 V, driver GND and PE are NEVER connected to logic GND</text>
+<rect x="25.0" y="300.0" width="1060.0" height="600.0" fill="#f2f6fc" stroke="#9db8d9" stroke-width="1" rx="4"/>
+<text x="35.0" y="318.0" font-size="10.5" fill="#1f4e79" font-weight="bold">LOGIC DOMAIN — logic GND star point (Nucleo GND = HX711 GND = input cells = opto returns)</text>
+<polyline points="25.0,297.0 1085.0,297.0" fill="none" stroke="#5f5f5f" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5,3"/>
+<text x="35.0" y="293.0" font-size="9.5" fill="#555" font-style="italic">isolation barrier: driver optos ≥ 500 MΩ · DC-DC ≥ 1.5 kV</text>
+<rect x="40.0" y="105.0" width="115.0" height="60.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="47.0" y="122.0" font-size="12" fill="#123a6b" font-weight="bold">230 VAC</text>
+<text x="47.0" y="137.2" font-size="10.5" fill="#000">L, N, PE</text>
+<rect x="185.0" y="105.0" width="105.0" height="60.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="192.0" y="122.0" font-size="12" fill="#123a6b" font-weight="bold">Q0 MCB</text>
+<text x="192.0" y="137.2" font-size="10.5" fill="#000">mains protection</text>
+<rect x="320.0" y="98.0" width="230.0" height="82.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="327.0" y="114.5" font-size="11.5" fill="#123a6b" font-weight="bold">48 V PSU  SDR-480-48</text>
+<text x="327.0" y="129.0" font-size="10" fill="#000">Mean Well, set-point 48 V</text>
+<text x="327.0" y="142.0" font-size="10" fill="#000">10 A (15 A for 3 s)</text>
+<text x="327.0" y="155.0" font-size="10" fill="#000">mains switch = only power removal</text>
+<polyline points="155.0,125.0 185.0,125.0" fill="none" stroke="#6d4c41" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="290.0,125.0 320.0,125.0" fill="none" stroke="#6d4c41" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="97.0,165.0 97.0,172.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="89.0" y1="172.0" x2="105.0" y2="172.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<line x1="92.0" y1="175.0" x2="102.0" y2="175.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<line x1="95.0" y1="178.0" x2="99.0" y2="178.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<text x="107.0" y="181.0" font-size="9" fill="#3f9a3f">PE</text>
+<polyline points="435.0,180.0 435.0,187.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="427.0" y1="187.0" x2="443.0" y2="187.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<line x1="430.0" y1="190.0" x2="440.0" y2="190.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<line x1="433.0" y1="193.0" x2="437.0" y2="193.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<text x="445.0" y="196.0" font-size="9" fill="#3f9a3f">PE</text>
+<rect x="585.0" y="104.0" width="95.0" height="44.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="592.0" y="120.0" font-size="11" fill="#123a6b" font-weight="bold">F1 T10A</text>
+<text x="592.0" y="133.8" font-size="9.5" fill="#000">at PSU +</text>
+<polyline points="550.0,118.0 585.0,118.0" fill="none" stroke="#c62828" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="680.0,118.0 850.0,118.0" fill="none" stroke="#c62828" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="690.0" y="112.0" font-size="9.5" fill="#000">+48 V</text>
+<text x="560.0" y="176.0" font-size="9" fill="#000">1.5 mm² twisted pair ≤ 1–2 m</text>
+<polyline points="550.0,160.0 850.0,160.0" fill="none" stroke="#212121" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="700.0" y="154.0" font-size="9.5" fill="#000">0 V(48)</text>
+<text x="320.0" y="218.0" font-size="9.5" fill="#b71c1c" font-style="italic">no contactor, no RESET button (D-41)</text>
+<rect x="585.0" y="205.0" width="190.0" height="132.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="592.0" y="222.0" font-size="11" fill="#123a6b" font-weight="bold">isolated DC-DC 48 → 5 V, 1 W</text>
+<text x="592.0" y="237.0" font-size="10" fill="#000">e.g. TRACO TMR 1-4811 class</text>
+<rect x="592.0" y="245.0" width="156.0" height="16.0" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="597.0" y="257.0" font-size="9" fill="#b26a00" font-weight="bold">ASSUMED – verify at HW gate</text>
+<text x="592.0" y="278.0" font-size="9.5" fill="#000">in: +48 V (after F1), 0 V(48)</text>
+<text x="592.0" y="312.0" font-size="9.5" fill="#000">out: +5V_CUT, 0 V = logic GND</text>
+<polygon points="585.0,278.0 578.0,270.5 548.0,270.5 548.0,285.5 578.0,285.5" fill="#fff" stroke="#c62828" stroke-width="1.3"/>
+<text x="563.5" y="281.2" font-size="9" fill="#c62828" text-anchor="middle" font-weight="bold">+48V</text>
+<polyline points="680.0,337.0 680.0,360.0" fill="none" stroke="#ef6c00" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="680.0,360.0 687.0,352.5 736.3,352.5 736.3,367.5 687.0,367.5" fill="#fff" stroke="#ef6c00" stroke-width="1.3"/>
+<text x="711.2" y="363.2" font-size="9" fill="#ef6c00" text-anchor="middle" font-weight="bold">+5V_CUT</text>
+<rect x="850.0" y="98.0" width="225.0" height="372.0" fill="#fff" stroke="#333" stroke-width="1.6" rx="3"/>
+<text x="858.0" y="116.0" font-size="11.5" fill="#123a6b" font-weight="bold">HBS86H driver (PFDE clone)</text>
+<text x="858.0" y="130.0" font-size="9.5" fill="#000">Leadshine-compatible, 24–100 VDC (D-16)</text>
+<text x="858.0" y="122.0" font-size="1" fill="#000"></text>
+<text x="858.0" y="145.0" font-size="10" fill="#000" font-weight="bold">+Vdc</text>
+<text x="858.0" y="164.0" font-size="10" fill="#000" font-weight="bold">GND</text>
+<polyline points="850.0,118.0 850.0,118.0" fill="none" stroke="#c62828" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1068.0" y="186.0" font-size="10" fill="#000" text-anchor="end" font-weight="bold">A+ A− B+ B−</text>
+<text x="1068.0" y="236.0" font-size="10" fill="#000" text-anchor="end" font-weight="bold">encoder EA± EB±</text>
+<polyline points="1063.0,196.0 1063.0,203.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="1055.0" y1="203.0" x2="1071.0" y2="203.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<line x1="1058.0" y1="206.0" x2="1068.0" y2="206.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<line x1="1061.0" y1="209.0" x2="1065.0" y2="209.0" stroke="#3f9a3f" stroke-width="1.6"/>
+<text x="1050.0" y="222.0" font-size="9" fill="#3f9a3f" text-anchor="end">PE</text>
+<text x="858.0" y="268.0" font-size="9.5" fill="#666">RS232 tuning port: not used</text>
+<text x="858.0" y="282.0" font-size="9.5" fill="#666">(factory settings, D-28)</text>
+<text x="858.0" y="318.0" font-size="9.5" fill="#555" font-style="italic">opto barrier</text>
+<text x="858.0" y="358.0" font-size="10" fill="#000" font-weight="bold">Signal: PUL± DIR± ENA±</text>
+<text x="858.0" y="408.0" font-size="10" fill="#000" font-weight="bold">OUT: PEND± ALM±</text>
+<text x="858.0" y="440.0" font-size="9.5" fill="#000">DIP SW1…SW8 per D-27 (sheet 4)</text>
+<text x="858.0" y="455.0" font-size="9.5" fill="#000">apply with the driver unpowered</text>
+<rect x="1095.0" y="70.0" width="365.0" height="400.0" fill="#fafafa" stroke="#999" stroke-width="1" rx="4"/>
+<text x="1105.0" y="88.0" font-size="10.5" fill="#444" font-weight="bold">MECHANICS (horizontal axis, no brake)</text>
+<rect x="1105.0" y="100.0" width="150.0" height="74.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="1112.0" y="116.0" font-size="11" fill="#123a6b" font-weight="bold">86HS2140-06</text>
+<text x="1112.0" y="129.8" font-size="9.5" fill="#000">SIHONG stepper, 8.2 N·m</text>
+<text x="1112.0" y="142.1" font-size="9.5" fill="#000">6.0 A, 1000-line encoder</text>
+<polyline points="1075.0,182.0 1180.0,182.0 1180.0,174.0" fill="none" stroke="#ad5d00" stroke-width="3.0" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1086.0" y="196.0" font-size="9" fill="#ad5d00">4 × phase, shielded</text>
+<polyline points="1075.0,232.0 1230.0,232.0 1230.0,174.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1086.0" y="246.0" font-size="9" fill="#1f4e9a">encoder cable (separate)</text>
+<text x="1240.0" y="224.0" font-size="9" fill="#555">closed loop: SW7 off / SW8 on</text>
+<text x="1240.0" y="237.0" font-size="9" fill="#555">(D-27 target)</text>
+<rect x="1255.0" y="128.0" width="18.0" height="20.0" fill="#ddd" stroke="#555" stroke-width="1"/>
+<rect x="1273.0" y="133.0" width="175.0" height="10.0" fill="#e8e8e8" stroke="#555" stroke-width="1"/>
+<line x1="1278" y1="143" x2="1286" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1292" y1="143" x2="1300" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1306" y1="143" x2="1314" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1320" y1="143" x2="1328" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1334" y1="143" x2="1342" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1348" y1="143" x2="1356" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1362" y1="143" x2="1370" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1376" y1="143" x2="1384" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1390" y1="143" x2="1398" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1404" y1="143" x2="1412" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1418" y1="143" x2="1426" y2="133" stroke="#999" stroke-width="1"/>
+<line x1="1432" y1="143" x2="1440" y2="133" stroke="#999" stroke-width="1"/>
+<rect x="1330.0" y="118.0" width="60.0" height="40.0" fill="#cfd8dc" stroke="#333" stroke-width="1.2"/>
+<text x="1360.0" y="142.0" font-size="9.5" fill="#000" text-anchor="middle">table</text>
+<text x="1265.0" y="190.0" font-size="9" fill="#000">SFU1605 ball screw, 5 mm lead,</text>
+<text x="1265.0" y="202.0" font-size="9" fill="#000">300 mm stroke, direct drive</text>
+<rect x="1255.0" y="259.5" width="140.8" height="15.5" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="1260.0" y="271.0" font-size="8.5" fill="#b26a00" font-weight="bold">direct drive ASSUMED (D-19)</text>
+<polygon points="1448.0,112.0 1440.0,107.6 1440.0,116.4" fill="#5f5f5f" stroke="none" stroke-width="1"/>
+<polyline points="1400.0,112.0 1442.0,112.0" fill="none" stroke="#5f5f5f" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5,3"/>
+<text x="1446.0" y="100.0" font-size="9" fill="#000" text-anchor="end">+x = away from START</text>
+<polyline points="1290.0,300.0 1290.0,312.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="1290.0,328.0 1290.0,340.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="1290.0" cy="312.0" r="2.4" fill="#fff" stroke="#b0006a" stroke-width="1.4"/>
+<circle cx="1290.0" cy="328.0" r="2.4" fill="#fff" stroke="#b0006a" stroke-width="1.4"/>
+<line x1="1290.0" y1="312.0" x2="1294.0" y2="331.0" stroke="#b0006a" stroke-width="2"/>
+<line x1="1284.0" y1="328.0" x2="1290.0" y2="328.0" stroke="#b0006a" stroke-width="1.6"/>
+<text x="1302.0" y="324.0" font-size="10" fill="#000"></text>
+<text x="1250.0" y="362.0" font-size="9.5" fill="#b0006a" font-weight="bold">START (home end)</text>
+<text x="1250.0" y="375.0" font-size="9.5" fill="#000">NC limit switch</text>
+<polyline points="1420.0,300.0 1420.0,312.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="1420.0,328.0 1420.0,340.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="1420.0" cy="312.0" r="2.4" fill="#fff" stroke="#b0006a" stroke-width="1.4"/>
+<circle cx="1420.0" cy="328.0" r="2.4" fill="#fff" stroke="#b0006a" stroke-width="1.4"/>
+<line x1="1420.0" y1="312.0" x2="1424.0" y2="331.0" stroke="#b0006a" stroke-width="2"/>
+<line x1="1414.0" y1="328.0" x2="1420.0" y2="328.0" stroke="#b0006a" stroke-width="1.6"/>
+<text x="1432.0" y="324.0" font-size="10" fill="#000"></text>
+<text x="1380.0" y="362.0" font-size="9.5" fill="#b0006a" font-weight="bold">END</text>
+<text x="1380.0" y="375.0" font-size="9.5" fill="#000">NC limit</text>
+<polygon points="1290.0,300.0 1283.0,292.8 1233.0,292.8 1233.0,307.2 1283.0,307.2" fill="#fff" stroke="#b0006a" stroke-width="1.3"/>
+<text x="1258.5" y="303.1" font-size="8.5" fill="#b0006a" text-anchor="middle" font-weight="bold">J2 START</text>
+<polygon points="1420.0,300.0 1413.0,292.8 1374.7,292.8 1374.7,307.2 1413.0,307.2" fill="#fff" stroke="#b0006a" stroke-width="1.3"/>
+<text x="1394.3" y="303.1" font-size="8.5" fill="#b0006a" text-anchor="middle" font-weight="bold">J2 END</text>
+<text x="1105.0" y="405.0" font-size="9" fill="#555">switch positions schematic; actuation beyond the</text>
+<text x="1105.0" y="418.0" font-size="9" fill="#555">soft limits 0.5 / 290 mm (A-07)</text>
+<rect x="1105.0" y="425.0" width="345.0" height="38.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="1112.0" y="440.0" font-size="10" fill="#123a6b" font-weight="bold">Keli DEF 200 kg load cell, 3.0 mV/V</text>
+<text x="1112.0" y="455.0" font-size="9" fill="#000">tension + compression, in the load path (table ↔ specimen ↔ frame)</text>
+<rect x="40.0" y="470.0" width="175.0" height="100.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="47.0" y="487.0" font-size="12" fill="#123a6b" font-weight="bold">PC</text>
+<text x="47.0" y="501.5" font-size="10" fill="#000">Bird Bend Stand app</text>
+<text x="47.0" y="514.5" font-size="10" fill="#000">(pc_software zip)</text>
+<text x="47.0" y="527.5" font-size="10" fill="#000">port: STLink Virtual</text>
+<text x="47.0" y="540.5" font-size="10" fill="#000">COM Port (COMn)</text>
+<rect x="290.0" y="430.0" width="245.0" height="245.0" fill="#fff" stroke="#333" stroke-width="1.6" rx="3"/>
+<text x="298.0" y="448.0" font-size="12" fill="#123a6b" font-weight="bold">NUCLEO-F446RE (MB1136)</text>
+<text x="298.0" y="466.0" font-size="10" fill="#000">ST-LINK/V2-1 on board:</text>
+<text x="298.0" y="479.0" font-size="10" fill="#000">· USB VCP = USART2 PA2/PA3,</text>
+<text x="298.0" y="492.0" font-size="10" fill="#000">  921 600 Bd 8N1, CRC-16 frames</text>
+<text x="298.0" y="505.0" font-size="10" fill="#000">· 8 MHz MCO → PH0 (HSE bypass)</text>
+<text x="298.0" y="518.0" font-size="10" fill="#000">· SWD (flashing, D-06: PO only)</text>
+<text x="298.0" y="531.0" font-size="10" fill="#000"></text>
+<text x="298.0" y="544.0" font-size="10" fill="#000">supply: USB (JP5 = U5V)</text>
+<text x="298.0" y="557.0" font-size="10" fill="#000">or 5 V into E5V (CN7-6),</text>
+<text x="298.0" y="570.0" font-size="10" fill="#000">JP5 = E5V</text>
+<rect x="298.0" y="589.0" width="156.0" height="16.0" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="303.0" y="601.0" font-size="9" fill="#b26a00" font-weight="bold">ASSUMED – verify at HW gate</text>
+<text x="298.0" y="620.0" font-size="10" fill="#000" font-weight="bold">pin-level detail: sheet 2</text>
+<text x="298.0" y="636.0" font-size="10" fill="#000">solder bridges: pinout.md §5</text>
+<text x="298.0" y="652.0" font-size="9.5" fill="#000">(SB13/14 ON, SB46/52 OFF, SB51 ON …)</text>
+<polyline points="215.0,520.0 290.0,520.0" fill="none" stroke="#00838f" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="11,3,2,3"/>
+<text x="220.0" y="512.0" font-size="10" fill="#00838f" font-weight="bold">USB</text>
+<rect x="40.0" y="600.0" width="175.0" height="62.0" fill="#fff" stroke="#888" stroke-width="1.4" stroke-dasharray="4,3" rx="3"/>
+<text x="47.0" y="615.5" font-size="10.5" fill="#123a6b" font-weight="bold">optional 5 V DC-DC</text>
+<text x="47.0" y="629.3" font-size="9.5" fill="#000">→ E5V (CN7-6), JP5 = E5V</text>
+<text x="47.0" y="641.6" font-size="9.5" fill="#000">(D-22; USB still carries VCP)</text>
+<polyline points="215.0,640.0 290.0,640.0" fill="none" stroke="#9e9e9e" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2,3"/>
+<rect x="600.0" y="430.0" width="215.0" height="245.0" fill="#fff" stroke="#333" stroke-width="1.6" rx="3"/>
+<text x="608.0" y="448.0" font-size="12" fill="#123a6b" font-weight="bold">Interface board</text>
+<text x="608.0" y="466.0" font-size="10" fill="#000">Stage 1 (release config.):</text>
+<text x="608.0" y="479.0" font-size="10" fill="#000">RC cells + pull-ups, direct</text>
+<text x="608.0" y="492.0" font-size="10" fill="#000">3.3 V drive (D-17), qualified</text>
+<text x="608.0" y="505.0" font-size="10" fill="#000">per wiring §2.2 (D-56 b)</text>
+<text x="608.0" y="518.0" font-size="10" fill="#000">Stage 2 (only if the</text>
+<text x="608.0" y="531.0" font-size="10" fill="#000">qualification fails, SYS-011):</text>
+<text x="608.0" y="544.0" font-size="10" fill="#000">SN74ACT244 5 V buffer shield</text>
+<text x="608.0" y="557.0" font-size="10" fill="#000">J1 driver 10-p · J2 limits 4-p</text>
+<text x="608.0" y="570.0" font-size="10" fill="#000">J3 panel 8-p · J4 HX711 6-p</text>
+<rect x="608.0" y="584.0" width="156.0" height="16.0" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="613.0" y="596.0" font-size="9" fill="#b26a00" font-weight="bold">ASSUMED – verify at HW gate</text>
+<text x="608.0" y="618.0" font-size="9.5" fill="#000" font-weight="bold">input cells, ENA diode OR: sheet 3</text>
+<text x="608.0" y="632.0" font-size="9.5" fill="#777">measurement header MH: bench only</text>
+<polyline points="535.0,470.0 600.0,470.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="535.0,490.0 600.0,490.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="535.0,510.0 600.0,510.0" fill="none" stroke="#ef6c00" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="535.0,530.0 600.0,530.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="540.0" y="464.0" font-size="8.5" fill="#555">Arduino</text>
+<text x="540.0" y="545.0" font-size="8.5" fill="#555">headers</text>
+<polyline points="760.0,430.0 760.0,350.0 850.0,350.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="800.0,430.0 800.0,400.0 850.0,400.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="612.0" y="378.0" font-size="9.5" fill="#000" font-weight="bold">control cable:</text>
+<text x="612.0" y="391.0" font-size="9" fill="#000">LiYCY 6×2×0.25 twisted pairs,</text>
+<text x="612.0" y="404.0" font-size="9" fill="#000">≤ 1–2 m; shield → logic GND</text>
+<text x="612.0" y="417.0" font-size="9" fill="#000">at the board end only</text>
+<polyline points="745.0,432.0 745.0,365.0 848.0,365.0" fill="none" stroke="#7a7a7a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,3"/>
+<polygon points="850.0,350.0 843.0,346.1 843.0,353.9" fill="#1f4e9a" stroke="none" stroke-width="1"/>
+<polygon points="800.0,430.0 796.1,423.0 803.9,423.0" fill="#1f4e9a" stroke="none" stroke-width="1"/>
+<polygon points="815.0,560.0 822.0,552.8 872.0,552.8 872.0,567.2 822.0,567.2" fill="#fff" stroke="#b0006a" stroke-width="1.3"/>
+<text x="846.5" y="563.1" font-size="8.5" fill="#b0006a" text-anchor="middle" font-weight="bold">J2 START</text>
+<polygon points="815.0,580.0 822.0,572.8 860.3,572.8 860.3,587.2 822.0,587.2" fill="#fff" stroke="#b0006a" stroke-width="1.3"/>
+<text x="840.7" y="583.1" font-size="8.5" fill="#b0006a" text-anchor="middle" font-weight="bold">J2 END</text>
+<rect x="895.0" y="520.0" width="185.0" height="225.0" fill="#fff" stroke="#b0006a" stroke-width="1.8" rx="3"/>
+<text x="903.0" y="538.0" font-size="12" fill="#123a6b" font-weight="bold">Operator panel</text>
+<circle cx="925.0" cy="572.0" r="16" fill="#e53935" stroke="#7f0000" stroke-width="2"/>
+<circle cx="925.0" cy="572.0" r="21" fill="none" stroke="#fbc02d" stroke-width="4"/>
+<text x="952.0" y="566.0" font-size="10.5" fill="#b71c1c" font-weight="bold">S0 red E-stop</text>
+<text x="952.0" y="580.0" font-size="9" fill="#000">mushroom, turn-to-release</text>
+<text x="903.0" y="610.0" font-size="9.5" fill="#000">NC block → PA10 E-stop sense</text>
+<text x="903.0" y="622.4" font-size="9.5" fill="#000">  (MCU/FW stop, D-41)</text>
+<text x="903.0" y="634.7" font-size="9.5" fill="#000">NO block → +5V_CUT → R_E 68 Ω</text>
+<text x="903.0" y="647.0" font-size="9.5" fill="#000">  → D2 → ENA+ (hardwired ENA</text>
+<text x="903.0" y="659.4" font-size="9.5" fill="#000">  cut, no MCU element, D-42)</text>
+<circle cx="918.0" cy="691.0" r="9" fill="#fdd835" stroke="#555" stroke-width="1.5"/>
+<text x="935.0" y="695.0" font-size="9.5" fill="#000" font-weight="bold">PAUSE (NO, momentary)</text>
+<text x="903.0" y="718.0" font-size="9.5" fill="#b71c1c" font-weight="bold">not an IEC 60204-1 E-stop</text>
+<text x="903.0" y="732.0" font-size="9.5" fill="#b71c1c">(no power removal, D-41)</text>
+<polyline points="815.0,620.0 895.0,620.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="820.0" y="614.0" font-size="9" fill="#b0006a">J3 panel</text>
+<polygon points="895.0,650.0 888.0,642.8 841.0,642.8 841.0,657.2 888.0,657.2" fill="#fff" stroke="#ef6c00" stroke-width="1.3"/>
+<text x="865.0" y="653.1" font-size="8.5" fill="#ef6c00" text-anchor="middle" font-weight="bold">+5V_CUT</text>
+<polyline points="1040.0,520.0 1040.0,470.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1040.0,470.0 1036.2,477.0 1043.8,477.0" fill="#b0006a" stroke="none" stroke-width="1"/>
+<text x="1045.0" y="505.0" font-size="9" fill="#b0006a">NO → R_E → D2 → ENA+</text>
+<text x="1045.0" y="492.0" font-size="8.5" fill="#b0006a">(diode OR, sheet 3)</text>
+<rect x="600.0" y="740.0" width="215.0" height="80.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="607.0" y="756.0" font-size="11" fill="#123a6b" font-weight="bold">HX711 module @ 3.3 V</text>
+<text x="607.0" y="769.8" font-size="9.5" fill="#000">80 SPS, gain 128 (D-04)</text>
+<text x="607.0" y="782.1" font-size="9.5" fill="#000">RATE pin 15 lifted → PB5 (D-21)</text>
+<text x="607.0" y="794.5" font-size="9.5" fill="#000">close to the Nucleo, wires ≤ 20 cm</text>
+<polyline points="535.0,650.0 570.0,650.0 570.0,760.0 600.0,760.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="450.0" y="699.0" font-size="1" fill="#000"></text>
+<text x="565.0" y="700.0" font-size="8.5" fill="#000" text-anchor="end">DOUT, SCK,</text>
+<text x="565.0" y="711.0" font-size="8.5" fill="#000" text-anchor="end">RATE,</text>
+<text x="565.0" y="722.1" font-size="8.5" fill="#000" text-anchor="end">3V3, GND</text>
+<polyline points="815.0,790.0 1180.0,790.0 1180.0,463.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="815.0,800.0 1190.0,800.0 1190.0,463.0" fill="none" stroke="#7a7a7a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,3"/>
+<text x="830.0" y="784.0" font-size="9.5" fill="#000">cell cable 5 m, 4-wire + shield (do not shorten)</text>
+<text x="830.0" y="815.0" font-size="9.5" fill="#666">shield (yellow) → HX711 GND only</text>
+<rect x="40.0" y="700.0" width="460.0" height="190.0" fill="#fff" stroke="#2e7d32" stroke-width="1.4" rx="3"/>
+<text x="48.0" y="718.0" font-size="12" fill="#2e7d32" font-weight="bold">Grounding and shields (wiring.md §9)</text>
+<polyline points="70.0,730.0 70.0,737.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="62.0" y1="737.0" x2="78.0" y2="737.0" stroke="#2e7d32" stroke-width="1.6"/>
+<line x1="65.0" y1="740.0" x2="75.0" y2="740.0" stroke="#2e7d32" stroke-width="1.6"/>
+<line x1="68.0" y1="743.0" x2="72.0" y2="743.0" stroke="#2e7d32" stroke-width="1.6"/>
+<text x="90.0" y="744.0" font-size="10" fill="#000" font-weight="bold">logic GND star point at the Nucleo GND:</text>
+<text x="48.0" y="765.0" font-size="10" fill="#000">· Nucleo GND = HX711 GND = input-cell GND = +5V_CUT 0 V</text>
+<text x="48.0" y="778.0" font-size="10" fill="#000">· opto returns PUL− DIR− ENA− ALM− PEND− (common cathode, D-17)</text>
+<text x="48.0" y="791.0" font-size="10" fill="#000">· the PC ground enters through the USB / ST-LINK</text>
+<text x="48.0" y="804.0" font-size="10" fill="#000">· NEVER connect logic GND to the driver 48 V GND, the PSU 0 V or PE</text>
+<text x="48.0" y="817.0" font-size="10" fill="#000">· motor cable shield → driver PE at the driver end</text>
+<text x="48.0" y="830.0" font-size="10" fill="#000">· control cable shield → logic GND at the board end only</text>
+<text x="48.0" y="843.0" font-size="10" fill="#000">· load-cell shield (yellow) → HX711 GND only; keep the cell cable</text>
+<text x="48.0" y="856.0" font-size="10" fill="#000">  ≥ 10–20 cm from motor / 48 V wires, cross at 90°</text>
+<rect x="600.0" y="840.0" width="480.0" height="50.0" fill="#fff" stroke="#999" stroke-width="1.4" stroke-dasharray="4,3" rx="3"/>
+<text x="607.0" y="855.5" font-size="10.5" fill="#123a6b" font-weight="bold">Not fitted in release 1</text>
+<text x="607.0" y="869.3" font-size="9.5" fill="#000">DRV_PWR 48 V presence sense (PA7, drv.pwr_sense_enable = 0) · TRIP relay (PB9 retired)</text>
+<text x="25.0" y="936.0" font-size="11" fill="#123a6b" font-weight="bold">Legend</text>
+<polyline points="77.0,930.0 111.0,930.0" fill="none" stroke="#6d4c41" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="117.0" y="934.0" font-size="9.5" fill="#000">230 VAC mains</text>
+<polyline points="317.0,930.0 351.0,930.0" fill="none" stroke="#3f9a3f" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="9,4"/>
+<text x="357.0" y="934.0" font-size="9.5" fill="#000">PE (protective earth)</text>
+<polyline points="557.0,930.0 591.0,930.0" fill="none" stroke="#c62828" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="597.0" y="934.0" font-size="9.5" fill="#000">+48 V driver supply</text>
+<polyline points="797.0,930.0 831.0,930.0" fill="none" stroke="#212121" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="837.0" y="934.0" font-size="9.5" fill="#000">0 V of the 48 V bus</text>
+<polyline points="77.0,948.0 111.0,948.0" fill="none" stroke="#ad5d00" stroke-width="3.0" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="117.0" y="952.0" font-size="9.5" fill="#000">motor phases A±/B±</text>
+<polyline points="317.0,948.0 351.0,948.0" fill="none" stroke="#ef6c00" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="357.0" y="952.0" font-size="9.5" fill="#000">logic supply 3V3 / 5V / +5V_CUT</text>
+<polyline points="557.0,948.0 591.0,948.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="597.0" y="952.0" font-size="9.5" fill="#000">logic GND (single star point)</text>
+<polyline points="797.0,948.0 831.0,948.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="837.0" y="952.0" font-size="9.5" fill="#000">signal</text>
+<polyline points="77.0,966.0 111.0,966.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="117.0" y="970.0" font-size="9.5" fill="#000">safety: E-stop / limits / ENA cut</text>
+<polyline points="317.0,966.0 351.0,966.0" fill="none" stroke="#00838f" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="11,3,2,3"/>
+<text x="357.0" y="970.0" font-size="9.5" fill="#000">USB (PC link)</text>
+<polyline points="557.0,966.0 591.0,966.0" fill="none" stroke="#7a7a7a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,3"/>
+<text x="597.0" y="970.0" font-size="9.5" fill="#000">cable shield / screen</text>
+<polyline points="797.0,966.0 831.0,966.0" fill="none" stroke="#9e9e9e" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2,3"/>
+<text x="837.0" y="970.0" font-size="9.5" fill="#000">optional / not fitted / bench only</text>
+<rect x="77.0" y="977.0" width="156.0" height="16.0" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="82.0" y="989.0" font-size="9" fill="#b26a00" font-weight="bold">ASSUMED – verify at HW gate</text>
+<circle cx="287.0" cy="984.0" r="4.5" fill="#fff" stroke="#d32f2f" stroke-width="1.6"/>
+<circle cx="287.0" cy="984.0" r="1.5" fill="#d32f2f" stroke="none" stroke-width="1.2"/>
+<text x="293.0" y="978.0" font-size="10" fill="#d32f2f" font-weight="bold"></text>
+<text x="297.0" y="988.0" font-size="9.5" fill="#000">M-n = multimeter point (wiring.md §11.1)</text>
+<polygon points="585.0,984.0 578.0,976.5 552.5,976.5 552.5,991.5 578.0,991.5" fill="#fff" stroke="#1f4e9a" stroke-width="1.3"/>
+<text x="565.8" y="987.2" font-size="9" fill="#1f4e9a" text-anchor="middle" font-weight="bold">NET</text>
+<text x="591.0" y="988.0" font-size="9.5" fill="#000">net label (same name = same net)</text>
+<rect x="1005.0" y="925.0" width="465.0" height="110.0" fill="#fff" stroke="#222" stroke-width="1.6"/>
+<line x1="1005" y1="953" x2="1470" y2="953" stroke="#222" stroke-width="1"/>
+<line x1="1305" y1="925" x2="1305" y2="953" stroke="#222" stroke-width="1"/>
+<text x="1013.0" y="944.0" font-size="13" fill="#123a6b" font-weight="bold">Bird Bend Stand — wiring diagram</text>
+<text x="1313.0" y="944.0" font-size="13" fill="#000" font-weight="bold">Sheet 1 / 4</text>
+<text x="1013.0" y="969.0" font-size="11" fill="#000" font-weight="bold">System overview</text>
+<text x="1013.0" y="984.0" font-size="10" fill="#000">Version 1.1 · 2026-10-14 · owner Implementer A (01_HW)</text>
+<text x="1013.0" y="998.0" font-size="9" fill="#000">Source: 01_HW/wiring.md v0.7 · 01_HW/pinout.md v0.6 · DECISIONS D-27, D-41, D-42, D-56</text>
+<text x="1013.0" y="1011.0" font-size="9" fill="#555">Generated by 01_HW/diagrams/gen_wiring_svg.py — do not edit the SVG/PNG</text>
+<text x="1013.0" y="1024.0" font-size="9.5" fill="#b71c1c" font-weight="bold">NOT A CERTIFIED SAFETY DESIGN — engineering proposal for a lab stand</text>
+</svg>

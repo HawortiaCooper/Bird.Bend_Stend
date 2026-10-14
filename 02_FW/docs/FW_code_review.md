@@ -2,7 +2,7 @@
 
 | Item | Value |
 |---|---|
-| Version | v1.3 (2026-10-10): §16 re-check of FW v0.8.6 (D-55: `step_isr_core` target entry ≡ seam entry, acc clamp proof, branch-free selects; OI-FW-53 applied; OBS-RC-9 informational; HW-gate verdict GO WITH CONDITIONS). v1.2 (2026-10-10): §15 re-check of FW v0.8.5 (FWR-21, OBS-RC-7, OBS-RC-8 CLOSED; final HW-gate verdict GO WITH CONDITIONS). v1.1 (2026-10-10): §14 re-check of FW v0.8.4 (FWR-20 and OBS-RC-6 CLOSED; new FWR-21 Low, OBS-RC-7, OBS-RC-8). v1.0 (2026-10-09): §13 re-check of FW v0.8.3 (FWR-19 CLOSED; new FWR-20 Medium; OBS-RC-6). v0.9 (2026-10-09): §12 re-check of FW v0.8.2 (FWR-18 CLOSED; new FWR-19 Low). v0.8 (2026-10-09): §11 re-check of FW v0.8.1 (FWR-16, OBS-RC-1…3, FWR-09 pure check CLOSED; new FWR-18 Medium). v0.7 (2026-10-09): §10.5 D-52 HG-18 criteria and check-vector state_schema 4 applied. v0.6 (2026-10-09): §10 re-check of A's Task 1 + FWR-01…10 (all CLOSED, new FWR-16 / FWR-17 Low), §7 status. v0.5 (2026-10-08): §7 FWR-14 / FWR-09 (ICD) status and §9.2 Integrator re-review of round 2 (Implementer C). v0.4 (2026-10-08): §7 / §8.2 fixes of the Integrator review findings C-R1…C-R3, O-1…O-3 (round 2, for C's re-review). v0.3 (2026-10-08): §9 Integrator review of the HIL fixes (Implementer C). v0.2 (2026-10-08): §7 fix status, §8 change list of the HIL fixes for the Integrator's review. v0.1 (2026-10-08): review at e600169 |
+| Version | v1.7 (2026-10-14): §18.6 Integrator re-check of gate runner v1.2.0 (C-GR-4/5 fixed; O-GR-6 Low). v1.6 (2026-10-14): §18.5 Integrator re-review of gate runner v1.1 (C-GR-1…3 fixed; C-GR-4 Medium, C-GR-5 Low). v1.5 (2026-10-14): §18 Integrator review GR-4 of the gate runner (D-57). v1.4 (2026-10-14): §17 closure check of the Bring-up assistant safety review B-BRU-04 (18 findings CLOSED; two Low residuals). v1.3 (2026-10-10): §16 re-check of FW v0.8.6 (D-55: `step_isr_core` target entry ≡ seam entry, acc clamp proof, branch-free selects; OI-FW-53 applied; OBS-RC-9 informational; HW-gate verdict GO WITH CONDITIONS). v1.2 (2026-10-10): §15 re-check of FW v0.8.5 (FWR-21, OBS-RC-7, OBS-RC-8 CLOSED; final HW-gate verdict GO WITH CONDITIONS). v1.1 (2026-10-10): §14 re-check of FW v0.8.4 (FWR-20 and OBS-RC-6 CLOSED; new FWR-21 Low, OBS-RC-7, OBS-RC-8). v1.0 (2026-10-09): §13 re-check of FW v0.8.3 (FWR-19 CLOSED; new FWR-20 Medium; OBS-RC-6). v0.9 (2026-10-09): §12 re-check of FW v0.8.2 (FWR-18 CLOSED; new FWR-19 Low). v0.8 (2026-10-09): §11 re-check of FW v0.8.1 (FWR-16, OBS-RC-1…3, FWR-09 pure check CLOSED; new FWR-18 Medium). v0.7 (2026-10-09): §10.5 D-52 HG-18 criteria and check-vector state_schema 4 applied. v0.6 (2026-10-09): §10 re-check of A's Task 1 + FWR-01…10 (all CLOSED, new FWR-16 / FWR-17 Low), §7 status. v0.5 (2026-10-08): §7 FWR-14 / FWR-09 (ICD) status and §9.2 Integrator re-review of round 2 (Implementer C). v0.4 (2026-10-08): §7 / §8.2 fixes of the Integrator review findings C-R1…C-R3, O-1…O-3 (round 2, for C's re-review). v0.3 (2026-10-08): §9 Integrator review of the HIL fixes (Implementer C). v0.2 (2026-10-08): §7 fix status, §8 change list of the HIL fixes for the Integrator's review. v0.1 (2026-10-08): review at e600169 |
 | Reviewer | Validator E (FW) — Task 6, PO-approved whole-codebase review (not milestone-scoped) |
 | Anchor | commit **e600169** (P2 complete). Every `file:line` below refers to that commit. The review ran on a `git archive e600169` export in the role scratchpad, so Implementer A's parallel ISR work (Task 1) does not affect the line numbers. |
 | Baseline | SRS v0.6.4, ICD v0.7.4 (dict 6, 0xF8BCDCB8), FW_design v0.7, DECISIONS up to D-49 |
@@ -1264,3 +1264,184 @@ A's proof is correct:
    - SAF-FW-002 / 004 / 005 timing and count trials, with the random phase covering the 1.5 µs guard window.
    - HG-09 count trials. These are now also the target evidence that the `step_isr_core` entry counts like the seam form the twin runs.
    - The reference-manual premise "CNT = 0 after an OPM stop".
+
+## 17. Bring-up assistant safety review B-BRU-04 — closure check (Validator E, 2026-10-14)
+
+**Inputs.** Step file `03_SW/src/bend_stand/resources/bringup_steps.json` content_version 1.3 (A);
+`core/bringup.py` and SW_design §25 (B); `gui/widgets/bringup_dock.py` (D). Read and compared with the 18
+findings of my review. The shipped-file tests ran with private data / bring-up / recordings directories
+(`BEND_STAND_DATA_DIR`, `BEND_STAND_BRINGUP_DIR`, `BEND_STAND_RECORDINGS_DIR`, `--basetemp` in the scratchpad). No
+hardware, nothing committed.
+
+| # | Finding (short) | Verdict | Evidence |
+|---|---|---|---|
+| 1 | 10.2.2 speed fixed at 30 mm/s | CLOSED | `speed_mm_s: 30`; `_pulse_start` refuses with `SPEED_BELOW_QUALIFICATION` if min(PC cap, travel limit, FW cap) < 30; never faster |
+| 2 | Hard verdicts in the run | CLOSED | `LIMIT_SET` during a move, a limit stop cause, `BOOT` (also after a link-loss abort) and STEP_FAULT / LOAD_LIMIT / AFE_FAULT → FAIL `hard_fail` (`STOP_REPORTED` on restart); LINK_WDG / HALT / PAUSED / ALM / E-stop / DISABLE → ABORTED |
+| 3 | 0.45–0.60 V band → 10.1.5 | CLOSED | 10.1.3 / 10.1.4 min 0.45 V; 10.1.5 not optional, stops on fail; `invalid_when` refuses "no repeat" when a reading is < 0.60 V or missing; `required_when` for the mA fields |
+| 4 | 9.5 / 9.8 hand press | CLOSED | stage 1 needs EVENT STOPPED arg LIMIT_START / LIMIT_END (`StopCause` names) |
+| 5 | 10.2.3–10.2.5 follow 10.2.2 | CLOSED | `step` source on `action.result.verdict`; `fail_if` hard verdicts and `verdict_fails ≥ 2` |
+| 6 | Re-enter no-specimen mode / HOME after 10.1 | CLOSED | JSON 10.1.4 / 10.2.1 and guide v0.4 10.1.4 / 10.2.1 |
+| 7 | Absence checks on stale data | CLOSED | engine-wide `_board_fresh`: link CONNECTED and board data newer than the stage arming and the last connect / BOOT |
+| 8 | Fresh HOMED before each re-home | CLOSED | `_board_fresh(now − 300 ms)` and HOMED, else ABORTED |
+| 9 | Stop flags 7.2–7.7, 11.2.1; PAUSED on 11.2.5 / 11.3.2 | CLOSED | `stop_if_fail` set; safety note and auto PAUSED condition present |
+| 10 | Baseline HOME_DRIFT | CLOSED | FAULT_SET HOME_DRIFT during a baseline re-home → BASELINE_SCATTER (switch text, not counted) |
+| 11 | E_RANGE label | CLOSED | "E_RANGE refusal (no limit is raised)", also for a REFUSED move result |
+| 12 | 3.2-10 / -11 / -12 stop | CLOSED | `stop_if_fail` |
+| 13 | 6.8 clock fallback | CLOSED | `fail_if` clk_fallback on, stops on fail |
+| 14 | 8.2 / 9.9 stop | CLOSED | `stop_if_fail` |
+| 15 | Wiring-change note 10.1.3 / 10.1.6 | CLOSED | safety text present |
+| 16 | 12.3 BOOT evidence | CLOSED | EVENT BOOT seen in stage 1 |
+| 17 | 10.1.4 jog evidence | CLOSED | EVENT MOVE_DONE seen |
+| 18 | 7.1 held ≥ 1 s | CLOSED | second stage `min_s: 1` (engine holds the conditions continuously) |
+
+The dock (D) only calls `api.select()` on selection, and starts the check only through `run_action` + the BU-2
+confirmation. It shows a red stop banner for STOP_REPORTED / stop texts, and the origin of each step state.
+
+**Residuals (Low).**
+- R-1 (A): the 10.2.2 instruction still says "at the travel speed limit"; it should say "at 30 mm/s".
+- R-2 (F / B): one failure of `test_v_bringup.py::test_tc_sys_011_04_i_led_entries` in a random-order run of
+  `tests/unit/core/test_bringup.py` + `tests/validation/test_v_bringup.py` (seed not captured). It does not
+  reproduce in fixed order (168 passed, 8 xfailed), alone, or with that file under seeds 1–4 (70 passed, 8 xfailed
+  each). The failure looks like an order dependency across the two modules.
+  F's open xfails SWD-P3-05 / -06 / -08 / -09 are unchanged; SWD-P3-06 ("buffer board required" text on an I_LED
+  fail) touches SYS-011 wording.
+
+**Verdict: all 18 B-BRU-04 findings CLOSED**; R-1 and R-2 do not block.
+
+## 18. Integrator review GR-4 of the gate runner (D-57) (Implementer C, 2026-10-14)
+
+**Scope.**
+- Code: `00_System/tools/hil/GATE_RUNNER.md` v1.0, `gate_runner.py`, `gate_res.py`, `gate_approval.py`, `gate_export.py`, `make_approval.py`, `hil_analyze.py`.
+- The D-57 changes in `hil_session.py`, `hil_link.py`, `hil_operator.py` and `hil_procs.py`.
+- `tests/test_gate_runner.py`.
+
+No hardware was used and no COM port was opened: the board-session paths ran with `SerialTransport` replaced by a stub that records that it was reached.
+
+Reproducers: Integrator scratchpad `review_gr4/test_c_review_gr4.py`, 15 cases, all behaving as stated below.
+
+**Verdict.**
+- The D-06 interlock of the runner holds: no command-line flag opens a port without a valid, matching approval file.
+- The make_approval row rules, zip damage detection and the identity / BENCH interlocks are as specified.
+- **Two Low findings (C-GR-1, C-GR-2) and one Low observation-level finding (C-GR-3).** Two design limits should be stated in GATE_RUNNER §6.
+
+### 18.1 Focus points
+
+| # | Point | Result |
+|---|---|---|
+| 1 | Port without a valid, matching approval file | **Holds.** In `hil_session.main()`, a board session refuses `--approved`, `--accepted-open` from the command line, a malformed `--board-uid` and a missing `--approval` before `ga.check()`. Every check runs before `--out` is created or a transport is built: schema, body hash, reference format and date, the decision row (C-R1…C-R4 / FWR-12 rules on the row itself, names the UID), window 0…7 days from the reference date, `--board-uid` cross-check, runner hash, kit dictionary hash, exactly the three `.hex` images with their SHA-256 under `--delivery`, and the accepted-open rows. `open_serial()` re-checks the window at every open, including `reopen()` after each flash; in a frozen build it refuses anything that is not a validated approval. The stub run with a valid file reached the port only after the check. `--approved`, `--accepted-open`, a different `--board-uid` and an unknown `--only` were each refused before it (rc 2). The S-00 / S-ID identity check now also requires the board's build string to equal the approved image's (additive to FWR-15). A modified approval file is detected by the body hash. As documented, the hash is not secret, so authenticity rests on the offline comparison with GATE_APPROVAL_LOG.md / `--approval-sha`. A modified runner bundle is detected only as far as C-GR-3 allows; a deliberately modified runner can report any identity (self-attestation, inherent). |
+| 2 | make_approval row rules / GATE_APPROVAL_LOG.md | **Holds.** `build()` calls `hl.check_approval()` (all rows of DECISIONS.md and STATUS.md clean: C-R1; fences, comments and indented blocks skipped: C-R2 / C-R4; negation: FWR-12) and then `recorded_in_files(…, must_mention=UID)`. Accepted-open entries go through `check_accepted_open()` (FWR-13). Reproduced refusals: a later `revoked` row; the approved row only inside a fence, a comment or an indented block; "no load"; "board TBD"; a row naming the UID in lower case. GATE_APPROVAL_LOG.md is not an approval source: `APPROVAL_FILES` is DECISIONS.md / STATUS.md only, and a log file with the reference as first cell plus a `revoked` status does not change the result. |
+| 3 | Results zip integrity, hil_analyze | **Damage detection holds.** A member changed in place is detected (size / SHA-256). A duplicate member name is detected, because the later entry no longer matches the manifest. Unlisted members, `..` paths and absolute paths are refused. hil_analyze recomputes the approval body hash, compares it with the manifest and the recorded hash, checks the runner hash, re-decides every measured check, parses the raw log with the reference codec and checks the answer sources. **Limits:** see C-GR-2, plus the design limit in §18.3. |
+| 4 | Identity / BENCH interlocks | **Unchanged.** The diff of `hil_session` / `hil_procs` against ce22533 does not touch `stop_reason()`, the BENCH-ENTRY / BENCH-EXIT pairing, `ctx.identified` (C-R3), GATE-LOAD or the session-bound `result_of` / `result_ok`. The only identity addition is the approved-build equality in `check_identity()`. HG-29 f takes TC-SYS-009-02 from the approval evidence. |
+| 5 | Writes only inside `--out` | **Holds for the runner.** Twin mode sets `BEND_TWIN_BUILD_DIR` to `<out>/twin_build` when unset; approval / runner / raw / prompts / zip files all go below `--out`. E's stray-run test covers a subprocess twin run with bytecode writing off. A source run without `-B` writes `__pycache__` into the repository (developer runs only; the frozen runner has no bytecode cache). |
+
+### 18.2 Findings
+
+| ID | Severity | Finding | Reproducer | Fix hint |
+|---|---|---|---|---|
+| C-GR-1 | Low | **Evidence-shaping options are accepted for a board session.** `--quick` (reduced trial counts, "never evidence") and `--counts-per-n` are taken with `--port --approval` without a refusal, and the run reaches the port. The frozen runner is operated by one person, so a quick session can produce a results zip that looks like gate evidence. `--seed`, `--buffer-fitted` and `--power-sense-fitted` also change trials or acceptance limits. | `test_C_GR_1_quick_board_session_is_not_refused` | Refuse `--quick` (and `--counts-per-n`, unless it comes from the approval file) together with `--port`. Let the approval file pin the board-session options it allows (e.g. `buffer_fitted`). |
+| C-GR-2 | Low | **hil_analyze passes a board zip that is not anchored or was run with `--quick`.** A target-mode zip made with `session.quick = true` and analysed without `--approval-sha` / `--approval-log` gives 0 problems and exit 0. The report states "manifest, hashes, approval and runner: consistent" although provenance was not anchored. | `test_C_GR_2_quick_or_unanchored_board_zip_passes_analysis` | For `mode == "target"`, list as problems: no anchor given; `quick` true; non-default evidence options in `runner.json` argv. |
+| C-GR-3 | Low | **The frozen runner identity does not cover the whole bundle.** `bundle_sha256()` hashes the executable, `resources/` and `fw_twin/`, but not the rest of `_internal/` (`base_library.zip` with part of the standard library, the Python DLL, `.pyd` extension modules). A kit with replaced libraries keeps the approved runner hash. A deliberately modified runner can report any hash anyway (self-attestation), so this matters for accidental mixes. | `test_C_GR_3_bundle_hash_ignores_internal_libraries` | Hash every file below the bundle root (excluding only `__pycache__`); compute it the same way in `make_approval.py --runner-exe`. |
+
+### 18.3 Design limits (state them in GATE_RUNNER §6, no code change needed)
+
+- **Revocation after issue does not reach the runner.** The runner does not read the repository, so a `revoked` row added to DECISIONS.md after the approval file was issued is visible to `make_approval` / `hl.check_approval` but not to `ga.check()`. Only the window (≤ 7 days) bounds the file. A withdrawal must be passed to the operator directly (reproducer `test_revocation_after_issue_is_invisible_to_the_runner`).
+- **The results zip is damage-evident, not tamper-evident.** The manifest has no anchor, so a result edited together with its manifest entry verifies, and hil_analyze passes it when the value / decision pair stays consistent (reproducer `test_consistent_edit_with_rebuilt_manifest_is_not_detected`). Without a secret on the operator's side this cannot be closed. A partial anchor is to have the runner print the zip SHA-256 at the end and the operator send it to the PO separately (phone or message) at once, with hil_analyze comparing it.
+
+### 18.4 Evidence
+
+- `python -m pytest 00_System/tools/hil/tests`: **143 passed**, twice (141 + 2 cases added by E meanwhile).
+- Integrator reproducers: 15 / 15 as stated.
+- Twin rehearsal through the runner, `gate_runner.py --twin --quick --out <scratch>/gr4_quick` (private `BEND_TWIN_BUILD_DIR`): 43 steps, rc 0. Verdicts: 21 PASS, 12 PARTIAL, 5 OPEN, 5 N/A.
+- `--verify-zip`: "results zip intact", rc 0.
+- `hil_analyze.py <zip>`: 0 problems, 0 mismatches, rc 0.
+- Raw log: 14 419 PC→FW / 55 060 FW→PC frames, 0 CRC / length errors.
+- Session folder contents: report, zip, prompts, raw, results, runner.json, session.json, twin_run; nothing outside `--out` apart from the scratch twin build directory set by the reviewer.
+
+### 18.5 Re-review of gate runner v1.1 (Implementer C, 2026-10-14)
+
+This is the "§18.2 re-review" the Orchestrator asked for. §18.2 above holds the round-1 findings, so it is numbered 18.5.
+
+**Scope.**
+- GATE_RUNNER.md v1.1 and HW_GATE_RUNBOOK v0.6.
+- The C-GR-1/2/3 fixes.
+- The HG-01 / HG-20 USB-off block (`hil_procs.usb_off_block`).
+- The other port close / re-open paths: the IMG steps and HG-15 POWER.
+- The S-00 bench facts.
+
+Reproducers: scratchpad `review_gr4/test_c_review_gr4_v11.py`, 12 cases, all behaving as stated. The board paths ran with stub link / transport objects; no port was opened.
+
+**Verdict.**
+- **C-GR-1, C-GR-2, C-GR-3 are fixed; both design limits are documented.**
+- **Two new defects on the close / re-open path: C-GR-4 (Medium) and C-GR-5 (Low).**
+
+**C-GR fixes.**
+- **C-GR-1, fixed.** In a board session, `--quick`, `--counts-per-n`, `--seed`, `--buffer-fitted` and `--power-sense-fitted` are each refused ("not pinned") before the port. An option pinned via `make_approval --option` is accepted. Editing `options` into the file breaks `body_sha256`.
+- **C-GR-2, fixed.** For a target zip, hil_analyze lists as problems: a missing approval anchor, a missing `--zip-sha`, quick mode, and non-default unpinned options.
+- **C-GR-3, fixed.** `bundle_sha256()` covers every file below `_internal`; a changed `base_library.zip` changes the hash. A folder without `_internal` (one-file build) is refused by `bundle_root_of()`.
+- **Window re-check.** `open_serial()` refuses an `Approval` whose window has passed, so every `reopen()` (IMG steps, USB-off block, HG-15) re-checks the approval.
+
+**USB-off block (HG-01, HG-20), normal path: correct.**
+- The sequence is `ctx.identified = False` → close → operator unplugs / measures / re-plugs → `reopen()` → PING → `check_identity()`.
+- Nothing is sent while the board is unplugged.
+- Only a PING (no state change) precedes GET_INFO, as accepted for the IMG steps (§9.2).
+- An `abort` inside the block sends nothing, because `identified` is False.
+
+**Findings.**
+
+| ID | Severity | Finding | Reproducer | Fix hint |
+|---|---|---|---|---|
+| C-GR-4 | **Medium** (FWR-15 / C-R3) | **A failed re-identification inside HG-01 / HG-20 does not stop the session.** When a different board (or none) answers after the re-plug, `check_identity()` raises `BenchRefused` inside the item. HG-01 / HG-20 are not identity items, so `stop_reason()` returns None. The loop goes on with `ctx.identified = False`. The following items (HG-19, HG-31, HG-29 with DIAG_MEAS and a 10 kHz pulse train, P2-ENTRY, HG-32, HG-06, HG-28 first motion, …) then send commands to the unidentified device. The only guard is the next IMG step (IMG-DWT, deep in phase 2). | `test_C_GR_4_wrong_board_after_usb_off_does_not_stop_the_session` | In the session loop, stop (rc 2) whenever an item ends with `ctx.identified` False in target mode. Or let `stop_reason()` treat any `REFUSED: … identity` error as a stop. Optionally refuse to run an item while `not ctx.identified`. |
+| C-GR-5 | Low | **HG-15 POWER re-opens without re-identifying.** The port is closed, the operator power-cycles the Nucleo (USB off ≥ 5 s), and the port is re-opened. PING, GET_STATUS and DIAG_MEAS COUNTER follow, then ENABLE + JOG in the IWDG pass. There is no `check_identity()`, and `ctx.identified` stays True. This is the rule v1.1 introduced for HG-01 / HG-20, and here the board is under load (phase 4). | `test_C_GR_5_hg15_power_cycle_reopens_without_reidentifying` (static) | Use the same pattern as `usb_off_block`: `identified = False` before the close, `check_identity()` right after the re-open (before the PING / status reads of the reset check). |
+
+**Other checks.** S-00 asks the bench-fact questions after `check_identity()` and refuses (`BenchRefused`) on DIP = No; a failed S-00 stops the session (identity item). The identity / BENCH loop logic is otherwise unchanged from §18.1 point 4.
+
+**Evidence.**
+- `python -m pytest 00_System/tools/hil/tests`: **157 passed**, twice.
+- Integrator reproducers: 12 / 12 as stated.
+- Twin rehearsal `gate_runner.py --twin --quick --out <scratch>/gr5_quick` (private `BEND_TWIN_BUILD_DIR`): 43 steps, rc 0. Verdicts: 21 PASS, 12 PARTIAL, 5 OPEN, 5 N/A.
+- `--verify-zip`: intact, rc 0.
+- `hil_analyze.py <zip>` (twin zip, no anchors needed): 0 problems, 0 mismatches.
+- Raw log: 14 419 / 55 060 frames, 0 CRC errors.
+
+### 18.6 Re-check of gate runner v1.2.0 (C-GR-4 / C-GR-5 fixes) (Implementer C, 2026-10-14)
+
+**Scope.**
+- GATE_RUNNER.md v1.2 §2, `hil_session.unidentified_reason()` and the session loop, `hil_procs.hg15` / `usb_off_block`, the IMG steps.
+- `tests/test_gate_reid.py`.
+- A search of `hil_procs` / `hil_session` for every other port close / re-open, power / USB / reset prompt and long operator wait.
+
+Reproducers: scratchpad `review_gr4/test_c_review_gr4_v12.py`, 14 cases, all pass. This is the 12 v1.1 cases replayed, with the C-GR-4 / C-GR-5 expectations flipped to "fixed", plus two end-to-end runs through `hil_session.main()` with a stub port and a stubbed plan. No port was opened.
+
+**Verdict: C-GR-4 and C-GR-5 are fixed. No new defect; one Low observation (O-GR-6).**
+
+**Results.**
+- **C-GR-4, fixed.** After a failed re-identification inside HG-01, `unidentified_reason(…, before=False)` stops the session. `before=True` would not start HG-19, while an IMG-* item may still start. After the re-plug, only PING and GET_INFO were sent.
+- **End-to-end wrong board, two stubbed runs:**
+  - S-00 identifies, then HG-01 loses the identity with a REFUSED re-identification: rc 2, HG-19 never runs, nothing written to the port after HG-01, and stderr carries "not identified" plus the MANUAL_RESTORE text ("by hand").
+  - The same in phase 2 with an HG-15 stand-in: rc 2, HG-25 never runs.
+- **C-GR-5, fixed.** HG-15 POWER sets `ctx.identified = False` before the close and runs `check_identity()` after the re-open (PING first), before the reset-cause / MT-2 reads and before the IWDG pass (ENABLE / JOG).
+- **Window re-check.** Every re-open still goes through `open_serial()`; §18.5 showed an expired window is refused at re-open.
+- **All close / re-open paths now follow the pattern** (mark unidentified → close → operator → re-open → PING → identity):
+  - IMG steps (`hil_session.image_step`, via `verify_image`);
+  - USB-off block (HG-01 / HG-20);
+  - HG-15 POWER.
+- **No other path changes the device on the port.**
+  - HG-10 c/d holds the MCU in reset (NRST): the ST-LINK VCP and the board stay; the FW reboots on the same board.
+  - HG-15 PIN / IWDG, HG-14 hang → IWDG reset, HG-24 driver-PSU power cycle and HG-17 input connectors are the same kind of case.
+  - No other prompt asks to unplug or power-cycle the Nucleo.
+  - No `with` block (`params`, `psu_off_pulses`) encloses a close / re-open, so no `finally` sends to an unidentified device.
+  - The rule's twin exemption is correct: the twin has no port.
+
+**Observation O-GR-6 (Low, wording, owner Validator E).**
+- The only phase-4 path that can lose the identity is HG-15 POWER, and at that point the spring holds ≥ 98 N preload.
+- MANUAL_RESTORE tells the operator to switch the 48 V PSU OFF. With the driver unpowered the preloaded spring can back-drive the axis, while D-13 keeps it holding as long as the PSU is on.
+- Suggestion: for a stop in phase 4, MANUAL_RESTORE should say how to release the load safely, e.g. "unload the spring by hand with the 48 V still on and the observer at the E-stop, then 48 V OFF", per the §6.8 bench procedure. E / PO decide.
+
+**Evidence.**
+- `python -m pytest 00_System/tools/hil/tests`: **163 passed**, twice.
+- Integrator reproducers: 14 / 14.
+- Twin rehearsal `gate_runner.py --twin --quick --out <scratch>/gr6_quick` (private `BEND_TWIN_BUILD_DIR`): 43 steps, rc 0. Verdicts: 21 PASS, 12 PARTIAL, 5 OPEN, 5 N/A.
+- `--verify-zip`: intact.
+- `hil_analyze.py`: 0 problems, 0 mismatches.
+- Raw log: 14 419 / 55 060 frames, 0 CRC errors.
+- `--version`: `BirdBendStand-GateRunner 1.2.0 (source)`.

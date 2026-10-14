@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="297mm" height="210mm" viewBox="0 0 1485 1050" font-family="Arial, Helvetica, sans-serif">
+<title>Bird Bend Stand wiring — sheet 4: HG-06 opto current (STATIC_LEVEL) — 100 Ω shunt setup</title>
+<rect x="0" y="0" width="1485" height="1050" fill="#ffffff"/>
+<rect x="15.0" y="15.0" width="1455.0" height="1020.0" fill="none" stroke="#222" stroke-width="1.6"/>
+<text x="30.0" y="52.0" font-size="22" fill="#123a6b" font-weight="bold">B4 — HG-06 opto current (STATIC_LEVEL) — 100 Ω shunt setup</text>
+<text x="1455.0" y="52.0" font-size="13" fill="#555" text-anchor="end">Bird Bend Stand — HW-gate bench pictures</text>
+<rect x="520.0" y="110.0" width="220.0" height="330.0" fill="#cfd8dc" stroke="#333" stroke-width="1.6" rx="4"/>
+<text x="630.0" y="134.0" font-size="16" fill="#000" text-anchor="middle" font-weight="bold">HBS86H Signal</text>
+<rect x="511.0" y="161.0" width="18.0" height="18.0" fill="#eee" stroke="#333" stroke-width="1"/>
+<text x="538.0" y="175.0" font-size="13" fill="#000" font-weight="bold">PUL+</text>
+<rect x="511.0" y="205.0" width="18.0" height="18.0" fill="#eee" stroke="#333" stroke-width="1"/>
+<text x="538.0" y="219.0" font-size="13" fill="#000" font-weight="bold">PUL−</text>
+<rect x="511.0" y="249.0" width="18.0" height="18.0" fill="#eee" stroke="#333" stroke-width="1"/>
+<text x="538.0" y="263.0" font-size="13" fill="#000" font-weight="bold">DIR+</text>
+<rect x="511.0" y="293.0" width="18.0" height="18.0" fill="#eee" stroke="#333" stroke-width="1"/>
+<text x="538.0" y="307.0" font-size="13" fill="#000" font-weight="bold">DIR−</text>
+<rect x="511.0" y="337.0" width="18.0" height="18.0" fill="#eee" stroke="#333" stroke-width="1"/>
+<text x="538.0" y="351.0" font-size="13" fill="#000" font-weight="bold">ENA+</text>
+<rect x="511.0" y="381.0" width="18.0" height="18.0" fill="#eee" stroke="#333" stroke-width="1"/>
+<text x="538.0" y="395.0" font-size="13" fill="#000" font-weight="bold">ENA−</text>
+<polygon points="400.0,170.0 393.0,161.5 339.8,161.5 339.8,178.5 393.0,178.5" fill="#fff" stroke="#1f4e9a" stroke-width="1.3"/>
+<text x="366.9" y="174.0" font-size="11" fill="#1f4e9a" text-anchor="middle" font-weight="bold">PA0 (A0)</text>
+<polyline points="400.0,170.0 511.0,170.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="400.0,258.0 393.0,249.5 339.8,249.5 339.8,266.5 393.0,266.5" fill="#fff" stroke="#1f4e9a" stroke-width="1.3"/>
+<text x="366.9" y="262.0" font-size="11" fill="#1f4e9a" text-anchor="middle" font-weight="bold">PA1 (A1)</text>
+<polyline points="400.0,258.0 511.0,258.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="400.0,346.0 393.0,337.5 338.7,337.5 338.7,354.5 393.0,354.5" fill="#fff" stroke="#b0006a" stroke-width="1.3"/>
+<text x="366.3" y="350.0" font-size="11" fill="#b0006a" text-anchor="middle" font-weight="bold">D1 / PA4</text>
+<polyline points="400.0,346.0 511.0,346.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="511.0,214.0 480.0,214.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="330.0,214.0 392.0,214.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="418.0,214.0 480.0,214.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="392.0" y="209.0" width="26.0" height="10.0" fill="#fff" stroke="#2e7d32" stroke-width="1.4"/>
+<text x="405.0" y="231.0" font-size="12" fill="#000" text-anchor="middle">100 Ω shunt</text>
+<polyline points="330.0,214.0 290.0,214.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="290.0,214.0 290.0,221.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="282.0" y1="221.0" x2="298.0" y2="221.0" stroke="#2e7d32" stroke-width="1.6"/>
+<line x1="285.0" y1="224.0" x2="295.0" y2="224.0" stroke="#2e7d32" stroke-width="1.6"/>
+<line x1="288.0" y1="227.0" x2="292.0" y2="227.0" stroke="#2e7d32" stroke-width="1.6"/>
+<text x="300.0" y="230.0" font-size="9" fill="#2e7d32">GND</text>
+<line x1="344.0" y1="180.0" x2="370.0" y2="214.0" stroke="#212121" stroke-width="4" stroke-linecap="round"/>
+<circle cx="370.0" cy="214.0" r="3" fill="#212121" stroke="none" stroke-width="1.2"/>
+<line x1="414.0" y1="180.0" x2="440.0" y2="214.0" stroke="#d32f2f" stroke-width="4" stroke-linecap="round"/>
+<circle cx="440.0" cy="214.0" r="3" fill="#d32f2f" stroke="none" stroke-width="1.2"/>
+<polyline points="511.0,302.0 460.0,302.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="460.0,302.0 460.0,309.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="452.0" y1="309.0" x2="468.0" y2="309.0" stroke="#2e7d32" stroke-width="1.6"/>
+<line x1="455.0" y1="312.0" x2="465.0" y2="312.0" stroke="#2e7d32" stroke-width="1.6"/>
+<line x1="458.0" y1="315.0" x2="462.0" y2="315.0" stroke="#2e7d32" stroke-width="1.6"/>
+<polyline points="511.0,390.0 460.0,390.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="460.0,390.0 460.0,397.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="452.0" y1="397.0" x2="468.0" y2="397.0" stroke="#2e7d32" stroke-width="1.6"/>
+<line x1="455.0" y1="400.0" x2="465.0" y2="400.0" stroke="#2e7d32" stroke-width="1.6"/>
+<line x1="458.0" y1="403.0" x2="462.0" y2="403.0" stroke="#2e7d32" stroke-width="1.6"/>
+<rect x="60.0" y="140.0" width="128.0" height="62.0" fill="#fff7d6" stroke="#333" stroke-width="1.4" rx="6"/>
+<rect x="68.0" y="148.0" width="112.0" height="26.0" fill="#e8f0e0" stroke="#555" stroke-width="1" rx="2"/>
+<text x="124.0" y="167.0" font-size="14" fill="#000" text-anchor="middle" font-weight="bold">0.66 V</text>
+<text x="124.0" y="193.0" font-size="10.5" fill="#444" text-anchor="middle">V DC over 100 Ω</text>
+<text x="60.0" y="230.0" font-size="13" fill="#000" font-weight="bold">I_LED = U / 100 Ω ≥ 6 mA</text>
+<text x="60.0" y="252.0" font-size="11.5" fill="#555">red probe = shunt end at PUL−, black = GND end</text>
+<line x1="454.0" y1="136.0" x2="480.0" y2="170.0" stroke="#d32f2f" stroke-width="4" stroke-linecap="round"/>
+<circle cx="480.0" cy="170.0" r="3" fill="#d32f2f" stroke="none" stroke-width="1.2"/>
+<text x="480.0" y="126.0" font-size="11.5" fill="#d32f2f" text-anchor="middle" font-weight="bold">VOH</text>
+<rect x="780.0" y="130.0" width="128.0" height="62.0" fill="#fff7d6" stroke="#333" stroke-width="1.4" rx="6"/>
+<rect x="788.0" y="138.0" width="112.0" height="26.0" fill="#e8f0e0" stroke="#555" stroke-width="1" rx="2"/>
+<text x="844.0" y="157.0" font-size="14" fill="#000" text-anchor="middle" font-weight="bold">3.18 V</text>
+<text x="844.0" y="183.0" font-size="10.5" fill="#444" text-anchor="middle">VOH: PUL+ vs GND</text>
+<text x="780.0" y="215.0" font-size="13" fill="#000" font-weight="bold">VOH ≥ 3.0 V</text>
+<rect x="40.0" y="470.0" width="940.0" height="440.0" fill="#fafafa" stroke="#888" stroke-width="1.2" rx="4"/>
+<text x="52.0" y="496.0" font-size="16" fill="#123a6b" font-weight="bold">Procedure (runner HG-06; one shunt at a time, measurement image HW_MEAS)</text>
+<text x="52.0" y="530.0" font-size="13" fill="#000">1. The Nucleo stays connected (USB). 48 V OFF before any shunt change, ON after — the runner prompts both:</text>
+<text x="52.0" y="547.2" font-size="13" fill="#000">   lift PUL− from GND and fit the 100 Ω shunt between PUL− and logic GND (photo).</text>
+<text x="52.0" y="564.3" font-size="13" fill="#000">2. The runner sends DISABLE first (ENA must read disabled before any STATIC_LEVEL, FWR-09), then</text>
+<text x="52.0" y="581.5" font-size="13" fill="#000">   DIAG_MEAS STATIC_LEVEL PUL high: read U over the shunt (red at the PUL− side) and VOH at PUL+.</text>
+<text x="52.0" y="598.6" font-size="13" fill="#000">3. Repeat with the shunt in DIR− (STATIC_LEVEL DIR high) and in ENA− (ENA at the disabled = LED-on level</text>
+<text x="52.0" y="615.8" font-size="13" fill="#000">   after DISABLE; with the release image instead: E-stop + Clear E-STOP, wiring §2.2).</text>
+<text x="52.0" y="633.0" font-size="13" fill="#000">4. Remove the shunt, restore the terminal to logic GND, photo. Any command cancels STATIC_LEVEL.</text>
+<text x="52.0" y="650.1" font-size="13" fill="#000">Pass (direct 3.3 V drive, D-56 b): U ≥ 0.60 V (6 mA) and VOH ≥ 3.0 V on every input; less → buffer board</text>
+<text x="52.0" y="667.3" font-size="13" fill="#000">required (SYS-011). The 100 Ω shunt lowers the current by ≈ ¼ (conservative); 0.45…0.60 V → repeat with the</text>
+<text x="52.0" y="684.4" font-size="13" fill="#000">DMM mA range in series (burden ≤ 10 Ω) or a 10 Ω shunt — that reading decides.</text>
+<rect x="52.0" y="888.5" width="318.5" height="16.5" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="57.0" y="901.0" font-size="9.5" fill="#b26a00" font-weight="bold">internal 270 Ω / LED 1.2 V of the clone ASSUMED (wiring §2)</text>
+<text x="1005.0" y="486.0" font-size="11" fill="#123a6b" font-weight="bold">Legend</text>
+<polyline points="1057.0,480.0 1091.0,480.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1097.0" y="484.0" font-size="9.5" fill="#000">signal</text>
+<polyline points="1057.0,504.0 1091.0,504.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1097.0" y="508.0" font-size="9.5" fill="#000">ENA path</text>
+<polyline points="1057.0,528.0 1091.0,528.0" fill="none" stroke="#2e7d32" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1097.0" y="532.0" font-size="9.5" fill="#000">logic GND</text>
+<rect x="1005.0" y="925.0" width="465.0" height="110.0" fill="#fff" stroke="#222" stroke-width="1.6"/>
+<line x1="1005" y1="953" x2="1470" y2="953" stroke="#222" stroke-width="1"/>
+<line x1="1305" y1="925" x2="1305" y2="953" stroke="#222" stroke-width="1"/>
+<text x="1013.0" y="944.0" font-size="13" fill="#123a6b" font-weight="bold">HW-gate bench pictures (D-57)</text>
+<text x="1313.0" y="944.0" font-size="13" fill="#000" font-weight="bold">Picture B4 / 9</text>
+<text x="1013.0" y="969.0" font-size="11" fill="#000" font-weight="bold">HG-06 opto current (STATIC_LEVEL) — 100 Ω shunt setup</text>
+<text x="1013.0" y="984.0" font-size="10" fill="#000">Version 1.1 · 2026-10-14 · owner Implementer A (01_HW)</text>
+<text x="1013.0" y="998.0" font-size="8.5" fill="#000">Source: wiring.md v0.7.1 §6.1/§11.1 · FW_test_plan §6/§6.8 · HW_GATE_RUNBOOK v0.4 · pinout.md v0.6</text>
+<text x="1013.0" y="1011.0" font-size="9" fill="#555">Generated by 01_HW/diagrams/bench/gen_bench_svg.py — do not edit the SVG/PNG</text>
+<text x="1013.0" y="1024.0" font-size="9.5" fill="#b71c1c" font-weight="bold">NOT A CERTIFIED SAFETY DESIGN — bench aid for the HW gate (D-06-GATE)</text>
+</svg>

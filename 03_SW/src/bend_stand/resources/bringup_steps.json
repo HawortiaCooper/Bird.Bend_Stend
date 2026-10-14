@@ -1,0 +1,3733 @@
+{
+ "schema": "bird.bend.bringup_steps",
+ "schema_version": 1,
+ "guide": {
+  "title": "Bird Bend Stand — board bring-up guide",
+  "version": "FW 0.8.6 / guide 0.4",
+  "file": "BRINGUP_GUIDE.md",
+  "content_version": "1.4 (A, guide draft 0.4; + SWD-P3-03 mismatch FAILs, SWD-P3-06 buffer-board verdict, E R-1, 2026-10-14)"
+ },
+ "send_to": "Send this zip file to the product owner (e-mail), with the photos of section 13 if they are not attached.",
+ "sections": [
+  {
+   "id": "0",
+   "title": "0 Safety rules"
+  },
+  {
+   "id": "2",
+   "title": "2 Tools and parts"
+  },
+  {
+   "id": "3",
+   "title": "3 Wiring check with all power OFF"
+  },
+  {
+   "id": "4",
+   "title": "4 Driver DIP switches — driver unpowered"
+  },
+  {
+   "id": "5",
+   "title": "5 Power-up order and flashing"
+  },
+  {
+   "id": "6",
+   "title": "6 PC software and first connection"
+  },
+  {
+   "id": "7",
+   "title": "7 Input checks — 48 V still OFF"
+  },
+  {
+   "id": "8",
+   "title": "8 48 V on: driver power, ENABLE / DISABLE, D-42 ENA cut"
+  },
+  {
+   "id": "9",
+   "title": "9 First motion — slow, no specimen"
+  },
+  {
+   "id": "10",
+   "title": "10 Direct-drive qualification (SYS-011, D-56 b)"
+  },
+  {
+   "id": "11",
+   "title": "11 Calibration (travel, load, tare)"
+  },
+  {
+   "id": "12",
+   "title": "12 Save to NVM, restart, verify"
+  },
+  {
+   "id": "13",
+   "title": "13 Create the bring-up package"
+  }
+ ],
+ "steps": [
+  {
+   "id": "0.1",
+   "section": "0",
+   "title": "E-stop is not IEC 60204-1",
+   "instruction": "The red E-stop stops the pulses and cuts ENA directly (D-42) but the 48 V stays on; the only power removal is the 48 V PSU mains switch. Keep both within reach whenever the 48 V is on.",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ],
+   "safety": "The red E-stop stops the pulses and cuts ENA directly (D-42) but the 48 V stays on; the only power removal is the 48 V PSU mains switch. Keep both within reach whenever the 48 V is on."
+  },
+  {
+   "id": "0.2",
+   "section": "0",
+   "title": "Two persons",
+   "instruction": "Whenever the driver is powered: the operator at the PC and the observer at the operator panel, a hand near the red button and the PSU switch.",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "0.3",
+   "section": "0",
+   "title": "No specimen, no load",
+   "instruction": "No specimen, no load on the table, no tool in the travel for the whole bring-up. The only load: the calibration weights in section 11, axis still and PAUSED.",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "0.4",
+   "section": "0",
+   "title": "Hands clear",
+   "instruction": "Hands clear of screw, table and load path while the driver is powered. Touch the coupling only where a step asks, after 'hands off the mouse'. Hands off the shaft before the E-stop / RESET is released and before any Clear / ENABLE (the closed-loop driver re-energises at once).",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ],
+   "safety": "Hands clear of screw, table and load path while the driver is powered. Touch the coupling only where a step asks, after 'hands off the mouse'. Hands off the shaft before the E-stop / RESET is released and before any Clear / ENABLE (the closed-loop driver re-energises at once)."
+  },
+  {
+   "id": "0.5",
+   "section": "0",
+   "title": "First motion slow",
+   "instruction": "Jogs at 1 mm/s, homing at the FW homing speed, every Go to at 5 mm/s (never above 10 mm/s). Only exception: the pulse-integrity check 10.2 at 30 mm/s.",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "0.6",
+   "section": "0",
+   "title": "Never bypass the E-stop sense",
+   "instruction": "No jumper, no stimulus, no unplugged sense connector while the driver is powered (HW gate only).",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "0.7",
+   "section": "0",
+   "title": "Abort criteria",
+   "instruction": "Unexpected motion, noise, smell, ALM red with 48 V on, table outside the expected position → observer presses the red E-stop at once and switches the PSU off; operator releases any jog button and presses STOP; incident note.",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ],
+   "safety": "Unexpected motion, noise, smell, ALM red with 48 V on, table outside the expected position → observer presses the red E-stop at once and switches the PSU off; operator releases any jog button and presses STOP; incident note."
+  },
+  {
+   "id": "0.8",
+   "section": "0",
+   "title": "Wiring changes only with everything off",
+   "instruction": "PSU mains switch off and Nucleo USB unplugged; DIP switches only with the driver unpowered.",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "0.9",
+   "section": "0",
+   "title": "No specimen in no-specimen mode",
+   "instruction": "Never mount a specimen while the amber banner NO-SPECIMEN MODE … is shown.",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "0.10",
+   "section": "0",
+   "title": "PO release (D-06)",
+   "instruction": "Start only when the PO has released this board for bring-up (flashing and the COM port need the PO's go). Enter the PO's name and the date of the release.",
+   "expected": "release recorded",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "released",
+     "label": "The PO has released this board for bring-up",
+     "kind": "confirm"
+    },
+    {
+     "name": "po_name",
+     "label": "PO (name)",
+     "kind": "text"
+    },
+    {
+     "name": "release_date",
+     "label": "Date of the release",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "id": "2.1",
+   "section": "2",
+   "title": "Multimeter and shunts",
+   "instruction": "Multimeter (V, mA, Ω, MΩ, diode test), two 100 Ω 1 % shunts, one 10 Ω resistor, clip leads.",
+   "expected": "available",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Available / done",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "2.2",
+   "section": "2",
+   "title": "Caliper and rule",
+   "instruction": "Caliper 0.02 mm (dial gauge optional); a steel rule for the switch span (3.3).",
+   "expected": "available",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Available / done",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "2.3",
+   "section": "2",
+   "title": "Calibration weights",
+   "instruction": "Weights 1 kg and 10 kg with a hook / sling for the load cell.",
+   "expected": "available",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Available / done",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "2.4",
+   "section": "2",
+   "title": "Small tools",
+   "instruction": "Small screwdriver (DIP switches, terminals), cable ties, labels.",
+   "expected": "available",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Available / done",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "2.5",
+   "section": "2",
+   "title": "Camera",
+   "instruction": "Phone / camera for the photos of section 13.",
+   "expected": "available",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Available / done",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "2.6",
+   "section": "2",
+   "title": "Printouts",
+   "instruction": "Printed wiring diagram sheets 1–4 and the guide.",
+   "expected": "available",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Available / done",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "2.7",
+   "section": "2",
+   "title": "PC software",
+   "instruction": "Windows 10/11 PC, free USB port, the PC software of the package (STM32CubeProgrammer only if drag-and-drop fails).",
+   "expected": "available",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Available / done",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "2.8",
+   "section": "2",
+   "title": "Bench built per the diagram",
+   "instruction": "HX711 RATE wire to PB5 (pin 15 lifted); D-42 E-stop NO contact → +5V_CUT → R_E → D2 → ENA+; operator panel (red E-stop, PAUSE); START / END NC switches. No buffer board (D-56 b).",
+   "expected": "available",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Available / done",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.1.1",
+   "section": "3",
+   "title": "Nucleo solder bridges",
+   "instruction": "48 V PSU mains switch off, Nucleo USB unplugged, E-stop released. Solder bridges per sheet 2: SB13, SB14 ON · SB62, SB63 OFF · SB16, SB50 ON · SB54, SB55 OFF · SB51, SB56 ON · SB46, SB52 OFF; JP5 = U5V. Photo of both sides.",
+   "expected": "as sheet 2",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "hg": "≈ HG-01 / C-01",
+   "fields": [
+    {
+     "name": "bridges",
+     "label": "Solder bridges / jumpers as required",
+     "kind": "confirm"
+    },
+    {
+     "name": "photo",
+     "label": "Photo of both sides taken",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.1.2",
+   "section": "3",
+   "title": "Nothing on D0 / D1",
+   "instruction": "Nothing is wired to D0 / D1 (PA3 / PA2 are the PC link).",
+   "expected": "nothing wired",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "ok",
+     "label": "D0 / D1 free",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.1.3",
+   "section": "3",
+   "title": "Connections of sheet 2",
+   "instruction": "Every connection of sheet 2 at the pin given there (compare CN numbers with the silkscreen): PUL A0 · DIR A1 · ENA A2 (through D1) · START A3 · END A4 · ALM D7 · PEND D8 · E-stop sense D2 · PAUSE D10 · DOUT D5 · PD_SCK D6 (33 Ω) · RATE D4.",
+   "expected": "all present",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "hg": "≈ HG-01",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "All connections as sheet 2",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.1.4",
+   "section": "3",
+   "title": "Common cathode",
+   "instruction": "Driver PUL−, DIR−, ENA−, ALM−, PEND− go to the Nucleo GND (sheet 4).",
+   "expected": "as sheet 4",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Returns on Nucleo GND",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.1.5",
+   "section": "3",
+   "title": "E-stop circuit (D-42)",
+   "instruction": "NC block → PA10; NO block → +5V_CUT → R_E 68 Ω → D2 → ENA+; D1 between PA4 and ENA+; 10 kΩ ENA+ → GND; no contactor, nothing from the MCU in the NO path; panel label 'not an IEC 60204-1 emergency stop'.",
+   "expected": "as sheet 3",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "hg": "≈ HG-20 / C-20",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "E-stop circuit as sheet 3",
+     "kind": "confirm"
+    },
+    {
+     "name": "label",
+     "label": "Panel label fitted",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.1.6",
+   "section": "3",
+   "title": "+5V_CUT supply",
+   "instruction": "The +5V_CUT DC-DC is fed from the 48 V bus after F1; F1 = T10A fitted.",
+   "expected": "as sheet 1",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "DC-DC after F1, F1 T10A",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.1.7",
+   "section": "3",
+   "title": "Cable routing",
+   "instruction": "Control and load-cell cables ≥ 10 cm from motor / 48 V wires, crossings at 90°.",
+   "expected": "as wiring §9",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Routing as required",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.2-1",
+   "section": "3",
+   "title": "START switch continuity",
+   "instruction": "START signal wire ↔ GND at the interface connector: switch not touched, then pressed by hand.",
+   "expected": "≈ 0 Ω / open (OL)",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "r_rest",
+     "label": "Resistance, not touched",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 0,
+     "max": 5
+    },
+    {
+     "name": "pressed",
+     "label": "Pressed",
+     "kind": "choice",
+     "choices": [
+      "OL (open)",
+      "not open"
+     ],
+     "pass_values": [
+      "OL (open)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "3.2-2",
+   "section": "3",
+   "title": "END switch continuity",
+   "instruction": "END signal wire ↔ GND: not touched, then pressed.",
+   "expected": "≈ 0 Ω / open (OL)",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "r_rest",
+     "label": "Resistance, not touched",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 0,
+     "max": 5
+    },
+    {
+     "name": "pressed",
+     "label": "Pressed",
+     "kind": "choice",
+     "choices": [
+      "OL (open)",
+      "not open"
+     ],
+     "pass_values": [
+      "OL (open)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "3.2-3",
+   "section": "3",
+   "title": "E-stop NC block",
+   "instruction": "E-stop NC block terminals: released, then pressed.",
+   "expected": "≈ 0 Ω / open",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "r_released",
+     "label": "Resistance, released",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 0,
+     "max": 5
+    },
+    {
+     "name": "pressed",
+     "label": "Pressed",
+     "kind": "choice",
+     "choices": [
+      "OL (open)",
+      "not open"
+     ],
+     "pass_values": [
+      "OL (open)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "3.2-4",
+   "section": "3",
+   "title": "E-stop NO block",
+   "instruction": "E-stop NO block terminals: released, then pressed.",
+   "expected": "open / ≈ 0 Ω",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "released",
+     "label": "Released",
+     "kind": "choice",
+     "choices": [
+      "OL (open)",
+      "not open"
+     ],
+     "pass_values": [
+      "OL (open)"
+     ]
+    },
+    {
+     "name": "r_pressed",
+     "label": "Resistance, pressed",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 0,
+     "max": 5
+    }
+   ]
+  },
+  {
+   "id": "3.2-5",
+   "section": "3",
+   "title": "PAUSE contact",
+   "instruction": "PAUSE contact: released, then pressed.",
+   "expected": "open / ≈ 0 Ω",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "released",
+     "label": "Released",
+     "kind": "choice",
+     "choices": [
+      "OL (open)",
+      "not open"
+     ],
+     "pass_values": [
+      "OL (open)"
+     ]
+    },
+    {
+     "name": "r_pressed",
+     "label": "Resistance, pressed",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 0,
+     "max": 5
+    }
+   ]
+  },
+  {
+   "id": "3.2-6",
+   "section": "3",
+   "title": "R_E",
+   "instruction": "Resistance across R_E.",
+   "expected": "68 Ω ± 5 %",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "r_e",
+     "label": "R_E",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 64.6,
+     "max": 71.4
+    }
+   ]
+  },
+  {
+   "id": "3.2-7",
+   "section": "3",
+   "title": "D1 / D2 diode test",
+   "instruction": "Diode test, red probe on the anode (D1: PA4 side; D2: R_E side), then reversed.",
+   "expected": "≈ 0.2…0.4 V forward, OL reverse",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "d1_fwd",
+     "label": "D1 forward",
+     "kind": "number",
+     "unit": "V",
+     "decimals": 3,
+     "min": 0.15,
+     "max": 0.5
+    },
+    {
+     "name": "d2_fwd",
+     "label": "D2 forward",
+     "kind": "number",
+     "unit": "V",
+     "decimals": 3,
+     "min": 0.15,
+     "max": 0.5
+    },
+    {
+     "name": "reverse",
+     "label": "Both reverse",
+     "kind": "choice",
+     "choices": [
+      "OL (open)",
+      "not open"
+     ],
+     "pass_values": [
+      "OL (open)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "3.2-8",
+   "section": "3",
+   "title": "Isolation 48 V GND ↔ logic GND",
+   "instruction": "Driver 48 V GND (PSU 0 V) ↔ Nucleo GND, USB unplugged, PSU off. OL → enter 999.",
+   "expected": "≥ 10 MΩ",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "hg": "≈ M-5, HG-20",
+   "safety": "Below 10 MΩ the isolation barrier is bridged — never power the stand like that.",
+   "fields": [
+    {
+     "name": "r_iso",
+     "label": "Resistance",
+     "kind": "number",
+     "unit": "MΩ",
+     "decimals": 1,
+     "min": 10
+    }
+   ]
+  },
+  {
+   "id": "3.2-9",
+   "section": "3",
+   "title": "Isolation PE ↔ logic GND",
+   "instruction": "PE (PSU earth terminal) ↔ Nucleo GND, USB unplugged. OL → enter 999.",
+   "expected": "≥ 10 MΩ",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "r_iso",
+     "label": "Resistance",
+     "kind": "number",
+     "unit": "MΩ",
+     "decimals": 1,
+     "min": 10
+    }
+   ]
+  },
+  {
+   "id": "3.2-10",
+   "section": "3",
+   "title": "Motor shield to PE",
+   "instruction": "Motor cable shield ↔ driver PE.",
+   "expected": "≈ 0 Ω",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "r",
+     "label": "Resistance",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 0,
+     "max": 2
+    }
+   ],
+   "stop_if_fail": true
+  },
+  {
+   "id": "3.2-11",
+   "section": "3",
+   "title": "Control-cable shield",
+   "instruction": "Shield ↔ Nucleo GND at the board end; the same shield ↔ driver terminals.",
+   "expected": "≈ 0 Ω; open at the driver end",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "r_board",
+     "label": "Board end",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 0,
+     "max": 2
+    },
+    {
+     "name": "driver_end",
+     "label": "Driver end",
+     "kind": "choice",
+     "choices": [
+      "OL (open)",
+      "not open"
+     ],
+     "pass_values": [
+      "OL (open)"
+     ]
+    }
+   ],
+   "stop_if_fail": true
+  },
+  {
+   "id": "3.2-12",
+   "section": "3",
+   "title": "Load-cell shield",
+   "instruction": "Load-cell yellow (shield) ↔ HX711 GND.",
+   "expected": "≈ 0 Ω",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "r",
+     "label": "Resistance",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 1,
+     "min": 0,
+     "max": 2
+    }
+   ],
+   "stop_if_fail": true
+  },
+  {
+   "id": "3.2-13",
+   "section": "3",
+   "title": "48 V wiring",
+   "instruction": "PSU + → F1 → driver +Vdc; PSU 0 V → driver GND.",
+   "expected": "≈ 0 Ω each, polarity as labelled",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "r_plus",
+     "label": "PSU + → +Vdc",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 2,
+     "min": 0,
+     "max": 1
+    },
+    {
+     "name": "r_minus",
+     "label": "PSU 0 V → GND",
+     "kind": "number",
+     "unit": "Ω",
+     "decimals": 2,
+     "min": 0,
+     "max": 1
+    },
+    {
+     "name": "polarity",
+     "label": "Polarity as labelled",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "3.3.1",
+   "section": "3",
+   "title": "START margin",
+   "instruction": "All power off, move the table by hand toward START with the DMM on 3.2-1: the switch must open ≥ 3 mm before any mechanical stop. Enter the remaining distance.",
+   "expected": "≥ 3 mm",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "hg": "≈ HG-25 travel part, A-07",
+   "fields": [
+    {
+     "name": "margin_start",
+     "label": "START margin to the mechanical stop",
+     "kind": "number",
+     "unit": "mm",
+     "decimals": 1,
+     "min": 3
+    }
+   ]
+  },
+  {
+   "id": "3.3.2",
+   "section": "3",
+   "title": "END margin",
+   "instruction": "Same at the END end with 3.2-2: the END switch must open ≥ 5 mm before any mechanical stop.",
+   "expected": "≥ 5 mm",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "margin_end",
+     "label": "END margin to the mechanical stop",
+     "kind": "number",
+     "unit": "mm",
+     "decimals": 1,
+     "min": 5
+    }
+   ]
+  },
+  {
+   "id": "3.3.3",
+   "section": "3",
+   "title": "Switch-to-switch span",
+   "instruction": "Table position where START opens → where END opens.",
+   "expected": "≥ 295 mm",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "span",
+     "label": "Switch-to-switch span",
+     "kind": "number",
+     "unit": "mm",
+     "decimals": 1,
+     "min": 295
+    }
+   ]
+  },
+  {
+   "id": "3.3.4",
+   "section": "3",
+   "title": "Table near the middle",
+   "instruction": "Leave the table near the middle (≥ 20 mm from both switches).",
+   "expected": "done",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Table mid-stroke",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "4.1",
+   "section": "4",
+   "title": "Driver unpowered",
+   "instruction": "PSU mains switch off; the driver LEDs are dark.",
+   "expected": "dark",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Driver unpowered",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "4.2",
+   "section": "4",
+   "title": "DIP before the change",
+   "instruction": "Photo of the DIP block before the change; enter SW1…SW8 as found (expected off ON ON ON off ON off off).",
+   "expected": "recorded",
+   "kind": "confirm",
+   "hg": "≈ HG-19 / C-19",
+   "fields": [
+    {
+     "name": "found",
+     "label": "SW1…SW8 as found",
+     "kind": "text"
+    },
+    {
+     "name": "photo",
+     "label": "Photo taken",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "4.3",
+   "section": "4",
+   "title": "DIP target (D-27)",
+   "instruction": "Set SW1 on · SW2 off · SW3 on · SW4 off · SW5 off · SW6 on · SW7 off · SW8 on (4000 p/rev, CCW, assist on, 86-80/86-118 closed loop); enter the positions now set.",
+   "expected": "on off on off off on off on",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "hg": "≈ HG-19 / C-19",
+   "fields": [
+    {
+     "name": "sw1",
+     "label": "SW1",
+     "kind": "choice",
+     "choices": [
+      "ON",
+      "off"
+     ],
+     "pass_values": [
+      "ON"
+     ]
+    },
+    {
+     "name": "sw2",
+     "label": "SW2",
+     "kind": "choice",
+     "choices": [
+      "ON",
+      "off"
+     ],
+     "pass_values": [
+      "off"
+     ]
+    },
+    {
+     "name": "sw3",
+     "label": "SW3",
+     "kind": "choice",
+     "choices": [
+      "ON",
+      "off"
+     ],
+     "pass_values": [
+      "ON"
+     ]
+    },
+    {
+     "name": "sw4",
+     "label": "SW4",
+     "kind": "choice",
+     "choices": [
+      "ON",
+      "off"
+     ],
+     "pass_values": [
+      "off"
+     ]
+    },
+    {
+     "name": "sw5",
+     "label": "SW5",
+     "kind": "choice",
+     "choices": [
+      "ON",
+      "off"
+     ],
+     "pass_values": [
+      "off"
+     ]
+    },
+    {
+     "name": "sw6",
+     "label": "SW6",
+     "kind": "choice",
+     "choices": [
+      "ON",
+      "off"
+     ],
+     "pass_values": [
+      "ON"
+     ]
+    },
+    {
+     "name": "sw7",
+     "label": "SW7",
+     "kind": "choice",
+     "choices": [
+      "ON",
+      "off"
+     ],
+     "pass_values": [
+      "off"
+     ]
+    },
+    {
+     "name": "sw8",
+     "label": "SW8",
+     "kind": "choice",
+     "choices": [
+      "ON",
+      "off"
+     ],
+     "pass_values": [
+      "ON"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "4.4",
+   "section": "4",
+   "title": "Photo after",
+   "instruction": "Photo of the DIP block after the change.",
+   "expected": "photo taken",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "photo",
+     "label": "Photo taken",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "4.5",
+   "section": "4",
+   "title": "Encoder cable",
+   "instruction": "Motor encoder cable connected to the driver Encoder terminals (closed loop needs it).",
+   "expected": "connected",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Encoder connected",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "5.1",
+   "section": "5",
+   "title": "48 V stays off",
+   "instruction": "The 48 V PSU stays OFF for sections 5–7.",
+   "expected": "off",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "48 V off",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "5.2",
+   "section": "5",
+   "title": "Initial state",
+   "instruction": "E-stop released; START / END not actuated; nothing in the travel.",
+   "expected": "as stated",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "As stated",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "5.3",
+   "section": "5",
+   "title": "USB and COM port",
+   "instruction": "Plug the Nucleo into the PC; Device Manager → Ports: STLink Virtual COM Port (COMn). Enter COMn.",
+   "expected": "ST-LINK drive and COM port present",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "com_port",
+     "label": "COM port",
+     "kind": "text"
+    },
+    {
+     "name": "drive",
+     "label": "ST-LINK drive and COM port present",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "5.4",
+   "section": "5",
+   "title": "Flash the release image",
+   "instruction": "Check the file hash (FLASHING §5) and flash BBS_FW_0.8.6_release.bin by drag-and-drop (FLASHING method A; wipes the saved configuration on purpose).",
+   "expected": "no FAIL.TXT",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "hash",
+     "label": "SHA-256 equals SHA256SUMS.txt",
+     "kind": "confirm"
+    },
+    {
+     "name": "method",
+     "label": "Method",
+     "kind": "choice",
+     "choices": [
+      "A drag-and-drop (.bin)",
+      "B1 CubeProgrammer full erase (.hex)"
+     ]
+    },
+    {
+     "name": "fail_txt",
+     "label": "FAIL.TXT on the drive",
+     "kind": "choice",
+     "choices": [
+      "no",
+      "yes"
+     ],
+     "pass_values": [
+      "no"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "5.5",
+   "section": "5",
+   "title": "LD2 after flashing",
+   "instruction": "Watch the green LED LD2.",
+   "expected": "slow blink (no latch) or double blink (a latch)",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "safety": "Triple blink = fallback clock (SB16 / SB50) → STOP; dark or steady → STOP.",
+   "fields": [
+    {
+     "name": "ld2",
+     "label": "LD2 pattern",
+     "kind": "choice",
+     "choices": [
+      "slow blink",
+      "double blink",
+      "triple blink",
+      "dark or steady"
+     ],
+     "pass_values": [
+      "slow blink",
+      "double blink"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "6.1",
+   "section": "6",
+   "title": "Start the application",
+   "instruction": "Unzip the PC software to a local folder and start BirdBendStand.exe (it starts disconnected).",
+   "expected": "running",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Application started",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "6.2",
+   "section": "6",
+   "title": "Connect",
+   "instruction": "Connection & Config → Endpoint: the Nucleo entry (e.g. 'COM7 STMicroelectronics STLink Virtual COM Port (COM7)') → Connect.",
+   "expected": "LINK CONNECTED",
+   "kind": "auto",
+   "action": "show:connection",
+   "stop_if_fail": true,
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "link",
+        "key": "state",
+        "op": "eq",
+        "value": "CONNECTED",
+        "label": "link"
+       }
+      ],
+      "text": "waiting for the connection …"
+     }
+    ],
+    "timeout_s": 120
+   }
+  },
+  {
+   "id": "6.3",
+   "section": "6",
+   "title": "Device line (identity)",
+   "instruction": "Connection & Config: the Device line.",
+   "expected": "FW 0.8.6, build 20261010-2135, proto 1.0, payload 1, dict hash 0xF8BCDCB8 ✓, UID present, no HW_MEAS; any other value → FAIL (STOP)",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "hg": "≈ HG gate S-00 identity check",
+   "action": "show:connection",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "info",
+        "key": "fw_version",
+        "op": "eq",
+        "value": "0.8.6",
+        "label": "FW"
+       },
+       {
+        "src": "info",
+        "key": "build",
+        "op": "eq",
+        "value": "20261010-2135",
+        "label": "build"
+       },
+       {
+        "src": "info",
+        "key": "proto_major",
+        "op": "eq",
+        "value": {
+         "$const": "PROTO_MAJOR"
+        },
+        "label": "proto major"
+       },
+       {
+        "src": "info",
+        "key": "proto_minor",
+        "op": "eq",
+        "value": {
+         "$const": "PROTO_MINOR"
+        },
+        "label": "proto minor"
+       },
+       {
+        "src": "info",
+        "key": "payload_version",
+        "op": "eq",
+        "value": {
+         "$const": "PAYLOAD_VERSION"
+        },
+        "label": "payload"
+       },
+       {
+        "src": "info",
+        "key": "param_dict_hash",
+        "op": "eq",
+        "value": {
+         "$const": "PARAM_DICT_HASH"
+        },
+        "label": "dict hash"
+       },
+       {
+        "src": "info",
+        "key": "uid",
+        "op": "present",
+        "label": "UID"
+       }
+      ],
+      "text": "waiting for the board identity (GET_INFO) …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "info",
+      "key": "build",
+      "op": "ne",
+      "value": "20261010-2135",
+      "label": "build (expected 20261010-2135)"
+     },
+     {
+      "src": "info",
+      "key": "fw_version",
+      "op": "ne",
+      "value": "0.8.6",
+      "label": "FW (expected 0.8.6)"
+     },
+     {
+      "src": "info",
+      "key": "param_dict_hash",
+      "op": "ne",
+      "value": {
+       "$const": "PARAM_DICT_HASH"
+      },
+      "label": "dict hash (expected 0xF8BCDCB8)"
+     },
+     {
+      "src": "info",
+      "key": "proto_major",
+      "op": "ne",
+      "value": {
+       "$const": "PROTO_MAJOR"
+      },
+      "label": "proto major (expected 1)"
+     },
+     {
+      "src": "info",
+      "key": "proto_minor",
+      "op": "ne",
+      "value": {
+       "$const": "PROTO_MINOR"
+      },
+      "label": "proto minor (expected 0)"
+     },
+     {
+      "src": "info",
+      "key": "payload_version",
+      "op": "ne",
+      "value": {
+       "$const": "PAYLOAD_VERSION"
+      },
+      "label": "payload (expected 1)"
+     },
+     {
+      "src": "info",
+      "key": "features",
+      "op": "contains",
+      "value": "HW_MEAS",
+      "label": "gate image (HW_MEAS) on the board"
+     }
+    ]
+   }
+  },
+  {
+   "id": "6.4",
+   "section": "6",
+   "title": "Version check",
+   "instruction": "Version check line: ✓ compatible; no RO chip.",
+   "expected": "✓ compatible",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "link",
+        "key": "compat",
+        "op": "eq",
+        "value": 0,
+        "label": "compat flags"
+       },
+       {
+        "src": "backend",
+        "key": "config_read_only",
+        "op": "eq",
+        "value": false,
+        "label": "configuration read-only"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "6.5",
+   "section": "6",
+   "title": "Link at 80 Hz",
+   "instruction": "Link line: about 80 Hz samples, no losses growing; LINK chip green CONNECTED.",
+   "expected": "LINK CONNECTED, 76…84 SPS",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "link",
+        "key": "state",
+        "op": "eq",
+        "value": "CONNECTED",
+        "label": "link"
+       },
+       {
+        "src": "stream",
+        "key": "rate_sps",
+        "op": "between",
+        "value": [
+         76,
+         84
+        ],
+        "label": "rate [SPS]"
+       }
+      ],
+      "text": "waiting for the stream …"
+     }
+    ],
+    "timeout_s": 30
+   }
+  },
+  {
+   "id": "6.6",
+   "section": "6",
+   "title": "Defaults after the first flash",
+   "instruction": "Notice 'Board runs on default parameters …' and CFG amber 'dirty NVM defaulted' / 'NVM defaulted' — expected after the first flash (skip with reason if the board already had a saved configuration).",
+   "expected": "NVM defaulted",
+   "kind": "auto",
+   "optional": true,
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "sys_flag",
+        "key": "NVM_DEFAULTED",
+        "op": "set",
+        "label": "NVM defaulted"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "6.7",
+   "section": "6",
+   "title": "Board configuration defaults",
+   "instruction": "Board configuration table (show advanced): drv.pwr_sense_enable 0, drv.k1_check_enable 0, motion.steps_per_mm 800, afe.rate_sps 80 SPS, drv.alm_active_level HIGH_ACTIVE.",
+   "expected": "drv.pwr_sense_enable 0, drv.k1_check_enable 0, motion.steps_per_mm 800, afe.rate_sps 80 SPS, drv.alm_active_level HIGH_ACTIVE; any other value → FAIL (STOP)",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "hg": "≈ HG-32 / C-26",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "param",
+        "key": "drv.pwr_sense_enable",
+        "op": "eq",
+        "value": 0
+       },
+       {
+        "src": "param",
+        "key": "drv.k1_check_enable",
+        "op": "eq",
+        "value": 0
+       },
+       {
+        "src": "param",
+        "key": "motion.steps_per_mm",
+        "op": "eq",
+        "value": 800
+       },
+       {
+        "src": "param",
+        "key": "afe.rate_sps",
+        "op": "eq",
+        "value": 1,
+        "label": "afe.rate_sps (1 = 80 SPS)"
+       },
+       {
+        "src": "param",
+        "key": "drv.alm_active_level",
+        "op": "eq",
+        "value": 0,
+        "label": "drv.alm_active_level (0 = HIGH_ACTIVE)"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "param",
+      "key": "drv.pwr_sense_enable",
+      "op": "ne",
+      "value": 0,
+      "label": "drv.pwr_sense_enable (expected 0)"
+     },
+     {
+      "src": "param",
+      "key": "drv.k1_check_enable",
+      "op": "ne",
+      "value": 0,
+      "label": "drv.k1_check_enable (expected 0)"
+     },
+     {
+      "src": "param",
+      "key": "motion.steps_per_mm",
+      "op": "ne",
+      "value": 800,
+      "label": "motion.steps_per_mm (expected 800)"
+     },
+     {
+      "src": "param",
+      "key": "afe.rate_sps",
+      "op": "ne",
+      "value": 1,
+      "label": "afe.rate_sps (expected 1 = 80 SPS)"
+     },
+     {
+      "src": "param",
+      "key": "drv.alm_active_level",
+      "op": "ne",
+      "value": 0,
+      "label": "drv.alm_active_level (expected 0 = HIGH_ACTIVE)"
+     }
+    ]
+   }
+  },
+  {
+   "id": "6.8",
+   "section": "6",
+   "title": "Indicator chips, 48 V off",
+   "instruction": "Compare the indicator bar with the guide's table (48 V OFF, E-stop released, switches closed). ALM red and THR amber are expected now; KEY red UNAVAILABLE → note it (Tools ▸ Test Pause/Break key…).",
+   "expected": "no latch, LIM S / LIM E green, AFE green, HOMED red, ENA red, CLK green",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "halt",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "paused",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "fault",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "limit_start",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "limit_end",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "afe_stale",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "no_afe_data",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "homed",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "enabled",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "clk_fallback",
+        "op": "off"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "ind",
+      "key": "clk_fallback",
+      "op": "on",
+      "label": "fallback clock (SB16 / SB50) → STOP"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "6.9",
+   "section": "6",
+   "title": "Load cell sign",
+   "instruction": "Readouts dock → Raw: pull lightly on the load cell by hand (tension), then push.",
+   "expected": "Raw increases on pull (a reversed sign is allowed — write it down)",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "sign",
+     "label": "Raw on pull",
+     "kind": "choice",
+     "choices": [
+      "increases",
+      "decreases"
+     ]
+    },
+    {
+     "name": "raw_pull",
+     "label": "Raw while pulling",
+     "kind": "number",
+     "unit": "counts",
+     "decimals": 0,
+     "required": false
+    }
+   ]
+  },
+  {
+   "id": "7.1",
+   "section": "7",
+   "title": "E-stop latch",
+   "instruction": "Press the red E-stop and keep it pressed for more than 1 s.",
+   "expected": "ESTOP red, only ESTOP latched — no K1_WELDED, no other fault",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "hg": "≈ HG-32",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "ESTOP_SET",
+        "op": "seen"
+       },
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "on"
+       }
+      ],
+      "text": "waiting for ESTOP …"
+     },
+     {
+      "text": "keep it pressed for 1 s …",
+      "min_s": 1,
+      "all": [
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "on",
+        "label": "ESTOP held ≥ 1 s"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "FAULT_SET",
+      "op": "seen",
+      "label": "fault latched"
+     }
+    ]
+   }
+  },
+  {
+   "id": "7.2",
+   "section": "7",
+   "title": "E-stop clear",
+   "instruction": "Release the button (ESTOP stays red), wait ≥ 100 ms → Clear stop… → tick 'E-stop button released, area safe' → Clear E-STOP.",
+   "expected": "ESTOP green; nothing moves",
+   "kind": "auto",
+   "action": "clear_stop",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "ESTOP_CLEARED",
+        "op": "seen"
+       },
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "off"
+       }
+      ],
+      "text": "waiting for Clear E-STOP …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "data_flag",
+      "key": "MOVING",
+      "op": "set",
+      "label": "axis moving"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "7.3",
+   "section": "7",
+   "title": "PAUSE button",
+   "instruction": "Press and release PAUSE once (PAUSED BUTTON, banner 'PAUSED (BUTTON) – motion blocked.'); clear with ▶ Resume, the banner's Resume, or PAUSE again.",
+   "expected": "PAUSED amber, then green",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "set"
+       }
+      ],
+      "text": "press PAUSE …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "clear"
+       }
+      ],
+      "text": "now ▶ Resume …"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "7.4",
+   "section": "7",
+   "title": "START switch",
+   "instruction": "Press the START switch lever by hand, then release it.",
+   "expected": "LIM S red LIMIT_START, green again after release",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_START",
+        "op": "set"
+       }
+      ],
+      "text": "press the START lever …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_START",
+        "op": "clear"
+       }
+      ],
+      "text": "release it …"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "7.5",
+   "section": "7",
+   "title": "END switch",
+   "instruction": "Press the END switch lever by hand, then release it.",
+   "expected": "LIM E red LIMIT_END, green again after release",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_END",
+        "op": "set"
+       }
+      ],
+      "text": "press the END lever …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_END",
+        "op": "clear"
+       }
+      ],
+      "text": "release it …"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "7.6",
+   "section": "7",
+   "title": "Wire-break, one connector at a time",
+   "instruction": "Unplug the START connector, plug it back; then the same with END (one at a time).",
+   "expected": "LIM S / LIM E red while unplugged (fail-safe), green when plugged",
+   "kind": "auto",
+   "hg": "≈ HG-17",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_START",
+        "op": "set"
+       }
+      ],
+      "text": "unplug START …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_START",
+        "op": "clear"
+       }
+      ],
+      "text": "plug START back …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_END",
+        "op": "set"
+       }
+      ],
+      "text": "unplug END …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_END",
+        "op": "clear"
+       }
+      ],
+      "text": "plug END back …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "FAULT_SET",
+      "op": "seen",
+      "label": "fault latched (both unplugged?)"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "7.7",
+   "section": "7",
+   "title": "Both limit connectors unplugged",
+   "instruction": "Unplug both limit connectors at once, plug both back → Clear stop… → Clear faults.",
+   "expected": "LIMIT_WIRING + FAULT, all green after Clear faults",
+   "kind": "auto",
+   "action": "clear_stop",
+   "hg": "≈ HG-17",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "fault",
+        "key": "LIMIT_WIRING",
+        "op": "set"
+       }
+      ],
+      "text": "unplug both connectors …"
+     },
+     {
+      "all": [
+       {
+        "src": "fault",
+        "key": "LIMIT_WIRING",
+        "op": "clear"
+       },
+       {
+        "src": "ind",
+        "key": "fault",
+        "op": "off"
+       }
+      ],
+      "text": "plug back, Clear faults …"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "7.8",
+   "section": "7",
+   "title": "ALM with the driver unpowered",
+   "instruction": "48 V still off: ALM red 'ALM – new motion blocked' is expected.",
+   "expected": "ALM active",
+   "kind": "auto",
+   "hg": "≈ HG-16 (part)",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "io",
+        "key": "ALM",
+        "op": "set",
+        "label": "ALM input active (driver unpowered)"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "8.1",
+   "section": "8",
+   "title": "Board restart",
+   "instruction": "Press the black RESET button (B2) once (banner 'LINK LOST – reconnecting…' for a moment).",
+   "expected": "board restarted, link back, ESTOP green",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "BOOT",
+        "op": "seen"
+       }
+      ],
+      "text": "press RESET …"
+     },
+     {
+      "all": [
+       {
+        "src": "link",
+        "key": "state",
+        "op": "eq",
+        "value": "CONNECTED"
+       },
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "off"
+       }
+      ],
+      "text": "reconnecting …"
+     }
+    ]
+   }
+  },
+  {
+   "id": "8.2",
+   "section": "8",
+   "title": "48 V on, motor holds",
+   "instruction": "Observer switches the 48 V PSU on. The motor holds although ENA says 'disabled' (D-13).",
+   "expected": "driver power LED on, no alarm LED, motor holds",
+   "kind": "confirm",
+   "safety": "Two persons: operator at the PC, observer at the red E-stop and the 48 V PSU switch.",
+   "fields": [
+    {
+     "name": "holds",
+     "label": "The motor holds",
+     "kind": "confirm"
+    },
+    {
+     "name": "no_alarm",
+     "label": "No alarm LED on the driver",
+     "kind": "confirm"
+    }
+   ],
+   "stop_if_fail": true
+  },
+  {
+   "id": "8.3",
+   "section": "8",
+   "title": "ALM off with 48 V on",
+   "instruction": "Watch ALM and PEND after switching the 48 V on.",
+   "expected": "ALM green OFF within ≈ 1 s; PEND in position",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "hg": "≈ HG-16",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "io",
+        "key": "ALM",
+        "op": "clear"
+       }
+      ],
+      "text": "waiting for ALM off …"
+     }
+    ],
+    "timeout_s": 120
+   }
+  },
+  {
+   "id": "8.4",
+   "section": "8",
+   "title": "E-stop with the board running",
+   "instruction": "Observer presses the red E-stop → operator (hands off the mouse) turns the coupling: free. Hands off; observer releases → still free. Clear stop… → Clear E-STOP → still free.",
+   "expected": "free while pressed, after release and after the clear",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "safety": "Hands off the shaft before the E-stop / RESET is released and before any Clear / ENABLE (the closed-loop driver re-energises at once).",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "ESTOP_SET",
+        "op": "seen"
+       }
+      ],
+      "text": "press the E-stop …"
+     },
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "ESTOP_CLEARED",
+        "op": "seen"
+       }
+      ],
+      "text": "release, Clear E-STOP …"
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "free_pressed",
+     "label": "Free while pressed",
+     "kind": "confirm"
+    },
+    {
+     "name": "free_released",
+     "label": "Free after release",
+     "kind": "confirm"
+    },
+    {
+     "name": "free_cleared",
+     "label": "Free after Clear E-STOP",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "8.5",
+   "section": "8",
+   "title": "ENABLE",
+   "instruction": "Hands off the shaft → Manual tab → tick Driver enabled.",
+   "expected": "ENA amber ENABLING, then green enabled; the motor holds",
+   "kind": "motion",
+   "motion": false,
+   "action": "enable",
+   "hg": "≈ HG-07",
+   "safety": "Hands off the shaft before the E-stop / RESET is released and before any Clear / ENABLE (the closed-loop driver re-energises at once).",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "ENABLED",
+        "op": "set"
+       }
+      ],
+      "text": "waiting for ENABLED …"
+     }
+    ]
+   }
+  },
+  {
+   "id": "8.6",
+   "section": "8",
+   "title": "DISABLE = free",
+   "instruction": "E-stop released; untick Driver enabled (dialog 'Disable the driver': tick 'Specimen is unloaded' → Disable); turn the coupling by hand. Then hands off → tick Driver enabled again → holds.",
+   "expected": "ENA red disabled; the shaft turns freely; holds again after ENABLE",
+   "kind": "confirm",
+   "action": "disable",
+   "stop_if_fail": true,
+   "hg": "≈ HG-07, C-07",
+   "safety": "Hands off the mouse while touching the coupling. Hands off the shaft before the E-stop / RESET is released and before any Clear / ENABLE (the closed-loop driver re-energises at once).",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "ENABLED",
+        "op": "clear"
+       },
+       {
+        "src": "io",
+        "key": "ENA_DISABLED",
+        "op": "set",
+        "label": "ENA output at the disabled level"
+       }
+      ],
+      "text": "Disable …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "ENABLED",
+        "op": "set"
+       }
+      ],
+      "text": "hands off, Driver enabled again …"
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "free",
+     "label": "The shaft turns freely while disabled",
+     "kind": "confirm"
+    },
+    {
+     "name": "holds_again",
+     "label": "Holds again after ENABLE",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "8.7",
+   "section": "8",
+   "title": "D-42 hardwired ENA cut, MCU in reset",
+   "instruction": "Observer holds RESET (B2) and presses the red E-stop → operator turns the shaft: free. Operator hands off; observer releases the E-stop while still holding RESET → holds again (D-45 a); observer releases RESET → the board restarts.",
+   "expected": "free with the MCU in reset and the E-stop pressed",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "hg": "≈ HG-10 c / C-25 (periodic check, D-54 e)",
+   "safety": "Roles: the observer holds RESET and presses the E-stop, the operator turns the shaft. Hands off the shaft before the E-stop / RESET is released and before any Clear / ENABLE (the closed-loop driver re-energises at once). If the shaft holds with the MCU in reset and the E-stop pressed: STOP — no motion until fixed.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "BOOT",
+        "op": "seen"
+       }
+      ],
+      "text": "release RESET at the end …"
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "free_in_reset",
+     "label": "Free with the MCU in reset and the E-stop pressed",
+     "kind": "confirm"
+    },
+    {
+     "name": "holds_after_release",
+     "label": "Holds again after the E-stop release (MCU still in reset)",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "8.8",
+   "section": "8",
+   "title": "DMM on the ENA loop (optional)",
+   "instruction": "M-1 across R_E (MCU in reset + E-stop pressed); M-3 PA4 (CN8-3); M-4 ENA+ pressed; M-5 +5V_CUT.",
+   "expected": "M-1 ≈ 0.7 V; M-3 ≤ 3.4 V; M-4 4.0…4.6 V; M-5 4.75…5.25 V",
+   "kind": "measure",
+   "optional": true,
+   "hg": "≈ HG-10 d",
+   "fields": [
+    {
+     "name": "m1",
+     "label": "M-1 across R_E",
+     "kind": "number",
+     "unit": "V",
+     "decimals": 2,
+     "min": 0.5,
+     "max": 0.9
+    },
+    {
+     "name": "m5",
+     "label": "M-5 +5V_CUT",
+     "kind": "number",
+     "unit": "V",
+     "decimals": 2,
+     "min": 4.75,
+     "max": 5.25
+    },
+    {
+     "name": "m3",
+     "label": "M-3 PA4 (max over all cases)",
+     "kind": "number",
+     "unit": "V",
+     "decimals": 2,
+     "min": 0,
+     "max": 3.4,
+     "required": false
+    },
+    {
+     "name": "m4",
+     "label": "M-4 ENA+ while pressed",
+     "kind": "number",
+     "unit": "V",
+     "decimals": 2,
+     "min": 4.0,
+     "max": 4.6,
+     "required": false
+    }
+   ]
+  },
+  {
+   "id": "8.9",
+   "section": "8",
+   "title": "Driver alarm reset (only if an ALM appeared)",
+   "instruction": "E-stop → 48 V off, wait until the driver LEDs are dark → 48 V on → release E-stop → Clear E-STOP → Driver enabled → HOME. Skip with reason if no ALM appeared.",
+   "expected": "ALM cleared",
+   "kind": "info",
+   "optional": true
+  },
+  {
+   "id": "9.1",
+   "section": "9",
+   "title": "No-specimen mode",
+   "instruction": "Safety limits tab → Enter no-specimen mode… → tick No specimen is mounted → Switch PC load limits off.",
+   "expected": "amber banner NO-SPECIMEN MODE, NOSPEC chip",
+   "kind": "auto",
+   "action": "no_specimen",
+   "safety": "Never mount a specimen in this mode.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "safety",
+        "key": "no_specimen_mode",
+        "op": "eq",
+        "value": true
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "9.2",
+   "section": "9",
+   "title": "Manual tab ready",
+   "instruction": "Manual tab: Driver enabled ticked; jog speed 1 mm/s.",
+   "expected": "enabled",
+   "kind": "auto",
+   "action": "show:manual",
+   "safety": "Unexpected motion → observer presses the red E-stop at once (independent D-42 path); operator releases any jog button and presses STOP; STOP, report.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "ENABLED",
+        "op": "set"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "9.3",
+   "section": "9",
+   "title": "Jog direction",
+   "instruction": "Zero the caliper. Hold 'hold forward (+) ▶▶' for about 3 s at 1 mm/s, release.",
+   "expected": "the table moved away from the START switch and stopped on release",
+   "kind": "motion",
+   "action": "show:manual",
+   "stop_if_fail": true,
+   "hg": "≈ HG-28",
+   "safety": "Unexpected motion → observer presses the red E-stop at once (independent D-42 path); operator releases any jog button and presses STOP; STOP, report.",
+   "fields": [
+    {
+     "name": "direction",
+     "label": "The table moved",
+     "kind": "choice",
+     "choices": [
+      "away from START",
+      "toward START"
+     ],
+     "pass_values": [
+      "away from START"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "9.4",
+   "section": "9",
+   "title": "Scale",
+   "instruction": "Caliper distance of the jog of 9.3 and the change of Travel (machine).",
+   "expected": "caliper = shown change ± 10 %",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "safety": "About 5 × → DIP SW1–SW4 still at 800 p/rev: STOP, 48 V off, section 4.",
+   "fields": [
+    {
+     "name": "caliper_mm",
+     "label": "Caliper distance",
+     "kind": "number",
+     "unit": "mm",
+     "decimals": 2,
+     "min": 0
+    },
+    {
+     "name": "ratio",
+     "label": "Caliper / shown change",
+     "kind": "number",
+     "unit": "",
+     "decimals": 3,
+     "min": 0.9,
+     "max": 1.1
+    }
+   ]
+  },
+  {
+   "id": "9.5",
+   "section": "9",
+   "title": "START switch stop, before the first HOME",
+   "instruction": "Un-homed: hold '◀◀ rear (−) hold' at 1 mm/s until the table reaches the START switch; a further (−) jog must be refused; jog (+) away.",
+   "expected": "stops at once, LIM S red; (−) refused; (+) clears it (the stop must end the jog: EVENT STOPPED LIMIT_START)",
+   "kind": "motion",
+   "action": "show:manual",
+   "stop_if_fail": true,
+   "hg": "≈ HG-11 real actuation",
+   "safety": "Unexpected motion → observer presses the red E-stop at once (independent D-42 path); operator releases any jog button and presses STOP; STOP, report.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "HOMED",
+        "op": "clear",
+        "label": "un-homed"
+       },
+       {
+        "src": "event",
+        "key": "STOPPED",
+        "op": "seen",
+        "arg": "LIMIT_START",
+        "label": "jog stopped by the START switch"
+       },
+       {
+        "src": "data_status",
+        "key": "LIMIT_START",
+        "op": "set"
+       }
+      ],
+      "text": "jog (−) to the START switch …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_START",
+        "op": "clear"
+       }
+      ],
+      "text": "jog (+) away …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "FAULT_SET",
+      "op": "seen",
+      "label": "fault latched"
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "refused",
+     "label": "A further (−) jog was refused",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "9.6",
+   "section": "9",
+   "title": "HOME",
+   "instruction": "Press HOME (the confirmation appears: I accept homing under load → Home).",
+   "expected": "the table drives to START, backs off, HOMED green",
+   "kind": "motion",
+   "action": "home",
+   "stop_if_fail": true,
+   "hg": "≈ HG-28",
+   "safety": "Unexpected motion → observer presses the red E-stop at once (independent D-42 path); operator releases any jog button and presses STOP; STOP, report.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "HOMED",
+        "op": "seen"
+       },
+       {
+        "src": "data_flag",
+        "key": "HOMED",
+        "op": "set"
+       }
+      ],
+      "text": "waiting for HOMED …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "HOME_FAILED",
+      "op": "seen",
+      "label": "homing failed"
+     }
+    ]
+   }
+  },
+  {
+   "id": "9.7",
+   "section": "9",
+   "title": "Homed move check",
+   "instruction": "Zero the caliper, +10 (Steps) → read the caliper; then Go to absolute 20 mm (speed 5 mm/s).",
+   "expected": "10.00 mm ± 0.5 mm",
+   "kind": "measure",
+   "motion": true,
+   "action": "show:manual",
+   "safety": "Unexpected motion → observer presses the red E-stop at once (independent D-42 path); operator releases any jog button and presses STOP; STOP, report.",
+   "fields": [
+    {
+     "name": "caliper_mm",
+     "label": "Caliper after +10",
+     "kind": "number",
+     "unit": "mm",
+     "decimals": 2,
+     "min": 9.5,
+     "max": 10.5
+    }
+   ]
+  },
+  {
+   "id": "9.8",
+   "section": "9",
+   "title": "END switch stop at low speed",
+   "instruction": "Go to absolute 280 mm (5 mm/s). Untick Driver enabled (Specimen is unloaded → Disable), hands off, tick it again (un-homed now). Jog (+) at 1 mm/s to the END switch; a further (+) jog must be refused; jog (−) away.",
+   "expected": "stops at once, LIM E red; (+) refused; (−) clears it (the stop must end the jog: EVENT STOPPED LIMIT_END)",
+   "kind": "motion",
+   "action": "show:manual",
+   "stop_if_fail": true,
+   "hg": "≈ HG-11 real actuation",
+   "safety": "Unexpected motion → observer presses the red E-stop at once (independent D-42 path); operator releases any jog button and presses STOP; STOP, report. Hands off the shaft before the E-stop / RESET is released and before any Clear / ENABLE (the closed-loop driver re-energises at once).",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "HOMED",
+        "op": "clear",
+        "label": "un-homed"
+       },
+       {
+        "src": "event",
+        "key": "STOPPED",
+        "op": "seen",
+        "arg": "LIMIT_END",
+        "label": "jog stopped by the END switch"
+       },
+       {
+        "src": "data_status",
+        "key": "LIMIT_END",
+        "op": "set"
+       }
+      ],
+      "text": "jog (+) to the END switch (un-homed) …"
+     },
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_END",
+        "op": "clear"
+       }
+      ],
+      "text": "jog (−) away …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "FAULT_SET",
+      "op": "seen",
+      "label": "fault latched"
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "refused",
+     "label": "A further (+) jog was refused",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "9.9",
+   "section": "9",
+   "title": "HOME again",
+   "instruction": "Press HOME again; keep the no-specimen mode on for section 10.",
+   "expected": "HOMED green, no-specimen mode on",
+   "kind": "motion",
+   "action": "home",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "HOMED",
+        "op": "seen"
+       },
+       {
+        "src": "data_flag",
+        "key": "HOMED",
+        "op": "set"
+       },
+       {
+        "src": "safety",
+        "key": "no_specimen_mode",
+        "op": "eq",
+        "value": true
+       }
+      ],
+      "text": "waiting for HOMED …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "HOME_FAILED",
+      "op": "seen",
+      "label": "homing failed"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "10.1.1",
+   "section": "10",
+   "title": "Fit the ENA shunt",
+   "instruction": "Everything off: 100 Ω 1 % shunt in series with ENA− (driver ENA− terminal → logic GND). Label it. The DIR shunt comes in 10.1.3 — never both while the motor is powered.",
+   "expected": "fitted",
+   "kind": "confirm",
+   "hg": "≈ C-06 / M-2",
+   "safety": "Wiring change only with the PSU off and the USB unplugged.",
+   "fields": [
+    {
+     "name": "fitted",
+     "label": "ENA shunt fitted, labelled",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "10.1.2",
+   "section": "10",
+   "title": "USB only, 48 V off",
+   "instruction": "USB in, Connect; the 48 V stays OFF for the ENA reading.",
+   "expected": "connected, driver unpowered (ALM active)",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "link",
+        "key": "state",
+        "op": "eq",
+        "value": "CONNECTED"
+       },
+       {
+        "src": "io",
+        "key": "ALM",
+        "op": "set",
+        "label": "ALM active = driver unpowered"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "10.1.3",
+   "section": "10",
+   "title": "I_LED on ENA (48 V off)",
+   "instruction": "Press and release the red E-stop → Clear stop… → Clear E-STOP (ENA held disabled by the MCU, SAF-FW-006). DMM across the ENA shunt. Then everything off: remove the ENA shunt, fit the DIR shunt.",
+   "expected": "≥ 0.60 V (I_LED ≥ 6 mA), or 0.45…0.60 V → low-burden repeat in 10.1.5; below 0.45 V → FAIL: buffer board required (SYS-011, D-56 b)",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "hg": "≈ C-06 / HG-06 (ENA)",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "off"
+       },
+       {
+        "src": "data_flag",
+        "key": "ENABLED",
+        "op": "clear"
+       },
+       {
+        "src": "io",
+        "key": "ENA_DISABLED",
+        "op": "set",
+        "label": "ENA output at the disabled level"
+       },
+       {
+        "src": "io",
+        "key": "ALM",
+        "op": "set",
+        "label": "48 V off"
+       }
+      ],
+      "text": "E-stop, Clear E-STOP …"
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "u_ena",
+     "label": "ENA shunt voltage",
+     "kind": "number",
+     "unit": "V",
+     "decimals": 3,
+     "min": 0.45,
+     "max": 2.0
+    },
+    {
+     "name": "swapped",
+     "label": "ENA shunt removed, DIR shunt fitted (everything off)",
+     "kind": "confirm"
+    }
+   ],
+   "safety": "Wiring change only with the PSU off and the USB unplugged."
+  },
+  {
+   "id": "10.1.4",
+   "section": "10",
+   "title": "I_LED on DIR (48 V on)",
+   "instruction": "USB in, Connect, observer switches the 48 V on; re-enter no-specimen mode (as 9.1); Driver enabled (hands off); table mid-stroke ≥ 20 mm from both switches. Jog (+) for ≈ 1 s (dir_invert = 1: (−)), release; DMM across the DIR shunt; a short jog the other way → ≈ 0 V.",
+   "expected": "≥ 0.60 V (I_LED ≥ 6 mA), or 0.45…0.60 V → low-burden repeat in 10.1.5; ≈ 0 V after the opposite jog; below 0.45 V → FAIL: buffer board required (SYS-011, D-56 b)",
+   "kind": "measure",
+   "action": "show:manual",
+   "motion": true,
+   "stop_if_fail": true,
+   "hg": "≈ C-06 / HG-06 (DIR)",
+   "safety": "Unexpected motion → observer presses the red E-stop at once (independent D-42 path); operator releases any jog button and presses STOP; STOP, report.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "ENABLED",
+        "op": "set"
+       },
+       {
+        "src": "io",
+        "key": "ALM",
+        "op": "clear",
+        "label": "48 V on"
+       },
+       {
+        "src": "safety",
+        "key": "no_specimen_mode",
+        "op": "eq",
+        "value": true
+       },
+       {
+        "src": "event",
+        "key": "MOVE_DONE",
+        "op": "seen",
+        "label": "jog done since the step was selected"
+       }
+      ]
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "u_dir",
+     "label": "DIR shunt voltage",
+     "kind": "number",
+     "unit": "V",
+     "decimals": 3,
+     "min": 0.45,
+     "max": 2.0
+    },
+    {
+     "name": "zero_after_opposite",
+     "label": "≈ 0 V after the opposite jog",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "10.1.5",
+   "section": "10",
+   "title": "Low-burden repeat decision",
+   "instruction": "If 10.1.3 or 10.1.4 read 0.45…0.60 V: repeat that input with the DMM mA range in series (burden ≤ 10 Ω) or a 10 Ω shunt (≥ 60 mV); that reading decides. Otherwise choose 'all readings ≥ 0.60 V'.",
+   "expected": "all readings ≥ 0.60 V, or the repeated readings ≥ 6 mA; below 6 mA → FAIL: buffer board required (SYS-011, D-56 b)",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "repeat",
+     "label": "Low-burden repeat",
+     "kind": "choice",
+     "choices": [
+      "all readings ≥ 0.60 V (no repeat needed)",
+      "repeated (a reading was 0.45…0.60 V)"
+     ],
+     "invalid_when": [
+      {
+       "values": [
+        "all readings ≥ 0.60 V (no repeat needed)"
+       ],
+       "when": [
+        {
+         "step": "10.1.3",
+         "field": "u_ena",
+         "op": "lt",
+         "value": 0.6
+        },
+        {
+         "step": "10.1.4",
+         "field": "u_dir",
+         "op": "lt",
+         "value": 0.6
+        },
+        {
+         "step": "10.1.3",
+         "field": "u_ena",
+         "op": "absent"
+        },
+        {
+         "step": "10.1.4",
+         "field": "u_dir",
+         "op": "absent"
+        }
+       ],
+       "text": "a 10.1.3 / 10.1.4 reading is below 0.60 V (or missing) — repeat it with the mA range / 10 Ω shunt"
+      }
+     ]
+    },
+    {
+     "name": "i_ena_ma",
+     "label": "ENA I_LED (low burden)",
+     "kind": "number",
+     "unit": "mA",
+     "min": 6,
+     "decimals": 2,
+     "required_when": [
+      {
+       "step": "10.1.3",
+       "field": "u_ena",
+       "op": "lt",
+       "value": 0.6
+      },
+      {
+       "field": "repeat",
+       "op": "eq",
+       "value": "repeated (a reading was 0.45…0.60 V)"
+      }
+     ]
+    },
+    {
+     "name": "i_dir_ma",
+     "label": "DIR I_LED (low burden)",
+     "kind": "number",
+     "unit": "mA",
+     "min": 6,
+     "decimals": 2,
+     "required_when": [
+      {
+       "step": "10.1.4",
+       "field": "u_dir",
+       "op": "lt",
+       "value": 0.6
+      },
+      {
+       "field": "repeat",
+       "op": "eq",
+       "value": "repeated (a reading was 0.45…0.60 V)"
+      }
+     ]
+    }
+   ],
+   "stop_if_fail": true,
+   "safety": "Below 6 mA → STOP: buffer board required (D-56 b)."
+  },
+  {
+   "id": "10.1.6",
+   "section": "10",
+   "title": "Restore DIR− and ENA−",
+   "instruction": "Everything off, remove the DIR shunt, DIR− and ENA− back to logic GND; photo.",
+   "expected": "restored",
+   "kind": "confirm",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "restored",
+     "label": "ENA− and DIR− restored",
+     "kind": "confirm"
+    },
+    {
+     "name": "photo",
+     "label": "Photo taken",
+     "kind": "confirm"
+    }
+   ],
+   "safety": "Wiring change only with the PSU off and the USB unplugged."
+  },
+  {
+   "id": "10.2.1",
+   "section": "10",
+   "title": "Ready for the pulse-integrity check",
+   "instruction": "USB / 48 V on; re-enter no-specimen mode (as 9.1); Driver enabled; HOME (as 9.6) — the 10.1 power cycles left the axis un-homed and ended the mode; 9.5 and 9.8 passed today.",
+   "expected": "ready",
+   "kind": "auto",
+   "safety": "Full travel speed: no specimen, nothing in the travel, the observer's hand at the red E-stop.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "ENABLED",
+        "op": "set"
+       },
+       {
+        "src": "data_flag",
+        "key": "HOMED",
+        "op": "set"
+       },
+       {
+        "src": "safety",
+        "key": "no_specimen_mode",
+        "op": "eq",
+        "value": true
+       },
+       {
+        "src": "io",
+        "key": "ALM",
+        "op": "clear"
+       },
+       {
+        "src": "ind",
+        "key": "fault",
+        "op": "off"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "10.2.2",
+   "section": "10",
+   "title": "Pulse-integrity check (SYS-011)",
+   "instruction": "Axis homed, Driver enabled, no-specimen mode on, nothing in the travel, the observer's hand at the red E-stop. Press 'Run pulse-integrity check': 3 baseline re-homes of the homed axis, 10 round trips 5 ↔ 285 mm at 30 mm/s, final re-home; one repeat allowed.",
+   "expected": "no HOME_DRIFT and |d1| ≤ max(30 µm, 2 · max|d0ᵢ|)",
+   "kind": "pulse_integrity",
+   "action": "pulse_integrity",
+   "stop_if_fail": true,
+   "hg": "SYS-011 (D-56 b); related HG-09, HG-25 / HG-26 (not gate evidence)",
+   "safety": "Full travel speed: no specimen, nothing in the travel, the observer's hand at the red E-stop.",
+   "params": {
+    "baseline_homes": 3,
+    "baseline_max_um": 100,
+    "round_trips": 10,
+    "from_mm": 5,
+    "to_mm": 285,
+    "speed_mm_s": 30,
+    "d_floor_um": 30,
+    "d_factor": 2.0,
+    "repeats_allowed": 1,
+    "home_event_timeout_s": 5,
+    "fail_text": "buffer board required (SYS-011, D-56 b) — report to the PO",
+    "baseline_fail_text": "check the START switch mounting (switch repeatability, not a buffer verdict)"
+   }
+  },
+  {
+   "id": "10.2.3",
+   "section": "10",
+   "title": "Moves (part of 10.2.2)",
+   "instruction": "In the assistant the 20 moves are run by 10.2.2 (paper: Sequence 285 / 5 mm × 10 at 30 mm/s). An E_RANGE 'speed above cap' / 'loaded' → STOP, record Raw, never raise a cap. This step only shows 10.2.2's verdict.",
+   "expected": "follows 10.2.2: 20 moves done in the engine run",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for the verdict of 10.2.2 …",
+      "all": [
+       {
+        "src": "step",
+        "key": "10.2.2",
+        "op": "eq",
+        "value": "PASS",
+        "path": "action.result.verdict",
+        "label": "10.2.2 verdict"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "step",
+      "key": "10.2.2",
+      "op": "in",
+      "value": [
+       "E_RANGE",
+       "LIMIT",
+       "FAULT",
+       "BOOT",
+       "BASELINE_SCATTER"
+      ],
+      "path": "action.result.verdict",
+      "label": "10.2.2 stopped (hard verdict)"
+     },
+     {
+      "src": "step",
+      "key": "10.2.2",
+      "op": "ge",
+      "value": 2,
+      "path": "action.verdict_fails",
+      "label": "10.2.2 failed twice (buffer verdict)"
+     }
+    ]
+   }
+  },
+  {
+   "id": "10.2.4",
+   "section": "10",
+   "title": "Re-home result (part of 10.2.2)",
+   "instruction": "After 10.2.2: shows its verdict; no HOME_DRIFT latched, axis homed.",
+   "expected": "follows 10.2.2; no HOME_DRIFT, HOMED",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for the verdict of 10.2.2 …",
+      "all": [
+       {
+        "src": "step",
+        "key": "10.2.2",
+        "op": "eq",
+        "value": "PASS",
+        "path": "action.result.verdict",
+        "label": "10.2.2 verdict"
+       },
+       {
+        "src": "fault",
+        "key": "HOME_DRIFT",
+        "op": "clear",
+        "label": "no HOME_DRIFT"
+       },
+       {
+        "src": "data_flag",
+        "key": "HOMED",
+        "op": "set"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "step",
+      "key": "10.2.2",
+      "op": "in",
+      "value": [
+       "E_RANGE",
+       "LIMIT",
+       "FAULT",
+       "BOOT",
+       "BASELINE_SCATTER"
+      ],
+      "path": "action.result.verdict",
+      "label": "10.2.2 stopped (hard verdict)"
+     },
+     {
+      "src": "step",
+      "key": "10.2.2",
+      "op": "ge",
+      "value": 2,
+      "path": "action.verdict_fails",
+      "label": "10.2.2 failed twice (buffer verdict)"
+     }
+    ]
+   }
+  },
+  {
+   "id": "10.2.5",
+   "section": "10",
+   "title": "Repeat rule (part of 10.2.2)",
+   "instruction": "One repeat is allowed (run 10.2.2 again from the baseline); a second fail → STOP: buffer board required — report to the PO. This step only shows 10.2.2's verdict.",
+   "expected": "follows 10.2.2 (one repeat allowed, then buffer verdict)",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for the verdict of 10.2.2 …",
+      "all": [
+       {
+        "src": "step",
+        "key": "10.2.2",
+        "op": "eq",
+        "value": "PASS",
+        "path": "action.result.verdict",
+        "label": "10.2.2 verdict"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "step",
+      "key": "10.2.2",
+      "op": "in",
+      "value": [
+       "E_RANGE",
+       "LIMIT",
+       "FAULT",
+       "BOOT",
+       "BASELINE_SCATTER"
+      ],
+      "path": "action.result.verdict",
+      "label": "10.2.2 stopped (hard verdict)"
+     },
+     {
+      "src": "step",
+      "key": "10.2.2",
+      "op": "ge",
+      "value": 2,
+      "path": "action.verdict_fails",
+      "label": "10.2.2 failed twice (buffer verdict)"
+     }
+    ]
+   }
+  },
+  {
+   "id": "10.2.6",
+   "section": "10",
+   "title": "Repeat in future",
+   "instruction": "Repeat this check after any wiring change and at the end of every test campaign (SYS-011).",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "10.2.7",
+   "section": "10",
+   "title": "Leave no-specimen mode",
+   "instruction": "Banner or Safety limits tab → Leave no-specimen mode.",
+   "expected": "no-specimen mode off",
+   "kind": "auto",
+   "action": "leave_no_specimen",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "safety",
+        "key": "no_specimen_mode",
+        "op": "eq",
+        "value": false
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "11.1.1",
+   "section": "11",
+   "title": "Travel calibration wizard",
+   "instruction": "Calibration & Tare → Start travel calibration wizard… → Start → 'Start calibration': tick No specimen is mounted → Start (homes first if needed) → follow the wizard to Accept.",
+   "expected": "wizard DONE (accepted)",
+   "kind": "wizard",
+   "action": "travel_wizard",
+   "params": {
+    "wizard": "travel_cal"
+   },
+   "hg": "prerequisite of HG-25; ≈ HG-19",
+   "safety": "No specimen. The wizard moves the axis."
+  },
+  {
+   "id": "11.1.2",
+   "section": "11",
+   "title": "Wizard distances",
+   "instruction": "Measured distance D1 (after Move 10 mm) and Total distance D_tot (after Move 50 mm).",
+   "expected": "D1 ≈ 10 mm, D_tot ≈ 60 mm",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "d1_mm",
+     "label": "Measured distance D1",
+     "kind": "number",
+     "unit": "mm",
+     "decimals": 2,
+     "min": 9.0,
+     "max": 11.0
+    },
+    {
+     "name": "dtot_mm",
+     "label": "Total distance D_tot",
+     "kind": "number",
+     "unit": "mm",
+     "decimals": 2,
+     "min": 55.0,
+     "max": 65.0
+    }
+   ]
+  },
+  {
+   "id": "11.1.3",
+   "section": "11",
+   "title": "Travel calibration result",
+   "instruction": "Accepted steps/mm (spm2) and the chain spm0 → spm1 → spm2. A value near 160 → DIP SW1–SW4 → STOP. Re-home afterwards.",
+   "expected": "≈ 800 steps/mm",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "spm",
+     "label": "Accepted steps/mm",
+     "kind": "number",
+     "unit": "steps/mm",
+     "decimals": 3,
+     "min": 760,
+     "max": 840
+    },
+    {
+     "name": "chain",
+     "label": "spm0 → spm1 → spm2",
+     "kind": "text",
+     "required": false
+    }
+   ]
+  },
+  {
+   "id": "11.2.1",
+   "section": "11",
+   "title": "PAUSED before the load wizard",
+   "instruction": "Before starting the wizard: the observer presses PAUSE once (PAUSED BUTTON). Do not press it again during 11.2 / 11.3; a pause inside a running wizard aborts it.",
+   "expected": "PAUSED latched, axis standing",
+   "kind": "auto",
+   "safety": "Hands in the load path only while PAUSED is shown.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "set"
+       },
+       {
+        "src": "data_flag",
+        "key": "MOVING",
+        "op": "clear"
+       }
+      ],
+      "text": "press PAUSE once …"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "11.2.2",
+   "section": "11",
+   "title": "Weights only while PAUSED",
+   "instruction": "Hang / remove weights only while PAUSED is shown.",
+   "expected": "understood",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ack",
+     "label": "Read and understood",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "11.2.3",
+   "section": "11",
+   "title": "Load calibration wizard",
+   "instruction": "Calibration & Tare → Start load calibration wizard… → Start; zero, 1 kg, 10 kg (11.2.4–11.2.6) → Accept calibration.",
+   "expected": "wizard DONE (PASS, LOW_SPAN expected)",
+   "kind": "wizard",
+   "action": "load_wizard",
+   "params": {
+    "wizard": "load_cal"
+   },
+   "safety": "Keep PAUSED; do not press PAUSE again.",
+   "hg": "MC3-3 (PO demonstrations, Validator F)"
+  },
+  {
+   "id": "11.2.4",
+   "section": "11",
+   "title": "Zero point",
+   "instruction": "Nothing on the cell, empty hook → Capture zero point ▶ (do not touch the stand).",
+   "expected": "captured",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "ok",
+     "label": "Zero point captured",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "11.2.5",
+   "section": "11",
+   "title": "Weight points",
+   "instruction": "1 kg hanging still → Capture point 1 ▶; 10 kg → Capture point 2 ▶ ('weight not detected' → hang freely, Repeat).",
+   "expected": "both captured",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "p1",
+     "label": "Point 1 (1 kg) captured",
+     "kind": "confirm"
+    },
+    {
+     "name": "p2",
+     "label": "Point 2 (10 kg) captured",
+     "kind": "confirm"
+    }
+   ],
+   "safety": "Hands in the load path only while PAUSED is shown.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "set",
+        "label": "still PAUSED"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "11.2.6",
+   "section": "11",
+   "title": "Fit result",
+   "instruction": "Fit page: status, K; the dialog 'K implausible — accept anyway?' must not appear.",
+   "expected": "PASS with LOW_SPAN",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "calibration",
+        "key": "load_status",
+        "op": "eq",
+        "value": "PASS",
+        "label": "load calibration"
+       }
+      ],
+      "text": "waiting for the accepted calibration …"
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "k",
+     "label": "K",
+     "kind": "number",
+     "unit": "N/count",
+     "decimals": 6
+    },
+    {
+     "name": "k_implausible",
+     "label": "'K implausible' dialog shown",
+     "kind": "choice",
+     "choices": [
+      "no",
+      "yes"
+     ],
+     "pass_values": [
+      "no"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "11.2.7",
+   "section": "11",
+   "title": "Weights removed",
+   "instruction": "Remove the weights (still PAUSED).",
+   "expected": "removed, PAUSED",
+   "kind": "confirm",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "set",
+        "label": "still PAUSED"
+       }
+      ]
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "removed",
+     "label": "Weights removed",
+     "kind": "confirm"
+    }
+   ],
+   "safety": "Hands in the load path only while PAUSED is shown."
+  },
+  {
+   "id": "11.3.1",
+   "section": "11",
+   "title": "Tare",
+   "instruction": "Cell unloaded, axis still ≥ 1 s → TARE.",
+   "expected": "TARE chip green (with its age), THR VERIFIED",
+   "kind": "wizard",
+   "action": "tare",
+   "params": {
+    "wizard": "tare"
+   }
+  },
+  {
+   "id": "11.3.2",
+   "section": "11",
+   "title": "Force check with 10 kg",
+   "instruction": "Hang the 10 kg weight again and read Force; remove it.",
+   "expected": "98.1 N ± 1 %",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "force_n",
+     "label": "Force",
+     "kind": "number",
+     "unit": "N",
+     "decimals": 2,
+     "min": 97.1,
+     "max": 99.1
+    }
+   ],
+   "safety": "Hands in the load path only while PAUSED is shown.",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "set",
+        "label": "still PAUSED"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "11.3.3",
+   "section": "11",
+   "title": "Resume",
+   "instruction": "Hands out of the load path → ▶ Resume (toolbar).",
+   "expected": "PAUSED green",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "clear"
+       }
+      ],
+      "text": "▶ Resume …"
+     }
+    ]
+   }
+  },
+  {
+   "id": "12.1",
+   "section": "12",
+   "title": "Save to NVM",
+   "instruction": "Connection & Config → Save to NVM.",
+   "expected": "CFG green clean; the default-parameters notice is gone",
+   "kind": "nvm",
+   "action": "save_nvm",
+   "hg": "≈ DM-05, HG-27 (NVM part)",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "PARAMS_SAVED",
+        "op": "seen"
+       },
+       {
+        "src": "backend",
+        "key": "cfg_dirty",
+        "op": "eq",
+        "value": false
+       }
+      ],
+      "text": "waiting for Save to NVM …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "NVM_ERROR",
+      "op": "seen"
+     }
+    ]
+   }
+  },
+  {
+   "id": "12.2",
+   "section": "12",
+   "title": "Save to file",
+   "instruction": "Save to file… → board_<UID>_<date>.bbboard.json (restores the configuration after an accidental wipe).",
+   "expected": "file saved",
+   "kind": "confirm",
+   "action": "save_file",
+   "fields": [
+    {
+     "name": "saved",
+     "label": "Board configuration file saved",
+     "kind": "confirm"
+    },
+    {
+     "name": "file",
+     "label": "File name",
+     "kind": "text",
+     "required": false
+    }
+   ]
+  },
+  {
+   "id": "12.3",
+   "section": "12",
+   "title": "Restart",
+   "instruction": "Untick Driver enabled (Specimen is unloaded → Disable), 48 V off (ALM red again), Disconnect, unplug the USB for 5 s, plug in, Connect.",
+   "expected": "reconnected, driver unpowered, NOT homed",
+   "kind": "confirm",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "event",
+        "key": "BOOT",
+        "op": "seen",
+        "label": "board restarted"
+       },
+       {
+        "src": "link",
+        "key": "state",
+        "op": "eq",
+        "value": "CONNECTED"
+       },
+       {
+        "src": "io",
+        "key": "ALM",
+        "op": "set",
+        "label": "48 V off"
+       },
+       {
+        "src": "data_flag",
+        "key": "HOMED",
+        "op": "clear"
+       }
+      ],
+      "text": "restart and Connect …"
+     }
+    ]
+   },
+   "fields": [
+    {
+     "name": "usb_cycled",
+     "label": "USB unplugged for 5 s and reconnected",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "12.4",
+   "section": "12",
+   "title": "Verify after restart",
+   "instruction": "Connect, Read all.",
+   "expected": "FW 0.8.6, build 20261010-2135, dict hash 0xF8BCDCB8; no default-parameters notice, CFG clean, values = the last saved set, CAL PASS LOW_SPAN; any mismatch → FAIL (STOP)",
+   "kind": "nvm",
+   "action": "read_all",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "info",
+        "key": "fw_version",
+        "op": "eq",
+        "value": "0.8.6"
+       },
+       {
+        "src": "info",
+        "key": "build",
+        "op": "eq",
+        "value": "20261010-2135"
+       },
+       {
+        "src": "backend",
+        "key": "nvm_defaulted",
+        "op": "eq",
+        "value": false
+       },
+       {
+        "src": "backend",
+        "key": "cfg_dirty",
+        "op": "eq",
+        "value": false
+       },
+       {
+        "src": "nvm",
+        "key": "matches_last_save",
+        "op": "eq",
+        "value": true,
+        "label": "values = last saved set"
+       }
+      ],
+      "text": "connect and Read all …"
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "info",
+      "key": "build",
+      "op": "ne",
+      "value": "20261010-2135",
+      "label": "build (expected 20261010-2135)"
+     },
+     {
+      "src": "info",
+      "key": "fw_version",
+      "op": "ne",
+      "value": "0.8.6",
+      "label": "FW (expected 0.8.6)"
+     },
+     {
+      "src": "info",
+      "key": "param_dict_hash",
+      "op": "ne",
+      "value": {
+       "$const": "PARAM_DICT_HASH"
+      },
+      "label": "dict hash (expected 0xF8BCDCB8)"
+     },
+     {
+      "src": "backend",
+      "key": "nvm_defaulted",
+      "op": "eq",
+      "value": true,
+      "label": "board on default parameters (saved configuration lost)"
+     },
+     {
+      "src": "nvm",
+      "key": "matches_last_save",
+      "op": "eq",
+      "value": false,
+      "label": "board values differ from the last saved set"
+     }
+    ]
+   },
+   "stop_if_fail": true
+  },
+  {
+   "id": "13.1",
+   "section": "13",
+   "title": "Create the bring-up package",
+   "instruction": "Create bring-up package → send the zip to the product owner.",
+   "expected": "one zip with report, data and manifest",
+   "kind": "info"
+  },
+  {
+   "id": "13.2",
+   "section": "13",
+   "title": "Photos",
+   "instruction": "Nucleo both sides, interface board both sides, operator panel wiring, driver terminals and DIP before / after, limit switches at both ends, the 10.1 shunts, HX711 RATE modification, PSU / F1, nameplates — attached or next to the zip.",
+   "expected": "all taken",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "photos",
+     "label": "Photos taken and attached / next to the zip",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "13.3",
+   "section": "13",
+   "title": "Fallback without the assistant",
+   "instruction": "Only with older PC software: a folder bringup_<date> with annex B, the logs folder, the .bbboard.json, the calibration folder, screenshots and photos. Skip with reason when the assistant is used.",
+   "expected": "n/a with the assistant",
+   "kind": "info",
+   "optional": true
+  },
+  {
+   "id": "13.4",
+   "section": "13",
+   "title": "Incident notes",
+   "instruction": "Incident notes (what, when, what was pressed / switched), or 'none'.",
+   "expected": "entered",
+   "kind": "confirm",
+   "fields": [
+    {
+     "name": "notes",
+     "label": "Incident notes (or 'none')",
+     "kind": "text"
+    },
+    {
+     "name": "ok",
+     "label": "Notes complete",
+     "kind": "confirm"
+    }
+   ]
+  }
+ ]
+}

@@ -29,6 +29,9 @@ print(f"[BirdBendStand.spec] version {info.version} -> {info.dist_name}")
 ICON = str(PACK / "assets" / "BirdBendStand.ico")
 GUI_ICON = SRC / "bend_stand" / "gui" / "resources" / "BirdBendStand.ico"
 assert GUI_ICON.is_file(), f"{GUI_ICON} missing (bend_stand.gui.resources)"
+BRINGUP_RESOURCES = sorted((SRC / "bend_stand" / "resources").glob("*.json"))
+assert {p.name for p in BRINGUP_RESOURCES} >= {"bringup_steps.json", "bringup_steps.schema.json"}, \
+    f"bend_stand/resources incomplete: {[p.name for p in BRINGUP_RESOURCES]}"
 VF_GUI = str(buildinfo.write_version_file(WORK / "version_gui.txt", info, "BirdBendStand.exe",
                                           "Bird Bend Stand — bend test stand application"))
 VF_CLI = str(buildinfo.write_version_file(WORK / "version_cli.txt", info, "BirdBendStand-cli.exe",
@@ -63,7 +66,10 @@ a = Analysis(
     datas=[(str(DIST_INFO), DIST_INFO.name),
            # GUI package resources (gui.resources.app_icon: window / taskbar icon, GRQ-B-31 c) — same layout as the
            # source tree, so ICON_PATH = <module dir>/BirdBendStand.ico resolves in the frozen app
-           (str(GUI_ICON), "bend_stand/gui/resources")],
+           (str(GUI_ICON), "bend_stand/gui/resources"),
+           # bring-up step definitions + JSON schemas (core.bringup.resource_path, SW-BRU-001…004, D-56 a); without
+           # them the frozen app reports "bring-up step file not usable"
+           *[(str(p), "bend_stand/resources") for p in BRINGUP_RESOURCES]],
     hiddenimports=HIDDEN,
     hookspath=[],
     hooksconfig={},

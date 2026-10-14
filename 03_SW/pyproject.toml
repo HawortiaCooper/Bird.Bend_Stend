@@ -49,6 +49,9 @@ where = ["src"]
 # GUI resources loaded next to the module (gui.resources.app_icon, GRQ-B-31 c); the frozen build adds the same file
 # in packaging/BirdBendStand.spec
 "bend_stand.gui.resources" = ["*.ico"]
+# D-56 a: bring-up step definitions + JSON schemas (core.bringup.resource_path); the frozen build must add
+# bend_stand/resources/*.json as data in packaging/BirdBendStand.spec (packaging owner)
+"bend_stand.resources" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

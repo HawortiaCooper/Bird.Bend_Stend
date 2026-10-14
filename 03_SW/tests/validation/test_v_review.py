@@ -218,8 +218,8 @@ def test_swr06_session_wrong_type_does_not_prevent_start():
     cannot start until the file is deleted by hand."""
     # Verifies: SW-LIM-003
     _write_session({"limits": {"pull_trip_n": "100"}})
-    Backend, BackendSettings = H.backend_cls()
-    be = Backend(BackendSettings(clock="lockstep", test_hooks=True))
+    Backend, _BackendSettings = H.backend_cls()
+    be = Backend(H.safe_settings(clock="lockstep", test_hooks=True))
     assert be.session.get().limits.pull_trip_n == pytest.approx(1961.33)
 
 
@@ -424,8 +424,8 @@ def test_swr12_corrupt_active_calibration_does_not_prevent_start():
     p = _data_dir() / "calibration" / "active_load.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
-    Backend, BackendSettings = H.backend_cls()
-    be = Backend(BackendSettings(clock="lockstep", test_hooks=True))
+    Backend, _BackendSettings = H.backend_cls()
+    be = Backend(H.safe_settings(clock="lockstep", test_hooks=True))
     assert be.load_input.cal is None
 
 
@@ -683,8 +683,8 @@ def test_swr25_broken_session_file_is_never_overwritten():
     p.parent.mkdir(parents=True, exist_ok=True)
     broken = '{"schema": "bird.bend.session", "schema_version": 1, "limits": {"pull_trip_n": "100"}}'
     p.write_text(broken, encoding="utf-8")
-    Backend, BackendSettings = H.backend_cls()
-    be = Backend(BackendSettings(clock="lockstep", test_hooks=True))
+    Backend, _BackendSettings = H.backend_cls()
+    be = Backend(H.safe_settings(clock="lockstep", test_hooks=True))
     assert not be.session.set(replace(be.session.get(), sample_window_s=2.0))
     kept = [q for q in p.parent.iterdir() if q.name.startswith(p.name + ".bad")]
     assert kept and kept[0].read_text(encoding="utf-8") == broken, list(p.parent.iterdir())

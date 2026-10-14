@@ -167,10 +167,10 @@ def test_k1_welded_latched_after_k1_weld_ms(k1: int) -> None:
 @pytest.mark.req("SAF-FW-024", "FW-SW-005", "FW-MOT-008")
 def test_driver_power_loss_filter_and_enable_settle_after_return() -> None:
     cl = _ready(sense=True)
-    cl.ctl.act("drv_power", on=False, bounce_ms=[5, 5])               # off 5 ms, on 5 ms, off: settles off
-    cl.run(15)
-    assert cl.b.pwr_filt                                              # < 20 ms stable: not yet accepted
-    assert _move(cl, 50_000).ok
+    assert _move(cl, 50_000).ok                                       # started while powered (an unpowered driver
+    cl.ctl.act("drv_power", on=False, bounce_ms=[5, 5])               # reads ALM = start-block, OBS-F-BRU-01)
+    cl.run(15)                                                        # off 5 ms, on 5 ms, off: settles off
+    assert cl.b.pwr_filt and cl.b.motion is not None                  # < 20 ms stable: not yet accepted
     cl.run(40)
     assert not cl.b.pwr_filt and cl.ev("STOPPED")[-1].arg == pg.StopCause.DRV_POWER_LOST
     assert cl.ev("DRIVER_DISABLED")[-1].arg == pg.DriverDisabledCause.DRV_POWER_LOST and not cl.b.homed

@@ -30,7 +30,7 @@ Reports: `02_FW/docs/FW_test_report_M1…M4.md`, `03_SW/docs/SW_test_report_M1�
 
 ### A. Hardware gate (FW_test_plan §6, runbook `00_System/tools/hil/HW_GATE_RUNBOOK.md`)
 Bench procedure §6.8 is **approved** (D-49 b). To run the gate:
-1. **Prepare the bench:** SN74ACT244 buffer board (perfboard is fine), D-42 E-stop NO contact → ENA (wiring.md §2.1), HX711 RATE wire to PB5, measurement-header jumpers with 1 kΩ / 220 Ω resistors, multimeter, caliper, 1 kg + 10 kg weights, spring for HG-25.
+1. **Prepare the bench:** no buffer board (D-56 b) — the direct 3.3 V drive is qualified in the bring-up (wiring.md §2.2, guide section 10: I_LED ENA + DIR ≥ 6 mA, pulse integrity 10 × 5↔285 mm at 30 mm/s, re-home |d1| ≤ max(30 µm, 2·max|d0|) after a 3-re-home baseline; repeated after wiring changes and at the end of each campaign); D-42 E-stop NO contact → ENA (wiring.md §2.1), HX711 RATE wire to PB5, measurement-header jumpers with 1 kΩ / 220 Ω resistors, multimeter, caliper, 1 kg + 10 kg weights, spring for HG-25.
 2. **Set the driver DIP switches** (D-27): SW1 on, SW2 off, SW3 on, SW4 off (4000 p/rev), SW5 off, SW6 on, SW7 off, SW8 on (closed loop) — with the driver powered off.
 3. **Give a date** → the Orchestrator records the dedicated `D-06-GATE-YYYYMMDD` approval row; only then do the HIL scripts open a COM port.
 4. **During the session** you flash the three images (release, HW_MEAS, HW_MEAS_DWT) and perform the manual steps; Validator E drives the scripts.
@@ -49,6 +49,7 @@ Fresh install (DM-02) · full workflow on the simulator (DM-01) · two-monitor l
 - Pause/Break hotkey does not reach elevated (Administrator) windows.
 - Calibration with 1 kg + 10 kg covers 5 % FS → LOW_SPAN warning; forces beyond 3× the largest weight are marked extrapolated.
 - BREAK at standstill (D-49 a) is evaluated from t_reached + 100 ms; a break in the first 100 ms after a move is caught only by the FW load limit / NOT_ON_TARGET.
+- Direct 3.3 V driver drive (no buffer, D-56 b): a dropped pulse during a test is found only by the end-of-campaign re-home (pulse-integrity check).
 - ALM / PEND are reported only (plus the ALM start-block, D-28); automatic ALM reaction is a later release.
 - PC on-screen STOP latency depends on the GUI thread under heavy host load; the Pause/Break key (own thread) is the robust stop path (OBS-P3-02).
 

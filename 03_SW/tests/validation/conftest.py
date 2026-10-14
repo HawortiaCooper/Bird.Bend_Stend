@@ -98,16 +98,24 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
                 _TRACE[rid].append((item.nodeid, state))
 
 
+def _full_run(config: pytest.Config) -> bool:
+    """Only a run of the whole validation directory (no -k / -m selection) rewrites ``_reports/trace.json``; a run of
+    one file or one test leaves the committed trace alone."""
+    args = [str(a).split("::")[0] for a in (config.args or [])]
+    whole = any(Path(a).resolve() in (HERE, SW_ROOT / "tests", SW_ROOT) for a in args if Path(a).exists())
+    return whole and not config.getoption("keyword", "") and not config.getoption("markexpr", "")
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    if not _TRACE:
+    if not _TRACE or not _full_run(session.config):
         return
     out = HERE / "_reports"
     try:
         out.mkdir(exist_ok=True)
         (out / "trace.json").write_text(json.dumps(
             {rid: [{"node": n, "outcome": o, **({"tc": tc_of(n)} if tc_of(n) else {})} for n, o in v]
-             for rid, v in sorted(_TRACE.items())}, indent=1),
-            encoding="utf-8")
+             for rid, v in sorted(_TRACE.items())}, indent=1) + "\n",
+            encoding="utf-8", newline="\n")                    # LF as in the repository (.gitattributes)
     except OSError:  # pragma: no cover - reporting only
         pass
 

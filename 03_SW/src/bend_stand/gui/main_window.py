@@ -476,6 +476,7 @@ class MainWindow(QMainWindow):
         m_tools = mb.addMenu("&Tools")
         m_tools.addAction("Link statistics…", self.open_link_stats)
         self.hotkey_test_action = m_tools.addAction("Test Pause/Break key…", self.open_hotkey_test)
+        self.bringup_action = m_tools.addAction("Bring-up assistant…", self.open_bringup)   # D-56 (SW-BRU-001)
         m_help = mb.addMenu("&Help")
         m_help.addAction("Status indicators && clear procedures…", lambda: self.open_status_help(None))
         m_help.addAction("Keyboard…", self.open_keyboard_help)
@@ -552,7 +553,10 @@ class MainWindow(QMainWindow):
         self._prev_link_state = state
 
     def _update_windows(self, status: Any) -> None:
-        """Open wizards, the tare popup and the hotkey test follow the engines every tick (§6.1)."""
+        """Open wizards, the tare popup, the hotkey test and the bring-up assistant follow the engines every tick."""
+        bu = getattr(self, "bringup_dock", None)
+        if bu is not None and _alive(bu) and bu.isVisible():
+            bu.refresh(status)
         for w in list(self.wizards.values()):
             if _alive(w) and w.isVisible():
                 w.refresh()
@@ -974,6 +978,24 @@ class MainWindow(QMainWindow):
         self.dialogs["keys"] = SafeMessageBox.show_message(
             self, "Keyboard", "Pause/Break and Ctrl+Break: HALT (latched stop, system-wide; works before Connect).\n"
                               "No other keyboard stop key exists (GQ-19).\n\n" + indicator_map.KL01_TEXT)
+
+    def open_bringup(self) -> Any:
+        """Tools ▸ Bring-up assistant… (D-56, SW-BRU-001…004): one dock, created on first use, tabified with Plot 1 so
+        the toolbar STOP, the stop banners and the tabs stay visible; it can float (its title bar has STOP)."""
+        from bend_stand.gui.widgets.bringup_dock import BringupDock  # noqa: PLC0415
+        dock = getattr(self, "bringup_dock", None)
+        if dock is None or not _alive(dock):
+            dock = BringupDock(self.backend, self, self)
+            dock.message.connect(self.toast)
+            self.bridge.bringupEvent.connect(dock.on_bringup_event)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+            self.tabifyDockWidget(self.plot_dock, dock)
+            self.view_menu.addAction(dock.toggleViewAction())
+            self.bringup_dock = dock
+        dock.show()
+        dock.raise_()
+        dock.refresh(self.last_status, force=True)
+        return dock
 
     def open_hotkey_test(self) -> Any:
         dlg = self.dialogs.get("hotkey")

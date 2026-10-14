@@ -6,29 +6,34 @@ Owner: Validator E (00_System/tools/hil, the Integrator reviews). Runbook: HW_GA
   Twin dry run (no hardware, D-06 respected — the only mode allowed before the PO's approval):
     .venv\\Scripts\\python 00_System\\tools\\hil\\hil_session.py --twin --out <dir> [--quick] [--only HG-09,HG-14]
 
-  Board session (ONLY after the PO approved the gate and the Orchestrator recorded the reference):
-    .venv\\Scripts\\python 00_System\\tools\\hil\\hil_session.py --port COM7 --approved D-06-GATE-20261012 \\
-        --board-uid <96-bit UID hex> --out <dir> [--from HG-28] [--only ...]
+  Board session (ONLY with the PO's approval file, D-57 b; normally through the frozen gate runner):
+    BirdBendStand-GateRunner.exe --approval approval_D-06-GATE-20261020.json --port COM7 --out <dir>
+        [--from HG-28] [--only ...]        (source run: python 00_System\\tools\\hil\\gate_runner.py …)
 
   Other:  --list (the ordered plan) · --report <dir> (re-render the markdown report)
 
-D-06 interlock (hil_link.open_serial): no serial port is opened without --approved D-06-GATE-YYYYMMDD[-TAG] that is
-dated, not in the future, ≤ 7 days old and recorded as a dedicated approved row in specs/DECISIONS.md or STATUS.md,
-an explicit --port, the operator re-typing the port name, and --board-uid (24 hex digits). --twin and --port are
-exclusive.
+D-06 interlock (D-57 b, gate_approval / hil_link.open_serial): no serial port is opened without a valid approval
+file (schema, body hash, D-06-GATE reference row naming the board UID, validity window ≤ 7 days containing today,
+runner hash = this runner, kit .hex hashes = the files in --delivery, dictionary hash = the runner's), an explicit
+--port and the operator re-typing the port name; the board UID and the accepted-open items come from the file only.
+--twin and --port are exclusive. The repository lookup (--approved REF in DECISIONS.md / STATUS.md) is gone from the
+session CLI; make_approval.py applies it when the Orchestrator generates the file.
 Session identity (FWR-13 / FWR-15, FW_code_review.md): every run starts with the identity block (S-00, or S-ID on a
 resume) whatever --only / --from select: GET_INFO dict hash + protocol must match and, on the board, the UID must equal
 --board-uid, else the session stops. Results carry session id / mode / board UID / image identity; gates (load gate,
 §6.8 bench entry, HG-10 c/d) accept only results of the current session. HG-10a always runs between BENCH-ENTRY and
 BENCH-EXIT; phase-4 items always follow GATE-LOAD. --accepted-open references must be recorded accepted rows.
 Flashing is never done by this tool: image steps ask the PO to flash and then verify GET_INFO / DIAG_MEAS INFO.
-Results: <out>/results/<item>.json, <out>/session.json, <out>/HG_report_<mode>.md.
+Results: <out>/results/<item>.json, <out>/session.json, <out>/HG_report_<mode>.md, <out>/prompts.jsonl,
+<out>/raw/frames.bin, <out>/runner.json and the results zip <out>/gate_<date>_<uid>_<session>.zip (gate_export, D-57 c).
+Everything is written below <out> only.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as _dt
 import json
+import os
 import platform
 import sys
 import time
@@ -40,12 +45,15 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import gate_approval as ga  # noqa: E402
+import gate_export  # noqa: E402
+import gate_res  # noqa: E402
 import hil_budget as hb  # noqa: E402
 import hil_procs as P  # noqa: E402
 import hil_link as hl  # noqa: E402
 import hil_report  # noqa: E402
 import ref_codec as rc  # noqa: E402
-from hil_link import InterlockError, Link, SerialTransport, TwinTransport  # noqa: E402
+from hil_link import InterlockError, Link, LoggedTransport, SerialTransport, TwinTransport  # noqa: E402
 from hil_operator import ConsoleOperator, OperatorAbort, TwinOperator  # noqa: E402
 
 
@@ -67,15 +75,49 @@ def s_start(ctx: P.Ctx) -> None:
     P.check_identity(ctx)                    # FWR-15: first, before any operator question or motion (refuses)
     p = op.ask_text("PERSONS", "Operator and observer names", nominal="(dry run)")
     ctx.data("persons", p.value)
-    c = op.ask_text("COMMIT", "Git commit of the three images (release / HW_MEAS / HW_MEAS_DWT, one commit)",
-                    nominal="(dry run)")
-    ctx.data("images_commit", c.value)
+    kit = ctx.cfg.get("kit")
+    if kit:                                            # D-57 b: the approved kit names commit and images
+        ctx.data("images_commit", kit.get("commit"))
+        ctx.data("kit_images", {k: {"path": v.get("path"), "sha256": v.get("sha256"), "build": v.get("build")}
+                                for k, v in kit.get("images", {}).items()})
+    else:
+        c = op.ask_text("COMMIT", "Git commit of the three images (release / HW_MEAS / HW_MEAS_DWT, one commit)",
+                        nominal="(dry run)")
+        ctx.data("images_commit", c.value)
     dip = op.ask_yes_no("DIP", "Driver DIP target setting applied with the driver unpowered (D-27, wiring §10)?",
                         nominal=True)
     ctx.judged(hb.check_true("DIP applied before the first motion", dip.value, "D-27"), dip)
     if not dip.value:
         raise P.BenchRefused("DIP not applied (D-27) - no motion, session stopped (O-2)")
+    verify_bench(ctx)
     ctx.check(hb.info("TC-SYS-009-02 / check_meas_build", "see HG-29 f"))
+
+
+def verify_bench(ctx: P.Ctx) -> None:
+    """GR3-2: the bench facts A's pictures mark "ASSUMED - verify at HW gate" are confirmed (or corrected) by the
+    operator before the first motion; the load-cell side and the caliper faces are preconditions of HG-09 / 12 / 15 /
+    25 / 28 (S-00 FAIL stops the session)."""
+    op = ctx.op
+    t = op.ask_text("VERIFY-ESTOP", "E-stop contact block terminal numbers on YOUR button: NC (sense, to PA10) and NO "
+                    "(D-42 path to R_E) - pictures B6 / B3 assume NC 11-12, NO 13-14; type e.g. 'NC 11-12, NO 13-14'",
+                    nominal="NC 11-12, NO 13-14")
+    ctx.data("estop_terminals", t.value)
+    ctx.check(hb.info("E-stop terminals (operator)", t.value))
+    n = op.ask_yes_no("VERIFY-NUCLEO", "Nucleo parts where picture B7 shows them: black B2 RESET, blue B1 USER, green LD2, "
+                      "JP5 on U5V (the USB cable powers the board)?", nominal=True)
+    ctx.data("nucleo_layout_as_b7", n.value)
+    ctx.check(hb.info("Nucleo layout as picture B7 (operator)", n.value,
+                      note="" if n.value else "layout differs: the operator uses the board silkscreen"))
+    c = op.ask_yes_no("VERIFY-CELL", "Load cell on the START side (picture B8): does a move AWAY from START (+x) PULL the "
+                      "spring (tension, +F)? Check by looking at the mechanics; nothing moves now", nominal=True)
+    ctx.judged(hb.check_true("load cell on the START side, +x = tension", c.value,
+                             "preload direction of HG-12 / HG-15 (picture B8)"), c)
+    f = op.ask_yes_no("VERIFY-CALIPER", "Two flat caliper reference faces chosen and marked with a pen (picture B9): a "
+                      "fixed face at the START end and the table's -x face?", nominal=True)
+    ctx.judged(hb.check_true("caliper reference faces marked", f.value, "HG-09 / HG-25 / HG-28 readings (picture B9)"), f)
+    if not (c.value and f.value):
+        raise P.BenchRefused("bench facts not confirmed (load-cell side / caliper faces, GR3-2) - no motion, session "
+                             "stopped; correct the bench or ask Validator E to adapt the procedure")
 
 
 def s_identity(ctx: P.Ctx) -> None:
@@ -85,16 +127,24 @@ def s_identity(ctx: P.Ctx) -> None:
 
 def image_step(image: str) -> Callable[[P.Ctx], None]:
     def fn(ctx: P.Ctx) -> None:
-        names = {"meas": "nucleo_f446re_meas (HW_MEAS)", "meas_dwt": "nucleo_f446re_meas_dwt (HW_MEAS_DWT)",
-                 "release": "nucleo_f446re (release)"}
+        # OI-A-DLV-06: the PO flashes the delivered .hex files (SHA256SUMS.txt, BUILD_INFO.txt), method B2 of
+        # FLASHING.md - never the .bin (it starts at 0x08000000 and wipes the NVM sectors 1-2). The gate images live
+        # only in the gate kit, the release image in the bring-up package (runbook v0.4).
+        names = {"meas": "GateKit_FW<rel>/BBS_FW_<rel>_HW_MEAS_GATE-ONLY.hex (nucleo_f446re_meas, HW_MEAS)",
+                 "meas_dwt": "GateKit_FW<rel>/BBS_FW_<rel>_HW_MEAS_DWT_GATE-ONLY.hex (nucleo_f446re_meas_dwt, HW_MEAS_DWT)",
+                 "release": "BringUp_FW<rel>/firmware/BBS_FW_<rel>_release.hex (nucleo_f446re, release)"}
+        for k, v in ((ctx.cfg.get("kit") or {}).get("images") or {}).items():      # D-57 b: the approved file
+            names[k] = f"{v.get('path')} (build {v.get('build')}, SHA-256 {str(v.get('sha256'))[:16]}…)"
         if ctx.twin:
             ctx.L.tr.reflash(image)
             ctx.note(f"twin: engine restarted with hw_meas={image != 'release'} (stand-in for flashing {names[image]})")
         else:
             ctx.identified = False                    # C-R3: the device on the port is unverified until verify_image
             ctx.L.tr.close_port()
-            ctx.op.instruct("FLASH", f"PO: flash {names[image]} (firmware.bin of the recorded commit) with "
-                            "STM32CubeProgrammer over the ST-LINK; the session closed the COM port. Board resets.")
+            ctx.op.instruct("FLASH", f"PO: flash {names[image]} (04_Delivery, recorded commit) "
+                            "(SHA-256 as in SHA256SUMS.txt) with STM32CubeProgrammer over the ST-LINK, method B2: NO full "
+                            "chip erase and never the .bin (both wipe the saved configuration, NVM sectors 1-2); the "
+                            "session closed the COM port. Board resets.")
             ctx.L.tr.reopen()
         ctx.image = image
         ctx.L.wait(400, keepalive=False)
@@ -146,6 +196,9 @@ def hg10cd(ctx: P.Ctx) -> None:
 
 
 IDENTITY_ITEMS = P.IDENTITY_ITEMS
+#: what the operator does by hand when the session stops with the device unidentified (no BENCH-EXIT is sent)
+MANUAL_RESTORE = ("Make the bench safe by hand: 48 V PSU OFF; if the E-stop sense was bypassed, remove J-STIM, "
+                  "reconnect the sense plug and remove the tag (§6.8 P-8); then report to the product owner")
 
 
 def stop_reason(item_id: str, it) -> str | None:
@@ -158,6 +211,18 @@ def stop_reason(item_id: str, it) -> str | None:
     if it.error or v in (hb.FAIL, hb.INCONCL):
         return f"{item_id} ended {v}" + (f" ({it.error})" if it.error else "")
     return None
+
+
+def unidentified_reason(ctx: P.Ctx, item_id: str, *, before: bool) -> str | None:
+    """C-GR-4 (belt and braces, board sessions only): no item other than an identity item (S-00, S-ID, IMG-*) may START
+    while the device on the port is unidentified, and ANY item that ENDS with the device unidentified (e.g. a wrong or
+    missing board after a re-plug inside HG-01 / HG-20 / HG-15) stops the session. None = continue."""
+    if ctx.twin or ctx.identified:
+        return None
+    if before and item_id in IDENTITY_ITEMS:
+        return None
+    return (f"device not identified before {item_id} - nothing is sent to it" if before else
+            f"{item_id} ended with the device not identified (wrong / missing board after a re-plug?)")
 
 
 def validate_selection(only: str | None, from_: str | None) -> None:
@@ -294,6 +359,18 @@ def select_steps(ctx: P.Ctx, only: str | None, from_: str | None) -> list[Step]:
     return [first] + steps
 
 
+def default_delivery() -> Path:
+    """Folder holding the kits named in the approval file: frozen = the folder above the gate kit that holds the
+    runner (…/GateKit_FW<rel>/BirdBendStand-GateRunner/…exe → …); source run = 04_Delivery of the repository."""
+    if gate_res.FROZEN:
+        exe = Path(sys.executable).resolve()
+        for parent in exe.parents:
+            if parent.name.startswith("GateKit_"):
+                return parent.parent
+        return exe.parent.parent
+    return gate_res.TOOLS.parents[1] / "04_Delivery"
+
+
 def plan_text() -> str:
     out = []
     for s in PLAN:
@@ -307,8 +384,13 @@ def main(argv: list[str] | None = None) -> int:
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--twin", action="store_true", help="dry run against the FW twin (HW_MEAS model)")
     g.add_argument("--port", help="COM port named by the PO (target session; needs --approved)")
-    ap.add_argument("--approved", help="PO approval reference D-06-GATE-YYYYMMDD[-TAG] (recorded by the Orchestrator)")
-    ap.add_argument("--board-uid", help="96-bit UID (hex) of the PO-named board; GET_INFO must match")
+    ap.add_argument("--approval", type=Path, help="PO approval file (D-57 b, generated by make_approval.py)")
+    ap.add_argument("--approved", help=argparse.SUPPRESS)          # removed (D-57): refused with a hint
+    ap.add_argument("--delivery", type=Path, help="folder that holds the kits named in the approval file "
+                                                  "(default: the folder above the gate kit / 04_Delivery)")
+    ap.add_argument("--board-uid", help="optional cross-check: must equal the approval file's board UID")
+    ap.add_argument("--twin-exe", type=Path, help="FW twin binary for --twin (default: bundled / built per run)")
+    ap.add_argument("--no-export", action="store_true", help="do not write the results zip at the end")
     ap.add_argument("--out", type=Path, help="session directory (results, report)")
     ap.add_argument("--only", help="comma-separated step ids")
     ap.add_argument("--from", dest="from_", help="start at this step id (resume)")
@@ -335,39 +417,68 @@ def main(argv: list[str] | None = None) -> int:
         print(hil_report.write(a.report))
         return 0
     if not a.twin and not a.port:
-        ap.error("choose --twin (dry run) or --port with --approved (PO-approved board session)")
+        ap.error("choose --twin (dry run) or --port with --approval <file> (PO-approved board session)")
     mode = "twin" if a.twin else "target"
     try:
         validate_selection(a.only, a.from_)                  # O-3: before any port is opened
     except ValueError as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 2
-    # FWR-15: a session that opens a port needs the PO-named board UID; FWR-13: accepted-open references recorded
-    if mode == "target" and not (a.board_uid and hl.UID_RE.match(a.board_uid.strip())):
-        print("REFUSED: --board-uid <24 hex digits of the PO-named board> is required for a port session (FWR-15)",
-              file=sys.stderr)
-        return 2
+    approval = None
     accepted: dict[str, str] = {}
-    for x in a.accepted_open:
-        item, _, ref = x.partition(":")
+    if mode == "target":
+        # D-57 b: the approval file is the only source of the D-06 approval, the board UID and the accepted-open items
+        if a.approved:
+            print("REFUSED: --approved REF is no longer accepted (D-57): use --approval <file> generated by the "
+                  "Orchestrator (make_approval.py)", file=sys.stderr)
+            return 2
+        if a.accepted_open:
+            print("REFUSED: accepted-open items come only from the approval file (D-57 b)", file=sys.stderr)
+            return 2
+        if a.board_uid is not None and not hl.UID_RE.match(a.board_uid.strip()):
+            print("REFUSED: --board-uid must be 24 hex digits (FWR-15)", file=sys.stderr)
+            return 2
+        if not a.approval:
+            print("REFUSED: --approval <file> is required for a port session (D-06 / D-57 b) — no port opened",
+                  file=sys.stderr)
+            return 2
+        delivery = a.delivery or default_delivery()
         try:
-            if mode == "target":
-                hl.check_accepted_open(item.strip(), ref.strip())
-            elif not ref:
-                raise InterlockError(f"--accepted-open {x!r}: expected HG-xx:REF")
+            approval = ga.check(a.approval, board_uid=a.board_uid, delivery=delivery)
         except InterlockError as e:
             print(f"REFUSED: {e}", file=sys.stderr)
             return 2
-        accepted[item.strip()] = ref.strip()
+        accepted = dict(approval.accepted_open)
+        # C-GR-1: a board session uses only approved options - a non-default command-line option must be pinned by
+        # the approval file with the same value; pinned options apply even when not typed
+        cli = {"quick": a.quick, "seed": a.seed, "counts_per_n": a.counts_per_n, "buffer_fitted": a.buffer_fitted,
+               "power_sense_fitted": a.power_sense_fitted}
+        for k, v in cli.items():
+            if v != ga.DEFAULT_OPTIONS[k] and approval.options.get(k) != v:
+                print(f"REFUSED: option --{k.replace('_', '-')} is not pinned by the approval file (C-GR-1): a board "
+                      "session runs only with approved options", file=sys.stderr)
+                return 2
+        eff = dict(ga.DEFAULT_OPTIONS, **approval.options)
+        a.quick, a.seed, a.counts_per_n = eff["quick"], eff["seed"], eff["counts_per_n"]
+        a.buffer_fitted, a.power_sense_fitted = eff["buffer_fitted"], eff["power_sense_fitted"]
+    else:
+        for x in a.accepted_open:
+            item, _, ref = x.partition(":")
+            if not ref:
+                print(f"REFUSED: --accepted-open {x!r}: expected HG-xx:REF", file=sys.stderr)
+                return 2
+            accepted[item.strip()] = ref.strip()
     out = a.out or (Path.cwd() / "hil_sessions" / f"{_dt.date.today():%Y%m%d}_{mode}")
     out.mkdir(parents=True, exist_ok=True)
     meta_f = out / "session.json"
     meta = json.loads(meta_f.read_text(encoding="utf-8")) if meta_f.exists() else {}
-    board_uid = a.board_uid.strip().upper() if a.board_uid else None
-    approval = a.approved or "— (twin, D-06)"
-    # resume (--from / --only) only into the same mode, board and approval; a plain run always starts a new session
+    board_uid = approval.board_uid if approval is not None else None
+    approval_ref = approval.reference if approval is not None else "— (twin, D-06)"
+    approval_sha = approval.body_sha256 if approval is not None else None
+    # resume (--from / --only) only into the same mode, board and approval file; a plain run starts a new session
     resume = (bool(a.from_ or a.only) and bool(meta.get("session_id")) and meta.get("mode") == mode
-              and meta.get("board_uid") == board_uid and meta.get("approval") == approval)
+              and meta.get("board_uid") == board_uid and meta.get("approval") == approval_ref
+              and meta.get("approval_sha256") == approval_sha)
     if resume:
         session = {"session_id": meta["session_id"], "mode": mode, "board_uid": board_uid,
                    "images": dict(meta.get("images", {}))}
@@ -389,19 +500,36 @@ def main(argv: list[str] | None = None) -> int:
         cfg["counts_per_n"] = a.counts_per_n
     cfg["board_uid"] = board_uid
     cfg["accepted_open"] = accepted
+    if approval is not None:
+        cfg["approved_builds"] = approval.builds()
+        cfg["evidence"] = dict(approval.evidence)
+        cfg["kit"] = dict(approval.kit)
+        (out / "approval.json").write_text(json.dumps(approval.doc, indent=1, ensure_ascii=False), encoding="utf-8")
+    runner = gate_res.runner_identity()
+    (out / "runner.json").write_text(json.dumps({
+        "runner": runner, "python": sys.version.split()[0], "os": platform.platform(), "frozen": gate_res.FROZEN,
+        "argv": list(argv) if argv is not None else sys.argv[1:],
+        "kit": ({k: {"path": v.get("path"), "sha256": v.get("sha256"), "build": v.get("build")}
+                 for k, v in approval.kit.get("images", {}).items()} if approval is not None else None),
+        "kit_hashes_verified_in": str(a.delivery or default_delivery()) if approval is not None else None,
+        "started_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}, indent=1), encoding="utf-8")
 
     if mode == "twin":
-        tr = TwinTransport(out / "twin_run", image="meas", seed=1)
+        exe = a.twin_exe or gate_res.twin_exe_default()
+        if exe is None and not os.environ.get("BEND_TWIN_BUILD_DIR"):
+            os.environ["BEND_TWIN_BUILD_DIR"] = str(out / "twin_build")      # standing data rule: inside <out>
+        tr = LoggedTransport(TwinTransport(out / "twin_run", image="meas", exe=exe, seed=1), out / "raw" / "frames.bin")
         link = Link(tr)
         op = TwinOperator(link, seed=a.seed)
     else:
-        op = ConsoleOperator()
+        op = ConsoleOperator(pictures=gate_res.pictures(), plain=gate_res.plain_prompts())
         try:
-            tr = SerialTransport(a.port, a.approved, confirm=op.confirm_port)
+            tr = LoggedTransport(SerialTransport(a.port, approval, confirm=op.confirm_port), out / "raw" / "frames.bin")
         except InterlockError as e:
             print(f"REFUSED: {e}", file=sys.stderr)
             return 2
         link = Link(tr, step_ms=0.5)
+    op.journal = out / "prompts.jsonl"
     ctx = P.Ctx(link, op, cfg, out, seed=a.seed, session=session)
 
     try:
@@ -412,7 +540,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     meta.update({"session_id": session["session_id"], "images": session["images"],
-                 "mode": mode, "date": time.strftime("%Y-%m-%d %H:%M"), "approval": approval,
+                 "mode": mode, "date": time.strftime("%Y-%m-%d %H:%M"), "approval": approval_ref,
+                 "approval_sha256": approval_sha, "runner": runner,
+                 "options": {"quick": a.quick, "seed": a.seed, "counts_per_n": a.counts_per_n,
+                             "buffer_fitted": a.buffer_fitted, "power_sense_fitted": a.power_sense_fitted},
+                 "options_pinned": sorted(approval.options) if approval is not None else [],
                  "port": a.port or "— (twin)", "board_uid": board_uid, "icd": rc.ICD_VERSION,
                  "python": sys.version.split()[0], "host": platform.node(), "seed": a.seed, "quick": a.quick,
                  "order": [s.id for s in PLAN],
@@ -438,17 +570,27 @@ def main(argv: list[str] | None = None) -> int:
                     ctx.end()
                     print(f"    {it.error}", flush=True)
                     continue
+            why0 = unidentified_reason(ctx, s.id, before=True)
+            if why0:
+                it = ctx.begin(s.id, s.title, s.req, s.method)
+                it.error = f"REFUSED: {why0}"
+                ctx.end()
+                print(f"    {it.error}", flush=True)
+                print(f"REFUSED: {why0} — session stopped. {MANUAL_RESTORE}", file=sys.stderr)
+                rc_ = 2
+                break
             it = P.run_item(ctx, s.id, s.title, s.fn, s.req, s.method)
             print(f"    {it.verdict}  ({time.time() - t0:.1f} s)" + (f"  {it.error}" if it.error else ""), flush=True)
             meta_f.write_text(json.dumps(meta, indent=1), encoding="utf-8")        # images of this session (resume)
-            why = stop_reason(s.id, it)
+            why = stop_reason(s.id, it) or unidentified_reason(ctx, s.id, before=False)
             if why:
                 if s.id == "BENCH-ENTRY" and ctx.identified:
                     # the sense bypass may be (partly) fitted: restore it (P-8, no motion) before stopping
                     ex = next(x for x in PLAN if x.id == "BENCH-EXIT")
                     print(f"--- {ex.id}: {ex.title} (restore before stopping)", flush=True)
                     P.run_item(ctx, ex.id, ex.title, ex.fn, ex.req, ex.method)
-                print(f"REFUSED: {why} — session stopped before any further motion", file=sys.stderr)
+                print(f"REFUSED: {why} — session stopped before any further motion"
+                      + ("" if ctx.identified or ctx.twin else f". {MANUAL_RESTORE}"), file=sys.stderr)
                 rc_ = 2
                 break
     except (KeyboardInterrupt, OperatorAbort) as e:
@@ -470,6 +612,17 @@ def main(argv: list[str] | None = None) -> int:
         rep = hil_report.write(out)
         print(f"report: {rep}")
         tr.close()
+        if not a.no_export:
+            try:
+                z = gate_export.export(out)
+                zsha = gate_res.sha256_file(z)
+                (out / "zip_sha256.txt").write_text(f"{z.name}  SHA-256 {zsha}\n", encoding="utf-8")
+                bar = "=" * 100
+                print(f"results zip: {z}  — send this file to the product owner\n{bar}\n"
+                      "  SEND THIS LINE TO THE PRODUCT OWNER NOW, SEPARATELY FROM THE ZIP (e.g. in the message text):\n\n"
+                      f"      {z.name}   SHA-256   {zsha}\n\n{bar}")
+            except Exception as e:  # noqa: BLE001
+                print(f"results zip NOT written: {e}", file=sys.stderr)
     return rc_
 
 

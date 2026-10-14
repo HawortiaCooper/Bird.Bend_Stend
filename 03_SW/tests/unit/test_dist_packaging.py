@@ -8,6 +8,7 @@ Verifies: SW-PLT-001
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import importlib.util
 import os
 import re
@@ -394,3 +395,115 @@ def test_swr27_build_uses_the_lock() -> None:
     py = tomllib.loads((SW_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     deps = {re.split(r"[<>=!~ ]", d, maxsplit=1)[0].lower(): d for d in py["project"]["dependencies"]}
     assert all("<" in spec for spec in deps.values()), deps                      # every runtime range has a ceiling
+
+
+# ------------------------------------------------------------------------------------------------ bring-up data
+
+sm = _load("smoke_dist")
+RES = SW_ROOT / "src" / "bend_stand" / "resources"
+
+
+@pytest.mark.req("SW-PLT-001", "SW-BRU-001")
+def test_spec_bundles_bringup_resources() -> None:
+    spec = (PACK / "BirdBendStand.spec").read_text(encoding="utf-8")
+    assert '(SRC / "bend_stand" / "resources").glob("*.json")' in spec
+    assert '(str(p), "bend_stand/resources") for p in BRINGUP_RESOURCES' in spec
+    assert {p.name for p in RES.glob("*.json")} >= set(sm.BRINGUP_FILES)
+
+
+def _fake_dist(tmp_path: Path) -> Path:
+    res = tmp_path / "dist" / "_internal" / "bend_stand" / "resources"
+    res.mkdir(parents=True)
+    for name in sm.BRINGUP_FILES:
+        shutil.copy2(RES / name, res / name)
+    return tmp_path / "dist"
+
+
+@pytest.mark.req("SW-PLT-001", "SW-BRU-001")
+def test_smoke_s7_bringup_checks(tmp_path: Path) -> None:
+    dist = _fake_dist(tmp_path)
+    assert sm.bringup_problems(dist) == []
+    first = json.loads((RES / "bringup_steps.json").read_text(encoding="utf-8"))["steps"][0]["id"]
+    assert sm.first_bringup_step(dist) == first
+    steps = dist / "_internal" / "bend_stand" / "resources" / "bringup_steps.json"
+    d = json.loads(steps.read_text(encoding="utf-8"))
+    d["steps"].append(dict(d["steps"][0]))                                   # duplicate id → invalid
+    steps.write_text(json.dumps(d), encoding="utf-8")
+    probs = sm.bringup_problems(dist)
+    assert any("differs from the source tree" in p for p in probs) and any("step file invalid" in p for p in probs)
+    (dist / "_internal" / "bend_stand" / "resources" / "bringup_record.schema.json").unlink()
+    assert any("bringup_record.schema.json missing" in p for p in sm.bringup_problems(dist))
+
+
+# ------------------------------------------------------------------------------------------------ gate runner (GR-1)
+
+GR = PACK / "gate_runner"
+
+
+def _load_gr(name: str) -> types.ModuleType:
+    spec = importlib.util.spec_from_file_location(f"bbs_gr_{name}", GR / f"{name}.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.req("SW-PLT-001")
+def test_gate_runner_spec_bundles_what_gate_runner_md_names() -> None:
+    """GATE_RUNNER.md §1: console one-folder BirdBendStand-GateRunner, the 15 modules, hidden imports serial + yaml,
+    resources/params.yaml, resources/pictures.json, resources/pictures/B*.png, fw_twin/fw_twin.exe."""
+    spec = (GR / "BirdBendStand-GateRunner.spec").read_text(encoding="utf-8")
+    for m in ("gate_runner", "gate_res", "gate_approval", "gate_export", "hil_session", "hil_procs", "hil_link",
+              "hil_budget", "hil_operator", "hil_report", "ref_codec", "gen_params", "gen_protocol", "twin", "build"):
+        assert f'"{m}"' in spec, m
+    for frag in ('"serial"', '"yaml"', 'console=True', 'name="BirdBendStand-GateRunner"',
+                 '"00_System" / "specs" / "params.yaml"), "resources")', '"pictures.json"), "resources")',
+                 '"resources/pictures")', '(str(TWIN_EXE), "fw_twin")', "rthook_gate_d06.py"):
+        assert frag in spec, frag
+
+
+@pytest.mark.req("SW-PLT-001")
+def test_gate_runner_pe_normalisation_is_deterministic(tmp_path: Path) -> None:
+    """Two builds differ only in the PE TimeDateStamp / checksum; normalising both gives identical bytes."""
+    pefile = pytest.importorskip("pefile")
+    grb = _load_gr("gr_build")
+    src = Path(sys.executable)
+    a, b = tmp_path / "a.exe", tmp_path / "b.exe"
+    shutil.copyfile(src, a)
+    shutil.copyfile(src, b)
+    pe = pefile.PE(str(b))
+    pe.FILE_HEADER.TimeDateStamp = 12345
+    data = pe.write()
+    pe.close()
+    b.write_bytes(bytes(data))
+    assert a.read_bytes() != b.read_bytes()
+    grb.normalise_pe(a, 1_791_668_154)
+    grb.normalise_pe(b, 1_791_668_154)
+    assert a.read_bytes() == b.read_bytes()
+    pe = pefile.PE(str(a))
+    try:
+        assert pe.FILE_HEADER.TimeDateStamp == 1_791_668_154 and pe.verify_checksum()
+    finally:
+        pe.close()
+
+
+@pytest.mark.req("SW-PLT-001")
+def test_gate_runner_version_and_dirty_paths() -> None:
+    grb = _load_gr("gr_build")
+    assert re.fullmatch(r"\d+\.\d+\.\d+", grb.runner_version())
+    assert {"00_System/tools/hil", "00_System/tools/fw_twin", "00_System/specs/params.yaml", "01_HW/diagrams/bench",
+            "02_FW/src"} <= set(grb.GR_PATHS)
+    txt = bi.version_file_text(_info(), "x.exe", "d", reproducible=True)
+    assert "source date 2026-" in txt and "built" not in txt
+
+
+@pytest.mark.req("SW-PLT-001")
+def test_gate_runner_smoke_and_build_script_cover_the_checks() -> None:
+    smoke = (GR / "smoke_gate_runner.py").read_text(encoding="utf-8")
+    for frag in ('"--version"', '"--list"', '"--twin"', '"--verify-zip"', '"--port", "COM250"', "BEND_STAND_D06_GUARD",
+                 "def stray", "TEMP", "APPDATA", "HOME", "bundle_sha256"):
+        assert frag in smoke, frag
+    ps1 = (GR / "build_gate_runner.ps1").read_text(encoding="utf-8")
+    assert "requirements-gaterunner.lock.txt" in ps1 and "PYTHONHASHSEED" in ps1 and "SOURCE_DATE_EPOCH" in ps1
+    assert "gr_build.py\") stage" in ps1 and "smoke_gate_runner.py" in ps1

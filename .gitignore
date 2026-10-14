@@ -17,6 +17,9 @@ build/
 *.map
 *.bin
 *.hex
+# operator delivery packages: the firmware images are tracked (never the ELF / map)
+!04_Delivery/**/*.bin
+!04_Delivery/**/*.hex
 
 # IDE / OS
 .idea/
@@ -27,3 +30,7 @@ desktop.ini
 # Recordings produced by the app
 03_SW/recordings/
 *.rawdump
+
+# Frozen gate runner built into the gate kit (D-57, GR-1; 03_SW/packaging/gate_runner) — tracked by Orchestrator decision only
+04_Delivery/**/BirdBendStand-GateRunner/
+04_Delivery/**/BirdBendStand-GateRunner*.zip

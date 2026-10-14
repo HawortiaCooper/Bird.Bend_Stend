@@ -125,6 +125,11 @@ class Latest:
     calc_reason: int = 0
 
 
+#: EVENTs a FW restart may queue before / with BOOT (ICD §6.4, §11.3): EVENT SEQ restarts at 0 with one of them
+BOOT_TIME_EVENTS = frozenset({pg.Event.BOOT, pg.Event.PARAMS_DEFAULTED, pg.Event.PARAMS_LOADED, pg.Event.NVM_ERROR,
+                              pg.Event.CLK_FALLBACK})
+
+
 class Pipeline:
     def __init__(self, clock: Clock, events: EventBus, liveness: LivenessMonitor, *,
                  on_fw_event: Callable[[P.EventPayload], None] | None = None,
@@ -263,7 +268,10 @@ class Pipeline:
         self.counters.event_frames += 1
         if self.prev_event_seq is not None:
             gap = (fr.seq - self.prev_event_seq - 1) & 0xFF
-            if gap and ev.code != pg.Event.BOOT:
+            # a FW restart restarts EVENT SEQ at 0 and may queue boot-time events before BOOT (ICD §6.4 / §11.3:
+            # PARAMS_DEFAULTED 0, BOOT 1) — a new baseline, not a loss (SWD-P3-09)
+            restart = fr.seq == 0 and ev.code in BOOT_TIME_EVENTS
+            if gap and ev.code != pg.Event.BOOT and not restart:
                 self.counters.events_lost += gap
                 self.events.log(f"{gap} FW EVENT(s) lost (EVENT SEQ {self.prev_event_seq} → {fr.seq})",
                                 logging.WARNING, kind="FW_EVENTS_LOST")      # SWR-36: incident log

@@ -403,7 +403,8 @@ class MotionController:
             return                                         # accepted: the ticket resolves with MOVE_DONE
         if isinstance(exc, NackError):
             paused = exc.name == "E_STATE" and bool(exc.detail & pg.Block.PAUSED)
-            self._finish_active(act, MoveOutcome("REFUSED_PAUSED" if paused else "REFUSED", text=exc.detail_text))
+            self._finish_active(act, MoveOutcome("REFUSED_PAUSED" if paused else "REFUSED", text=exc.detail_text,
+                                                  nack=exc.name))
             if paused:
                 self._be.events.log(f"{exc.cmd} refused: paused — press Resume (expected, D-33 k)", logging.INFO)
             return

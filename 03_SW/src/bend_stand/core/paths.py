@@ -37,8 +37,13 @@ def presets_dir(base: Path) -> Path:
     return base / "presets"
 
 
+RECORDINGS_ENV = "BEND_STAND_RECORDINGS_DIR"
+
+
 def default_recordings_root() -> Path:
-    return Path.home() / "Documents" / APP_NAME / "recordings"
+    """``Documents/BirdBendStand/recordings``; env ``BEND_STAND_RECORDINGS_DIR`` overrides it (test suites)."""
+    env = os.environ.get(RECORDINGS_ENV, "").strip()
+    return Path(env) if env else Path.home() / "Documents" / APP_NAME / "recordings"
 
 
-__all__ = ["DATA_ENV", "app_data_dir", "calibration_dir", "sessions_dir", "presets_dir", "default_recordings_root"]
+__all__ = ["DATA_ENV", "RECORDINGS_ENV", "app_data_dir", "calibration_dir", "sessions_dir", "presets_dir", "default_recordings_root"]

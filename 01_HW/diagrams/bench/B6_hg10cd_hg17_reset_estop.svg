@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="297mm" height="210mm" viewBox="0 0 1485 1050" font-family="Arial, Helvetica, sans-serif">
+<title>Bird Bend Stand wiring — sheet 6: HG-10 c / d and HG-17 — MCU held in reset, E-stop, D-42 NO wire</title>
+<rect x="0" y="0" width="1485" height="1050" fill="#ffffff"/>
+<rect x="15.0" y="15.0" width="1455.0" height="1020.0" fill="none" stroke="#222" stroke-width="1.6"/>
+<text x="30.0" y="52.0" font-size="22" fill="#123a6b" font-weight="bold">B6 — HG-10 c / d and HG-17 — MCU held in reset, E-stop, D-42 NO wire</text>
+<text x="1455.0" y="52.0" font-size="13" fill="#555" text-anchor="end">Bird Bend Stand — HW-gate bench pictures</text>
+<rect x="40.0" y="120.0" width="300.0" height="420.0" fill="#e8f5e9" stroke="#1b5e20" stroke-width="2" rx="6"/>
+<rect x="50.0" y="130.0" width="280.0" height="110.0" fill="#f1f8e9" stroke="#555" stroke-width="1" stroke-dasharray="4,3" rx="4"/>
+<text x="60.0" y="150.0" font-size="11.5" fill="#000" font-weight="bold">ST-LINK/V2-1 part</text>
+<rect x="160.0" y="108.0" width="60.0" height="34.0" fill="#bdbdbd" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="190.0" y="130.0" font-size="11" fill="#000" text-anchor="middle" font-weight="bold">USB</text>
+<circle cx="80.0" cy="190.0" r="7" fill="#ef5350" stroke="#333" stroke-width="1.2"/>
+<text x="92.0" y="195.0" font-size="10.5" fill="#000">LD1 COM</text>
+<circle cx="80.0" cy="218.0" r="7" fill="#ef5350" stroke="#333" stroke-width="1.2"/>
+<text x="92.0" y="223.0" font-size="10.5" fill="#000">LD3 PWR</text>
+<rect x="250.0" y="180.0" width="60.0" height="26.0" fill="#fff" stroke="#333" stroke-width="1"/>
+<text x="280.0" y="198.0" font-size="10.5" fill="#000" text-anchor="middle" font-weight="bold">JP5</text>
+<circle cx="110.0" cy="310.0" r="18" fill="#1e88e5" stroke="#0d47a1" stroke-width="2"/>
+<text x="110.0" y="346.0" font-size="10.5" fill="#000" text-anchor="middle">B1 USER</text>
+<circle cx="260.0" cy="310.0" r="18" fill="#212121" stroke="#ffd54f" stroke-width="5"/>
+<text x="260.0" y="346.0" font-size="11" fill="#000" text-anchor="middle" font-weight="bold">B2 RESET</text>
+<circle cx="190.0" cy="380.0" r="7" fill="#66bb6a" stroke="#333" stroke-width="1.2"/>
+<text x="202.0" y="385.0" font-size="10.5" fill="#000">LD2</text>
+<rect x="48.0" y="260.0" width="18.0" height="260.0" fill="#424242" stroke="#333" stroke-width="1"/>
+<rect x="314.0" y="260.0" width="18.0" height="260.0" fill="#424242" stroke="#333" stroke-width="1"/>
+<text x="190.0" y="520.0" font-size="11.5" fill="#000" text-anchor="middle" font-weight="bold">NUCLEO-F446RE (MB1136)</text>
+<text x="40.0" y="565.0" font-size="13" fill="#b71c1c" font-weight="bold">observer: hold B2 RESET pressed (MCU in reset)</text>
+<rect x="40.0" y="588.5" width="306.8" height="16.5" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="45.0" y="601.0" font-size="9.5" fill="#b26a00" font-weight="bold">board layout schematic — positions per UM1724 ASSUMED</text>
+<circle cx="470.0" cy="230.0" r="34" fill="#e53935" stroke="#7f0000" stroke-width="2"/>
+<circle cx="470.0" cy="230.0" r="42" fill="none" stroke="#fbc02d" stroke-width="5"/>
+<text x="470.0" y="300.0" font-size="13" fill="#000" text-anchor="middle" font-weight="bold">observer: press the E-stop</text>
+<text x="470.0" y="318.0" font-size="11.5" fill="#000" text-anchor="middle">(other hand, RESET still held)</text>
+<rect x="600.0" y="190.0" width="120.0" height="80.0" fill="#cfd8dc" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="660.0" y="236.0" font-size="13" fill="#000" text-anchor="middle" font-weight="bold">motor</text>
+<rect x="720.0" y="215.0" width="40.0" height="30.0" fill="#9e9e9e" stroke="#333" stroke-width="1.2"/>
+<rect x="760.0" y="222.0" width="160.0" height="16.0" fill="#e0e0e0" stroke="#555" stroke-width="1"/>
+<text x="840.0" y="210.0" font-size="11.5" fill="#000" text-anchor="middle">coupling / screw</text>
+<text x="740.0" y="300.0" font-size="13" fill="#000" text-anchor="middle" font-weight="bold">operator: turn the coupling by hand</text>
+<text x="740.0" y="318.0" font-size="11.5" fill="#000" text-anchor="middle">free = PASS · holds = STOP (D-42 path broken)</text>
+<rect x="380.0" y="345.0" width="560.0" height="70.0" fill="#fff3f3" stroke="#b71c1c" stroke-width="1.6" rx="3"/>
+<text x="392.0" y="370.0" font-size="13" fill="#b71c1c" font-weight="bold">HANDS OFF the shaft before the E-stop or RESET is released —</text>
+<text x="392.0" y="392.0" font-size="13" fill="#b71c1c">the closed-loop driver re-energises at once (D-45 a)</text>
+<text x="380.0" y="450.0" font-size="11.5" fill="#000" font-weight="bold">HG-10 d: multimeter M-1…M-4 in the same holds (picture B2); clip leads — a third hand is needed</text>
+<rect x="380.0" y="480.0" width="560.0" height="260.0" fill="#fff" stroke="#b0006a" stroke-width="1.4" rx="4"/>
+<text x="390.0" y="504.0" font-size="16" fill="#b0006a" font-weight="bold">HG-17: break and refit the D-42 NO wire</text>
+<rect x="400.0" y="530.0" width="150.0" height="110.0" fill="#f5f5f5" stroke="#333" stroke-width="1.2" rx="3"/>
+<text x="475.0" y="552.0" font-size="11.5" fill="#000" text-anchor="middle" font-weight="bold">S0 contact</text>
+<text x="475.0" y="570.0" font-size="11.5" fill="#000" text-anchor="middle" font-weight="bold">blocks</text>
+<text x="420.0" y="600.0" font-size="11.5" fill="#000">NC 11–12</text>
+<text x="420.0" y="626.0" font-size="11.5" fill="#b0006a" font-weight="bold">NO 13–14</text>
+<polyline points="550.0,622.0 680.0,622.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="685.0" y="627.0" font-size="11.5" fill="#000">→ R_E → D2 → ENA+</text>
+<line x1="605" y1="605" x2="625" y2="640" stroke="#d32f2f" stroke-width="4"/>
+<line x1="625" y1="605" x2="605" y2="640" stroke="#d32f2f" stroke-width="4"/>
+<text x="615.0" y="665.0" font-size="11.5" fill="#d32f2f" text-anchor="middle" font-weight="bold">lift this wire at terminal 14</text>
+<rect x="400.0" y="681.0" width="370.2" height="16.0" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="405.0" y="693.0" font-size="9" fill="#b26a00" font-weight="bold">NO terminal numbers 13–14 / NC 11–12 ASSUMED (contact-block standard)</text>
+<text x="400.0" y="725.0" font-size="11.5" fill="#000">PSU OFF for the wire change; insulate the free end.</text>
+<rect x="960.0" y="110.0" width="500.0" height="800.0" fill="#fafafa" stroke="#888" stroke-width="1.2" rx="4"/>
+<text x="970.0" y="136.0" font-size="16" fill="#123a6b" font-weight="bold">Steps (runner prompts each)</text>
+<text x="972.0" y="168.0" font-size="13" fill="#000">HG-10 c (before ANY bypass, §6.8 P-2):</text>
+<text x="972.0" y="185.2" font-size="13" fill="#000">1. 48 V on, driver enabled, nothing in the travel.</text>
+<text x="972.0" y="202.3" font-size="13" fill="#000">2. Observer holds B2 RESET, presses the E-stop.</text>
+<text x="972.0" y="219.5" font-size="13" fill="#000">3. Operator turns the coupling: must be FREE.</text>
+<text x="972.0" y="236.6" font-size="13" fill="#000">4. Hands off. Observer releases the E-stop (RESET</text>
+<text x="972.0" y="253.8" font-size="13" fill="#000">   still held) → holds again (pull-down, D-45 a).</text>
+<text x="972.0" y="271.0" font-size="13" fill="#000">5. Observer releases RESET → board restarts.</text>
+<text x="972.0" y="288.1" font-size="13" fill="#000"></text>
+<text x="972.0" y="305.3" font-size="13" fill="#000">HG-17 wire break (undetectable, R-10):</text>
+<text x="972.0" y="322.4" font-size="13" fill="#000">1. PSU off; lift the NO wire at terminal 14,</text>
+<text x="972.0" y="339.6" font-size="13" fill="#000">   insulate the end.</text>
+<text x="972.0" y="356.8" font-size="13" fill="#000">2. PSU on; RESET held + E-stop pressed →</text>
+<text x="972.0" y="373.9" font-size="13" fill="#000">   the shaft STILL HOLDS (expected: the cut is</text>
+<text x="972.0" y="391.1" font-size="13" fill="#000">   gone and nothing reports it).</text>
+<text x="972.0" y="408.2" font-size="13" fill="#000">3. Hands off, release; PSU off; refit the wire.</text>
+<text x="972.0" y="425.4" font-size="13" fill="#000">4. Repeat HG-10 c: FREE again → wire restored.</text>
+<text x="972.0" y="442.6" font-size="13" fill="#000"></text>
+<text x="972.0" y="459.7" font-size="13" fill="#000">HG-17 connectors: unplug the E-stop sense,</text>
+<text x="972.0" y="476.9" font-size="13" fill="#000">START or END plug during a slow jog when the</text>
+<text x="972.0" y="494.0" font-size="13" fill="#000">runner says NOW, then reconnect.</text>
+<rect x="1005.0" y="925.0" width="465.0" height="110.0" fill="#fff" stroke="#222" stroke-width="1.6"/>
+<line x1="1005" y1="953" x2="1470" y2="953" stroke="#222" stroke-width="1"/>
+<line x1="1305" y1="925" x2="1305" y2="953" stroke="#222" stroke-width="1"/>
+<text x="1013.0" y="944.0" font-size="13" fill="#123a6b" font-weight="bold">HW-gate bench pictures (D-57)</text>
+<text x="1313.0" y="944.0" font-size="13" fill="#000" font-weight="bold">Picture B6 / 9</text>
+<text x="1013.0" y="969.0" font-size="11" fill="#000" font-weight="bold">HG-10 c / d and HG-17 — MCU held in reset, E-stop, D-42 NO wire</text>
+<text x="1013.0" y="984.0" font-size="10" fill="#000">Version 1.1 · 2026-10-14 · owner Implementer A (01_HW)</text>
+<text x="1013.0" y="998.0" font-size="8.5" fill="#000">Source: wiring.md v0.7.1 §6.1/§11.1 · FW_test_plan §6/§6.8 · HW_GATE_RUNBOOK v0.4 · pinout.md v0.6</text>
+<text x="1013.0" y="1011.0" font-size="9" fill="#555">Generated by 01_HW/diagrams/bench/gen_bench_svg.py — do not edit the SVG/PNG</text>
+<text x="1013.0" y="1024.0" font-size="9.5" fill="#b71c1c" font-weight="bold">NOT A CERTIFIED SAFETY DESIGN — bench aid for the HW gate (D-06-GATE)</text>
+</svg>

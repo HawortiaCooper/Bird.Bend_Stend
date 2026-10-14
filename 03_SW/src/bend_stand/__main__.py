@@ -1,6 +1,7 @@
 """Entry point: ``python -m bend_stand [--sim[=scenario.json]] [--port COM7 | --port tcp://host:port]
 [--session file] [--recordings DIR] [--headless [--duration s] [--record]]``, the subcommand
-``python -m bend_stand report <recording> [...]`` and the script ``bend-stand`` (also the frozen
+``python -m bend_stand report <recording> [...]``, ``python -m bend_stand bringup-export [<session>] [--out DIR]
+[--verify ZIP]`` (D-56 a) and the script ``bend-stand`` (also the frozen
 ``BirdBendStand.exe`` / ``BirdBendStand-cli.exe``, SW_design §24).
 
 Owner: Implementer B (D-29 n). Without ``--headless`` the Backend is built **unstarted** and handed to
@@ -9,7 +10,9 @@ if given and shuts it down on exit. ``--headless`` connects, streams and prints 
 test, no Qt import); with ``--record`` it also records the stream for ``--duration`` and prints the folder.
 ``report`` rebuilds a test report offline from a recording folder: it hands the remaining arguments to the public
 entry ``bend_stand.core.report.main`` (same options as ``python -m bend_stand.core.report``), so the installed
-application can rebuild reports without a Python installation (OI-UM-03).
+application can rebuild reports without a Python installation (OI-UM-03). ``bringup-export`` packs a bring-up
+session offline (no board, no GUI): the active / newest session or the one named; ``--verify`` checks a package's
+manifest hashes and JSON schema (SW-BRU-003).
 
 D-06: no COM port is ever opened unless the operator selected it with ``--port COMx`` (or in the GUI).
 Without ``--port``/``--sim`` the GUI starts disconnected and ``--headless`` refuses to run.
@@ -18,7 +21,8 @@ Origin: Thrust_Stand_HAW/03_SW/src/thrust_stand/__main__.py @37c87471 (adapted: 
 unstarted Backend hand-off to gui.app.run, headless smoke mode).
 
 Implements: SW-PLT-001, SW-PLT-003 (headless connect), SYS-008 (--sim), SW-REP-003 (offline report rebuild),
-SW-ACQ-001 (--headless --record), SW-PLT-001 / SWR-14 (log file + incident log for every run, ``core.logfile``)
+SW-ACQ-001 (--headless --record), SW-PLT-001 / SWR-14 (log file + incident log for every run, ``core.logfile``),
+SW-BRU-003 (offline bring-up package, ``bringup-export``)
 """
 from __future__ import annotations
 
@@ -36,13 +40,15 @@ if TYPE_CHECKING:
 
 #: subcommands dispatched before the option parser (first argument)
 REPORT_SUBCOMMAND = "report"
+BRINGUP_SUBCOMMAND = "bringup-export"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="python -m bend_stand", description="Bird Bend Stand PC application",
         epilog=f"subcommand: {REPORT_SUBCOMMAND} <recording folder> [--cal FILE] [--tare-raw N] [--bend3p L b h] "
-               f"[--out DIR] - rebuild a test report offline (see '{REPORT_SUBCOMMAND} --help')")
+               f"[--out DIR] - rebuild a test report offline (see '{REPORT_SUBCOMMAND} --help'); "
+               f"{BRINGUP_SUBCOMMAND} [<session>] [--out DIR] [--verify ZIP] - bring-up package offline")
     ap.add_argument("--version", action="store_true", help="print the version and exit")
     ap.add_argument("--sim", nargs="?", const="", default=None, metavar="SCENARIO",
                     help="use the in-process FW simulator (optional scenario file *.simscn.json)")
@@ -57,6 +63,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--duration", type=float, default=5.0, help="--headless run time in seconds (default 5)")
     ap.add_argument("--record", action="store_true",
                     help="--headless: record the stream for --duration and print the recording folder")
+    ap.add_argument("--bringup-mark", action="append", default=[], metavar="STEP_ID",
+                    help="simulator test only (--headless --sim): start a bring-up session, mark STEP_ID PASS "
+                         "(repeatable, recorded as 'marked from the command line (test)'), close the session at the "
+                         "end and print its id (smoke test of SW-BRU-002/003; then use bringup-export). Refused "
+                         "with a COM port or a tcp:// endpoint")
     ap.add_argument("--log-level", default="WARNING", help="logging level (DEBUG, INFO, WARNING, ERROR)")
     return ap
 
@@ -89,6 +100,99 @@ def run_report(argv: list[str]) -> int:
     return int(report.main(argv) or 0)
 
 
+def run_bringup_export(argv: list[str]) -> int:
+    """``bringup-export [<session id | folder>] [--out DIR] [--data DIR] [--verify ZIP]`` (SW-BRU-003): writes the
+    bring-up zip of a session offline and prints its path; ``--verify`` checks a zip (exit 1 on a problem)."""
+    from bend_stand.core import bringup, paths  # noqa: PLC0415
+    from bend_stand.core.errors import FileFormatError  # noqa: PLC0415
+
+    ap = argparse.ArgumentParser(prog=f"python -m bend_stand {BRINGUP_SUBCOMMAND}",
+                                 description="Create the bring-up package of a session (offline)")
+    ap.add_argument("session", nargs="?", default=None,
+                    help="session id or folder (default: the active session, else the newest)")
+    ap.add_argument("--out", default=None, help="output folder (default: Documents\\BirdBendStand\\bringup)")
+    ap.add_argument("--data", default=None, help="application data folder (default: %%APPDATA%%\\BirdBendStand)")
+    ap.add_argument("--verify", default=None, metavar="ZIP", help="verify a package instead of creating one")
+    a = ap.parse_args(argv)
+    if a.verify:
+        problems = bringup.verify_package(a.verify)
+        for x in problems:
+            print(x)
+        print("package OK" if not problems else f"{len(problems)} problem(s)")
+        return 0 if not problems else 1
+    data = paths.app_data_dir(a.data)
+    try:
+        folder = bringup.find_session(data, a.session)
+        pkg = bringup.build_package(folder, a.out or bringup.default_bringup_root(), data_dir=data)
+    except (FileNotFoundError, FileFormatError, OSError) as exc:
+        print(f"bringup-export: {exc}", file=sys.stderr)
+        return 2
+    print(f"{pkg.path}  ({pkg.size_bytes} bytes, {pkg.files} files{', partial' if pkg.partial else ''})")
+    print(pkg.send_to)
+    return 0
+
+
+#: origin of a step mark made by ``--bringup-mark`` (BringupEngine.mark ``origin``) and the text every report shows
+CLI_TEST_ORIGIN = "cli-test"
+CLI_TEST_REMARK = "marked from the command line (test)"
+
+
+def bringup_mark_refusal(args: argparse.Namespace) -> str | None:
+    """``--bringup-mark`` marks steps PASS without an operator: allowed only for a headless **in-process simulator**
+    run, never with a board (COM port) or an external endpoint, so a bring-up package cannot claim results nobody
+    checked (Orchestrator integrity rule, SW-BRU-002). Returns the refusal text or None."""
+    if not getattr(args, "bringup_mark", None):
+        return None
+    if not args.headless:
+        return "--bringup-mark needs --headless --sim (it is a simulator test option)"
+    endpoint = str(getattr(args, "endpoint", None) or "")
+    if not (endpoint == "sim" or endpoint.startswith("sim:")):
+        return (f"--bringup-mark is a simulator test option and is refused with --port {endpoint or '(none)'}: "
+                "bring-up steps on a real board are checked and marked by the operator in the Bring-up dock")
+    return None
+
+
+def _bringup_begin(backend: object, steps: list[str]) -> bool:
+    """``--headless --sim --bringup-mark``: new bring-up session, the given steps marked PASS with origin
+    ``cli-test`` and the remark "marked from the command line (test)" (shown in session.json, record and HTML)."""
+    if not steps:
+        return True
+    bu = backend.bringup  # type: ignore[attr-defined]
+    g = bu.start_session(confirmed=True)
+    if not g.ok:
+        print("bring-up session refused: " + "; ".join(i.text for i in g.refused), file=sys.stderr)
+        return False
+    ok = True
+    for sid in steps:
+        g = bu.mark(sid, "PASS", remark=CLI_TEST_REMARK, **_origin_kw(bu))
+        if not g.ok:
+            print(f"bring-up mark {sid} refused: " + "; ".join(i.text for i in g.refused), file=sys.stderr)
+            ok = False
+    return ok
+
+
+def _origin_kw(bu: object) -> dict[str, str]:
+    """``origin="cli-test"`` once ``BringupEngine.mark`` accepts it (field requested from the bringup.py owner);
+    until then the remark alone carries the visible origin."""
+    import inspect  # noqa: PLC0415
+
+    try:
+        params = inspect.signature(bu.mark).parameters  # type: ignore[attr-defined]
+    except (TypeError, ValueError):
+        return {}
+    return {"origin": CLI_TEST_ORIGIN} if "origin" in params else {}
+
+
+def _bringup_end(backend: object) -> bool:
+    bu = backend.bringup  # type: ignore[attr-defined]
+    st = bu.status()
+    if not st.active:
+        return False
+    g = bu.close_session("headless run ended")
+    print(f"bring-up session: {st.session_id}  passed {st.passed}/{st.total}  folder {st.folder}")
+    return bool(g.ok) and st.passed > 0
+
+
 def run_headless(args: argparse.Namespace) -> int:
     """Connect, stream for ``args.duration`` s (recording it with ``--record``), print link statistics; exit 0
     when DATA arrived (and, with ``--record``, the recording was written)."""
@@ -106,6 +210,7 @@ def run_headless(args: argparse.Namespace) -> int:
         info = backend.connect_async(args.endpoint).result(timeout=10.0)
         print(f"connected: {args.endpoint}  fw {'.'.join(map(str, info.fw_version))}  build {info.build!r}  "
               f"uid {info.uid}  proto {info.proto_major}.{info.proto_minor}")
+        bu_ok = _bringup_begin(backend, list(getattr(args, "bringup_mark", None) or []))
         folder = None
         if getattr(args, "record", False):
             g = backend.record_start()
@@ -122,6 +227,8 @@ def run_headless(args: argparse.Namespace) -> int:
             backend.record_stop()
             print(f"recording: {folder}  rows {rows}")
             rec_ok = rows > 0
+        if getattr(args, "bringup_mark", None):
+            bu_ok = _bringup_end(backend) and bu_ok
         st = backend.status()
         s = st.link.stats
         print(f"link state {st.link.state.value}  stream {'on' if st.stream.on else 'off'}  "
@@ -130,7 +237,7 @@ def run_headless(args: argparse.Namespace) -> int:
               f"lost fw {s.frames_lost_fw}  lost link {s.frames_lost_link}  dup {s.dup_frames}  "
               f"crc {s.crc_errors}  len {s.len_errors}  timeout {s.timeout_drops}  "
               f"cmd timeouts {s.command_timeouts}  late {s.late_responses}")
-        return 0 if s.data_frames > 0 and rec_ok else 1
+        return 0 if s.data_frames > 0 and rec_ok and bu_ok else 1
     finally:
         backend.shutdown()
 
@@ -139,10 +246,16 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == REPORT_SUBCOMMAND:
         return run_report(argv[1:])
+    if argv and argv[0] == BRINGUP_SUBCOMMAND:
+        return run_bringup_export(argv[1:])
     args = parse_args(argv)
     if args.version:
         print(f"bend_stand {__version__} (ICD {ICD_VERSION}, PROTO {PROTO_VERSION[0]}.{PROTO_VERSION[1]})")
         return 0
+    refusal = bringup_mark_refusal(args)
+    if refusal is not None:                      # before any backend / port: nothing is opened
+        print(f"bend_stand: {refusal}", file=sys.stderr)
+        return 2
     from bend_stand.core import logfile  # noqa: PLC0415
 
     try:

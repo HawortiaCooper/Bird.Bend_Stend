@@ -1,0 +1,43 @@
+Bird Bend Stand - firmware delivery BUILD_INFO
+============================================================
+Release label (FW_design version) : 0.8.6
+Git commit                        : ce22533608514a512a7af5ecb52cfd1cee766821
+GET_INFO fw_version (wire)        : 0.8.6   (shown as 'FW 0.8.6' in the PC app)
+Source tree                       : commit ce22533 + uncommitted FW change of 2026-10-14 (platformio.ini / fw.h FW_VERSION 0.8.6, tools/build_info.py SOURCE_DATE_EPOCH, FW_design text) - to be committed by the Orchestrator; firmware logic identical to ce22533
+ICD                               : 0.7.5
+PROTO_VERSION / PAYLOAD_VERSION   : 1.0 / 1
+PARAM_DICT_HASH / version / count : 0xF8BCDCB8 / 6 / 48
+SOURCE_DATE_EPOCH                 : 1791668154 (2026-10-10 21:35 UTC; build-id time, reproducible)
+Packaging date                    : 2026-10-14
+Toolchain                         : PlatformIO Core, version 6.2.0; platform ststm32@20.0.0, framework-arduinoststm32@4.30000.0,
+                                    toolchain-gccarmnoneeabi@1.120301.0 (arm-none-eabi-gcc.exe (xPack GNU Arm Embedded GCC x86_64) 12.3.1 20230626)
+HEX / BIN conversion              : GNU objcopy (xPack GNU Arm Embedded GCC x86_64) 2.40.0.20230627; bin gap fill 0xFF
+
+[HW_MEAS_GATE-ONLY]  env nucleo_f446re_meas
+  purpose            : measurement image - ONLY for the HW gate with Validator E, never for normal operation
+  GET_INFO build     : 261010-2135-MEAS   (git ce225336+)
+  features (PC app)  : AFE BUTTONS DRV_SIGNALS HOMING MOTION MOVE_UNTIL_LOAD NVM HW_MEAS
+  flash / static RAM : 50872 B / 41696 B (+ 4096 B main-stack reserve)
+  flash ranges (HEX) : 0x08000000-0x080001C3, 0x0800C000-0x080184F3  -> sectors [0, 3, 4]; sectors 1-2 (NVM) untouched by the HEX
+  BBS_FW_0.8.6_HW_MEAS_GATE-ONLY.bin           sha256 1fa7d76bf65212a8cd592ac834f9a91d1232ccf55b1b3ac50bd7a41823e94f3d
+  BBS_FW_0.8.6_HW_MEAS_GATE-ONLY.hex           sha256 c39126e95fb6f299c28e6785f25cf395bf7b047b9dad3ecff361d93fbf62a3c7
+  firmware.elf (not delivered)       sha256 790094bbccaced4b5fe2311aa3c9c189f4bd1f86b3beea90599788dba0f2dfaf
+  reproducible       : yes - two independent clean builds, identical ELF/BIN/HEX
+
+[HW_MEAS_DWT_GATE-ONLY]  env nucleo_f446re_meas_dwt
+  purpose            : measurement image + DWT statistics - ONLY for the HW gate with Validator E, never for normal operation
+  GET_INFO build     : 261010-2135-DWT   (git ce225336+)
+  features (PC app)  : AFE BUTTONS DRV_SIGNALS HOMING MOTION MOVE_UNTIL_LOAD NVM HW_MEAS
+  flash / static RAM : 51772 B / 44072 B (+ 4096 B main-stack reserve)
+  flash ranges (HEX) : 0x08000000-0x080001C3, 0x0800C000-0x08018877  -> sectors [0, 3, 4]; sectors 1-2 (NVM) untouched by the HEX
+  BBS_FW_0.8.6_HW_MEAS_DWT_GATE-ONLY.bin       sha256 be81278412dececa496e4e465c7c8e48b363aee87e0436dbe642854c60890877
+  BBS_FW_0.8.6_HW_MEAS_DWT_GATE-ONLY.hex       sha256 3eccb1fb2837dbae1343081438698bd2b6986d0c721befe11c8a02cc081caa6d
+  firmware.elf (not delivered)       sha256 65ba74b40be1aee5122c9c5118dd8b325ce09d74227d66b7eb8341fe8374b940
+  reproducible       : yes - two independent clean builds, identical ELF/BIN/HEX
+
+Checks at packaging: PlatformIO check_map.py PASS (nothing linked into the NVM hole 0x08004000..0x0800BFFF);
+TC-SYS-009-02 check_meas_build.py PASS (measurement images: core / pure / gen objects and the safety handlers
+byte-identical to the release image); FW host suites (implementer + validator, 251 test cases) green.
+Note: GET_INFO 'build' = YYYYMMDD-HHMM (gate images YYMMDD-HHMM-MEAS / -DWT) of SOURCE_DATE_EPOCH (UTC) if set, else
+the local build minute. Rebuild byte-identically: same tree, same toolchain, set SOURCE_DATE_EPOCH to the value
+above, then `pio run -e <env>` with a private PLATFORMIO_BUILD_DIR and this script.

@@ -645,6 +645,8 @@ class FakeBackend:
         self.calibrations = FakeCalStore(self)
         self.sequencer = FakeSequencer(self)
         self.reports = FakeReports(self)
+        from fake_bringup import FakeBringup  # noqa: PLC0415 - D-56 (SW-BRU) fake until B hands back the engine
+        self.bringup = FakeBringup(self)
         self.sim = None
         self.test_hooks = None
         self.compat = Compat.OK

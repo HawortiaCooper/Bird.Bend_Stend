@@ -149,7 +149,7 @@ def test_fwr15_port_session_needs_board_uid(monkeypatch, capsys, tmp_path):
     for extra in ([], ["--board-uid", "1234"], ["--board-uid", "not-hex-not-hex-not-hex!"]):
         assert hil_session.main(["--port", "COM7", "--approved", REF, "--out", str(tmp_path / "s")] + extra) == 2
     assert opened == []
-    assert "--board-uid" in capsys.readouterr().err
+    assert "REFUSED" in capsys.readouterr().err          # D-57: board session only with an approval file
 
 
 @pytest.mark.parametrize("only, from_, want", [

@@ -775,3 +775,21 @@ def test_step_stall_until_a_stop_and_reset(tw):
     tw.act("reset", cause="pin")
     tw.advance_ms(5)
     assert tw.act("query", what="pulses")["step_stall_armed"] is False
+
+
+def test_world_shift_while_moving_lost_steps(tw):
+    """OI-F-BRU-02 (TC-SYS-011-03 variant, D-56 b): `world_shift` acts at once also while the step output runs -
+    the carriage loses the shifted travel, the FW step counter does not (open loop); the move then continues from
+    the shifted world position and ends with the full commanded pulse count."""
+    link = TwinLink(tw)
+    _train(tw, link, 400, 9000)                                    # 400 steps at 10 kHz = 500 um at 800 steps/mm
+    tw.advance_ms(20)
+    q = tw.act("query", what="pulses")
+    assert q["running"] and 0 < q["pos_steps"] < 400
+    x_before = tw.act("query", what="world")["x_um_true"]
+    assert tw.act("world_shift", um=-125.0)["ok"]                  # 100 steps lost mid-move
+    assert tw.act("query", what="world")["x_um_true"] == pytest.approx(x_before - 125.0)
+    tw.advance_ms(40)
+    q = tw.act("query", what="pulses")
+    assert not q["running"] and q["pos_steps"] == 400 and q["count"] == 400
+    assert tw.act("query", what="world")["x_um_true"] == pytest.approx(500.0 - 125.0)

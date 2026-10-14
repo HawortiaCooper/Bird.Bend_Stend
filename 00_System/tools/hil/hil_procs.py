@@ -443,6 +443,12 @@ def check_identity(ctx: Ctx, inf: dict | None = None) -> dict:
         if kind == "unknown":
             raise BenchRefused(f"image identity: build {inf.get('build')!r} with features {inf.get('features')} is "
                                "inconsistent (suffix vs FEAT_HW_MEAS) - session stopped (O-1)")
+        approved = ctx.cfg.get("approved_builds") or {}
+        if approved:                                   # D-57 b: exactly the image of the approved kit
+            if str(inf.get("build")) != approved.get(kind):
+                raise BenchRefused(f"image identity: build {inf.get('build')!r} is not the approved {kind} image "
+                                   f"({approved.get(kind)!r}, approval file) - session stopped")
+            ctx.check(hb.check_eq(f"build = approved {kind} image", str(inf.get("build")), approved.get(kind)))
         ctx.image = kind
     ctx.session["images"][ctx.image] = image_id(inf)
     ctx.check(hb.info("image identity", f"{ctx.image}: {image_id(inf)}"))
@@ -486,6 +492,25 @@ def verify_image(ctx: Ctx, image: str) -> None:
 
 
 # ============================================================================================ phase 1 items
+def usb_off_block(ctx: Ctx, what: str, fn: Callable[[], None]) -> None:
+    """Resistance measurements on the board need the Nucleo UNPOWERED: the session closes its port, the operator
+    unplugs the Nucleo USB, measures, plugs it back; the session re-opens the same COM port and re-identifies the
+    board (identity check as S-ID) before it sends anything else (C-R3). Twin: the measurements only."""
+    if ctx.twin:
+        fn()
+        return
+    ctx.identified = False
+    ctx.L.tr.close_port()
+    ctx.op.instruct("USB-OFF", "Unplug the USB cable at the Nucleo (the board is now unpowered; the 48 V PSU stays "
+                    f"OFF). {what}")
+    fn()
+    ctx.op.instruct("USB-ON", "Plug the USB cable back into the Nucleo; wait until the green LED LD2 blinks (≈ 2 s)")
+    ctx.L.tr.reopen()
+    ctx.L.wait(400, keepalive=False)
+    ctx.L.cmd("PING")
+    check_identity(ctx)
+
+
 def hg01(ctx: Ctx) -> None:
     op = ctx.op
     a = op.ask_yes_no("C-01", "Board = Stefan's NUCLEO-F446RE (D-22); solder bridges SB13/14 ON, SB62/63 OFF, SB16/50 ON, "
@@ -493,12 +518,15 @@ def hg01(ctx: Ctx) -> None:
     ctx.judged(hb.check_true("C-01 solder bridges", a.value, "as pinout.md §5"), a)
     ph = op.ask_text("PHOTO", "Photo file name(s) of the board and the MH header", nominal="(dry run)")
     ctx.data("photos", ph.value)
-    for j, pin in (("J-PUL-A", "PC7"), ("J-PUL-B", "PB7"), ("J-DIR", "PC9"), ("J-ENA", "PC8"), ("J-EVT", "PC6"),
-                   ("J-AUX", "PA11")):
-        r = op.ask_number(j, f"DMM resistance from the {j} tap to MCU pin {pin} (MCU unpowered)", "ohm", nominal=1000.0)
-        ctx.judged(hb.check_range(f"{j} series R", [r.value or 0], 950, 1100, 5, "ohm", "1 kΩ ± 5 % + wire"), r)
-    r = op.ask_number("J-STIM", "DMM resistance PB8 -> J-STIM plug (REQ-A-M2-07: 220 Ω)", "ohm", nominal=220.0)
-    ctx.judged(hb.check_range("J-STIM series R", [r.value or 0], 209, 240, 2, "ohm", "220 Ω ± 5 %"), r)
+    def measure() -> None:
+        for j, pin in (("J-PUL-A", "PC7"), ("J-PUL-B", "PB7"), ("J-DIR", "PC9"), ("J-ENA", "PC8"), ("J-EVT", "PC6"),
+                       ("J-AUX", "PA11")):
+            r = op.ask_number(j, f"DMM resistance from the {j} tap to MCU pin {pin} (MCU unpowered)", "ohm",
+                              nominal=1000.0)
+            ctx.judged(hb.check_range(f"{j} series R", [r.value or 0], 950, 1100, 5, "ohm", "1 kΩ ± 5 % + wire"), r)
+        r = op.ask_number("J-STIM", "DMM resistance PB8 -> J-STIM plug (REQ-A-M2-07: 220 Ω)", "ohm", nominal=220.0)
+        ctx.judged(hb.check_range("J-STIM series R", [r.value or 0], 209, 240, 2, "ohm", "220 Ω ± 5 %"), r)
+    usb_off_block(ctx, "Measure the seven jumper resistances (picture B1).", measure)
 
 
 def hg19(ctx: Ctx) -> None:
@@ -521,10 +549,16 @@ def hg20(ctx: Ctx) -> None:
                  ("LABEL", "panel label / red mushroom on yellow, PAUSE separate")):
         a = op.ask_yes_no(k, f"Inspection: {q}?", nominal=True)
         ctx.judged(hb.check_true(f"circuit {k}", a.value, q), a)
+    def iso() -> None:
+        r = op.ask_number("M-5iso", "DMM: resistance 48 V GND <-> logic GND, 48 V bus OFF", "Mohm", nominal=50.0)
+        ctx.judged(hb.check_ge("isolation", [r.value or 0], 10.0, 0.0, "MΩ"), r)
+    usb_off_block(ctx, "Measure the isolation 48 V GND ↔ logic GND (picture B2, M-5).", iso)
+    op.instruct("M5-PSU-ON", "Switch the 48 V driver PSU ON for the +5V_CUT reading (driver NOT enabled, the motor only "
+                "holds); hand near the red E-stop", twin=lambda tw: tw.act("drv_power", on=True))
     v = op.ask_number("M-5", "DMM M-5: +5V_CUT at the DC-DC output, 48 V bus ON", "V", nominal=5.0)
     ctx.judged(hb.check_range("M-5 +5V_CUT", [v.value or 0], 4.75, 5.25, ctx.cfg["dmm_u_v"], "V"), v)
-    r = op.ask_number("M-5iso", "DMM: resistance 48 V GND <-> logic GND, 48 V bus OFF", "Mohm", nominal=50.0)
-    ctx.judged(hb.check_ge("isolation", [r.value or 0], 10.0, 0.0, "MΩ"), r)
+    op.instruct("M5-PSU-OFF", "Switch the 48 V driver PSU OFF again (phase 1 continues with the driver unpowered)",
+                twin=lambda tw: tw.act("drv_power", on=False))
 
 
 def hg31(ctx: Ctx) -> None:
@@ -606,12 +640,21 @@ def hg29(ctx: Ctx) -> None:
     else:
         for src in ("LIMIT_START", "LIMIT_END", "PAUSE"):
             rc_delay(ctx, src)
-    # (f) TC-SYS-009-02 report present
-    rep = REPO / "02_FW" / "docs" / "FW_test_report_M2.md"
-    txt = rep.read_text(encoding="utf-8") if rep.exists() else ""
-    ok = "TC-SYS-009-02" in txt and "PASS" in txt[txt.find("TC-SYS-009-02"):txt.find("TC-SYS-009-02") + 400]
-    ctx.check(hb.check_true("f TC-SYS-009-02 report", ok, "FW_test_report_M2 lists TC-SYS-009-02 PASS",
-                            str(rep.relative_to(REPO))))
+    # (f) TC-SYS-009-02 report present (D-57: in the gate runner from the approval file, recorded by the Orchestrator
+    # from the repository; the source run reads FW_test_report_M2 directly)
+    ev = (ctx.cfg.get("evidence") or {}).get("tc_sys_009_02")
+    if ev is not None:
+        ok = str(ev).upper().startswith("PASS")
+        ctx.check(hb.check_true("f TC-SYS-009-02 report", ok, "approval file evidence: TC-SYS-009-02 PASS", str(ev)))
+    elif REPO is None or not (REPO / "02_FW" / "docs").is_dir():
+        ctx.check(hb.not_measured("f TC-SYS-009-02 report", "TC-SYS-009-02 PASS",
+                                  "no repository and no approval evidence - checked offline"))
+    else:
+        rep = REPO / "02_FW" / "docs" / "FW_test_report_M2.md"
+        txt = rep.read_text(encoding="utf-8") if rep.exists() else ""
+        ok = "TC-SYS-009-02" in txt and "PASS" in txt[txt.find("TC-SYS-009-02"):txt.find("TC-SYS-009-02") + 400]
+        ctx.check(hb.check_true("f TC-SYS-009-02 report", ok, "FW_test_report_M2 lists TC-SYS-009-02 PASS",
+                                str(rep.relative_to(REPO))))
 
 
 def _hg29d(ctx: Ctx) -> None:
@@ -864,7 +907,15 @@ def hg06(ctx: Ctx, label: str = "") -> None:
         raise BenchRefused("HG-06: ENA not at the disabled level after DISABLE - no STATIC_LEVEL on PUL (FWR-09)")
     buf = ctx.cfg["buffer_fitted"] or label == "buffer"
     lo, hi = (10.0, 13.0) if buf else (6.0, 1e9)
+    # the opto LED side is fed by the MCU (no driver power needed); the shunt changes are wiring changes -> 48 V OFF
+    op.instruct("PSU-OFF", "Switch the 48 V driver PSU OFF for the HG-06 shunt measurements (the Nucleo stays "
+                "connected); hand stays near the red E-stop", twin=lambda tw: "PSU (twin: kept on, not needed)")
     for pin in ("PUL", "DIR", "ENA"):
+        # D-57 a / picture B4: one shunt at a time, fitted and removed at the runner's prompt with the 48 V PSU OFF
+        # (phase 1; the opto LED side is fed by the MCU; an ENA− shunt would also weaken the D-42 cut under power)
+        op.instruct(f"{pin}-SHUNT", f"(48 V PSU is OFF.) At the driver terminal lift {pin}− "
+                    f"from logic GND and fit the 100 Ω 1 % shunt between {pin}− and logic GND (picture B4). Photo.",
+                    twin=lambda tw: "shunt (twin: not modelled)")
         if pin != "ENA":
             r = M.static_level(pin, 1)
             ctx.check(hb.check_eq(f"{pin} STATIC_LEVEL accepted", r["status"], "OK"))
@@ -886,6 +937,10 @@ def hg06(ctx: Ctx, label: str = "") -> None:
         else:
             ctx.judged(hb.check_range(f"{pin} I_LED (buffer)", [i_ma], lo, hi, ctx.cfg["dmm_u_ma"], "mA"), i)
         L.cmd("GET_STATUS")                                           # any command releases STATIC_LEVEL
+        op.instruct(f"{pin}-RESTORE", f"48 V PSU still OFF: remove the shunt and connect {pin}− to logic GND again "
+                    "(picture B4). Photo.", twin=lambda tw: "restored (twin: not modelled)")
+    op.instruct("PSU-ON", "All three shunts removed and the terminals back on logic GND: switch the 48 V driver PSU ON; "
+                "wait 2 s", twin=lambda tw: "PSU (twin: on)")
 
 
 def hg10cd(ctx: Ctx) -> None:
@@ -1604,10 +1659,21 @@ def hg17(ctx: Ctx) -> None:
                     twin=lambda tw, n=inp: tw.act("wire", input=n, broken=False))
         L.wait(300)
         clear_latches(ctx)
+    # D-42 NO wire break (picture B6): wire changes only with the 48 V OFF; the break is not detectable (R-10)
+    op.instruct("NO-LIFT", "48 V PSU OFF; lift the D-42 NO wire at its E-stop terminal (14, ASSUMED - see B6) and "
+                "insulate the free end", twin=lambda tw: tw.act("drv_power", on=False))
+    op.instruct("NO-PSU-ON", "48 V PSU ON; the observer holds the Nucleo RESET (B2) and presses the red E-stop",
+                twin=lambda tw: tw.act("drv_power", on=True))
     a = op.ask_yes_no("NO-BREAK", "D-42 NO wire disconnected, MCU held in reset, E-stop pressed: is the shaft still "
                       "HOLDING (= the break is NOT detected; residual R-10)?", nominal=True)
     ctx.judged(hb.check_true("D-42 NO wire break recorded as undetectable", a.value, "R-10, mitigated by HG-10 c periodic"), a)
-    op.instruct("NO-FIX", "Reconnect the D-42 NO wire; release the MCU reset and the E-stop; repeat HG-10 c1 once")
+    op.instruct("NO-FIX", "Hands off the shaft; release the E-stop and the RESET; 48 V PSU OFF; refit the D-42 NO wire "
+                "at its terminal; 48 V PSU ON", twin=lambda tw: tw.act("drv_power", on=True))
+    b = op.ask_yes_no("NO-C1", "Wire refitted - repeat HG-10 c1: observer holds RESET and presses the E-stop; is the shaft "
+                      "FREE again?", nominal=True)
+    ctx.judged(hb.check_true("D-42 NO wire restored (HG-10 c1 repeated: free)", b.value, "shaft free with the MCU in reset"),
+               b)
+    op.instruct("NO-DONE", "Hands off the shaft; release the E-stop, then the RESET (the board restarts)")
 
 
 # ---------------------------------------------------------------------------------------- HG-04
@@ -2314,11 +2380,15 @@ def hg15(ctx: Ctx) -> None:
             want = "PIN"
         elif method == "POWER":
             if not ctx.twin:
+                ctx.identified = False                    # C-GR-5: the device is unverified until re-identified
                 ctx.L.tr.close_port()
-            op.instruct("PWR", "Power-cycle the Nucleo only (USB / 5 V off 3 s, on); the 48 V PSU stays ON",
+            op.instruct("PWR", "Power-cycle the Nucleo only (USB / 5 V off ≥ 5 s, on); the 48 V PSU stays ON",
                         twin=lambda tw: tw.act("reset", cause="power"))
             if not ctx.twin:
                 ctx.L.tr.reopen()
+                ctx.L.wait(400, keepalive=False)
+                ctx.L.cmd("PING")
+                check_identity(ctx)                       # wrong / no board -> BenchRefused -> the session stops
             want = "POWER_ON"
         else:
             enable(ctx)
@@ -2459,10 +2529,19 @@ def hg26(ctx: Ctx) -> None:
 
 
 def hg23(ctx: Ctx) -> None:
+    """HG-23 buffer board. D-56 b / SRS v0.6.8 SYS-011: the PO does not fit the buffer; the direct 3.3 V drive is
+    qualified by HG-06 (I_LED >= 6 mA, VOH >= 3.0 V) and the pulse-integrity re-home of HG-25 (no HOME_DRIFT, drift
+    within home.drift_tol_um). The buffer - and this item - applies only if that qualification failed."""
     op = ctx.op
-    a = op.ask_yes_no("INSP", "SN74ACT244 buffer board installed (SYS-011): 5 V supply, pull-downs, outputs to PUL+/DIR+ "
-                      "and via D1 to ENA+ (wiring §2 stage 2)?", nominal=True)
-    ctx.judged(hb.check_true("buffer board installed", a.value, "before the first calibration (D-28)"), a)
+    a = op.ask_yes_no("INSP", "Is the SN74ACT244 buffer board installed (fitted only if the D-56 b direct-drive "
+                      "qualification failed): 5 V supply, pull-downs, outputs to PUL+/DIR+ and via D1 to ENA+ "
+                      "(wiring §2 stage 2)?", nominal=ctx.cfg["buffer_fitted"])
+    if not a.value:
+        ctx.check(hb.na("buffer board (SYS-011)", "installed only if the qualification fails",
+                        "D-56 b: direct 3.3 V drive qualified by HG-06 (I_LED >= 6 mA) and the HG-25 pulse-integrity "
+                        "re-home"))
+        return
+    ctx.judged(hb.check_true("buffer board installed", a.value, "fitted after a failed direct-drive qualification"), a)
     op.instruct("TAPS", "Move the MH taps J-PUL-A / J-PUL-B / J-DIR / J-ENA to the buffer outputs")
     hg06(ctx, "buffer")
     hg07(ctx, "buffer")

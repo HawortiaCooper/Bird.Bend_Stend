@@ -40,14 +40,15 @@
 extern "C" {
 #endif
 
+/* FW version (GET_INFO, NVM header): defaults for host builds = platformio.ini [env] build_flags (0.8.6) */
 #ifndef FW_VERSION_MAJOR
 #define FW_VERSION_MAJOR 0
 #endif
 #ifndef FW_VERSION_MINOR
-#define FW_VERSION_MINOR 1
+#define FW_VERSION_MINOR 8
 #endif
 #ifndef FW_VERSION_PATCH
-#define FW_VERSION_PATCH 0
+#define FW_VERSION_PATCH 6
 #endif
 /* feature bits of this build (ICD §7.1); the twin build adds FEAT_TWIN via FW_FEATURE_EXTRA; a target
  * image with the synthetic AFE source (env nucleo_f446re_synth, bring-up without an HX711) sets

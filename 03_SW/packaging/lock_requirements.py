@@ -7,6 +7,7 @@ input (direct pins)         lock                         use
 ``requirements.txt``        ``requirements.lock.txt``    runtime venv (lab PC from source)
 ``requirements-dev.txt``    ``requirements-dev.lock.txt``  development / test venv
 ``requirements-build.txt``  ``requirements-build.lock.txt``  distribution build (``build_dist.ps1``)
+``requirements-gaterunner.txt`` ``…-gaterunner.lock.txt``  gate runner build (``gate_runner/build_gate_runner.ps1``)
 ==========================  ===========================  ==============================================
 
 The resolution is pip's own (``pip install --dry-run --ignore-installed --report``) for the **supported platform**
@@ -35,7 +36,8 @@ from pathlib import Path
 PACKAGING = Path(__file__).resolve().parent
 SW_ROOT = PACKAGING.parent
 PAIRS = (("requirements.txt", "requirements.lock.txt"), ("requirements-dev.txt", "requirements-dev.lock.txt"),
-         ("requirements-build.txt", "requirements-build.lock.txt"))
+         ("requirements-build.txt", "requirements-build.lock.txt"),
+         ("requirements-gaterunner.txt", "requirements-gaterunner.lock.txt"))
 _ENTRY = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s\\;]+)")
 _HASH = re.compile(r"--hash=sha256:([0-9a-f]{64})")
 
@@ -145,7 +147,7 @@ def check(sw_root: Path = SW_ROOT) -> list[str]:
             elif by[name].version != ver:
                 problems.append(f"{dst}: {name} locked {by[name].version}, pinned {ver} in {src}")
     if "requirements.txt" in locks:
-        for src in ("requirements-dev.txt", "requirements-build.txt"):
+        for src in ("requirements-dev.txt", "requirements-build.txt", "requirements-gaterunner.txt"):
             for name, e in locks["requirements.txt"].items():
                 other = locks.get(src, {}).get(name)
                 if src in locks and (other is None or other.version != e.version):

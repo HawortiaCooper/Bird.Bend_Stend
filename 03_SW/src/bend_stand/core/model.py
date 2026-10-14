@@ -936,6 +936,7 @@ class MoveOutcome:
     kind: Literal["DONE", "REFUSED_PAUSED", "REFUSED", "CANCELLED", "NOT_EXECUTED"]
     done: MoveDone | None = None
     text: str = ""
+    nack: str | None = None       # FW status name of a REFUSED / REFUSED_PAUSED outcome (e.g. "E_RANGE", D-56 b)
 
 
 # --------------------------------------------------------------------------------------------- limits / engines

@@ -32,9 +32,24 @@ CLION_GCC = Path(r"C:\Program Files\JetBrains\CLion 2025.3.2\bin\mingw\bin\gcc.e
 HAL_HEADERS = ["hal_uart.h", "hal_time.h", "hal_step.h", "hal_inputs.h", "hal_outputs.h", "hal_hx711.h",
                "hal_flash.h", "hal_sys.h"]
 ENGINE = [HERE / "engine" / "twin_engine.c", HERE / "engine" / "twin_seams.c", HERE / "engine" / "twin_meas.c"]
-DEFINES = ["-DFW_TWIN=1", "-DFW_VERSION_MAJOR=0", "-DFW_VERSION_MINOR=1", "-DFW_VERSION_PATCH=0",
+PIO_INI = FW / "platformio.ini"
+DEFINES = ["-DFW_TWIN=1",
            "-DPARAMS_GEN_WITH_KEYS=0",
            "-DFW_FEATURE_EXTRA=FEAT_TWIN"]          # INFO feature bit TWIN (02_FW/src/core/fw.h, no #ifdef in core)
+
+
+def fw_version_defines(ini: Path = PIO_INI) -> list[str]:
+    """-DFW_VERSION_MAJOR/MINOR/PATCH from the single source, 02_FW/platformio.ini [env] build_flags (as the target
+    build); the twin never hard-codes the FW version (OBS: GET_INFO fw_version = A's FW_design version)."""
+    import configparser
+    import re as _re
+    cp = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=(";",))
+    cp.read(ini, encoding="utf-8")
+    flags = cp.get("env", "build_flags", fallback="")
+    got = dict(_re.findall(r"-D(FW_VERSION_(?:MAJOR|MINOR|PATCH))=(\d+)", flags))
+    if set(got) != {"FW_VERSION_MAJOR", "FW_VERSION_MINOR", "FW_VERSION_PATCH"}:
+        raise SystemExit(f"{ini}: [env] build_flags lack FW_VERSION_MAJOR/MINOR/PATCH ({flags!r})")
+    return [f"-D{k}={got[k]}" for k in ("FW_VERSION_MAJOR", "FW_VERSION_MINOR", "FW_VERSION_PATCH")]
 
 
 def find_gcc() -> str:
@@ -76,7 +91,7 @@ def exe_path(core: str, build_dir: Path) -> Path:
 def _inputs(core: str) -> list[Path]:
     hdrs = [p for d in (FW / "src", FW / "include", HERE / "engine", HERE / "contract", HERE / "probe")
             if d.exists() for p in d.rglob("*.h")]
-    return sorted(set(sources(core) + hdrs + [Path(__file__)]))
+    return sorted(set(sources(core) + hdrs + [Path(__file__)] + ([PIO_INI] if PIO_INI.exists() else [])))
 
 
 def _fingerprint(core: str) -> str:
@@ -196,7 +211,7 @@ def build(core: str = "auto", build_dir: Path = HERE / "build", quiet: bool = Fa
     # OBS-M2-09: gcc writes a temporary file of this process that is then moved over the exe in one step
     # (os.replace), so a reader (Twin's private copy, another role's ensure_built) never sees a half-written binary
     tmp_exe = exe.with_name(f"{exe.stem}.{os.getpid()}.tmp{exe.suffix}")
-    cmd = [gcc, "-std=c11", "-O2", "-g", "-Wall", "-Wextra", "-Wno-unused-parameter", *DEFINES,
+    cmd = [gcc, "-std=c11", "-O2", "-g", "-Wall", "-Wextra", "-Wno-unused-parameter", *DEFINES, *fw_version_defines(),
            *[f"-I{p}" for p in inc if p.exists()], *[str(s) for s in sources(core)], "-o", str(tmp_exe), "-lm",
            "-lws2_32"]
     env = dict(os.environ)

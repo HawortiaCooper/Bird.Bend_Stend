@@ -73,10 +73,14 @@ def _err_text(exc: BaseException) -> str:
     return str(getattr(exc, "user_text", "") or exc or type(exc).__name__)
 
 
+RECORDINGS_ENV = "BEND_STAND_RECORDINGS_DIR"      # same override as core.paths (B-SAFE-02)
+
+
 def default_recordings_root() -> Path:
-    """Mirror of ``core.paths.default_recordings_root`` (the GUI may not import ``core.paths``, layering rule G-01);
-    ``tests/gui/test_oi_um_05.py`` asserts both stay equal."""
-    return Path.home() / "Documents" / "BirdBendStand" / "recordings"
+    """Mirror of ``core.paths.default_recordings_root`` incl. its env override ``BEND_STAND_RECORDINGS_DIR`` (the GUI
+    may not import ``core.paths``, layering rule G-01); ``tests/gui/test_oi_um_05.py`` asserts both stay equal."""
+    env = os.environ.get(RECORDINGS_ENV, "").strip()
+    return Path(env) if env else Path.home() / "Documents" / "BirdBendStand" / "recordings"
 
 
 def recordings_root_of(backend: Any) -> str:

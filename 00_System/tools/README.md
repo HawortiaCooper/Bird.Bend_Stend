@@ -262,7 +262,7 @@ $env:BEND_TWIN_CORE="probe"; .venv\Scripts\python -m pytest 03_SW\tests\integrat
 ```
 
 - **Build** (`build.py`): host gcc = CLion MinGW 13.1 (CLAUDE.md; else `gcc` on PATH or `$env:TWIN_GCC`), `-std=c11
-  -O2 -DFW_TWIN=1 -DFW_VERSION_*` (as `platformio.ini`) `-DPARAMS_GEN_WITH_KEYS=0 -DFW_FEATURE_EXTRA=FEAT_TWIN`
+  -O2 -DFW_TWIN=1 -DFW_VERSION_*` (read from `02_FW/platformio.ini` [env] build_flags, the single source; the ini is a build input) `-DPARAMS_GEN_WITH_KEYS=0 -DFW_FEATURE_EXTRA=FEAT_TWIN`
   (A's `core/fw.h` adds it to the INFO feature mask; no `#ifdef` in the core, TC-SYS-008-01). Sources compiled **in place,
   unmodified**: `02_FW/src/pure/*.c`, `src/core/*.c`, `src/gen/*.c` + `fw_twin/engine/*.c`; includes `02_FW/include`,
   `src`, `src/{pure,gen,core}` and `src/hal` (A's seam headers; `fw_twin/contract/` while they are absent).
@@ -438,7 +438,7 @@ T = twin, S = simulator, both = both (differential tests use only "both" actions
 | `weight` | `kg?: float`, `n?: float` (instead of kg), `g_mps2?: float` (default 9.80665) | v0.7.2 (M3 load calibration): known masses hung on the cell, force = kg·g (+ = tension, the sign of a pushed spring), adds to the specimen; 0 = removed |  | T (S variant implemented, SWC-M3-02) |
 | `load_offset` | `counts: int` | cell zero offset (default scenario 50 000 counts ≤ 1 % FS, SWD-P1-15) | ✓ | both |
 | `afe` | `rate_error?: float`, `noise_counts?: float`, `stall?: bool`, `saturate?: "pos"\|"neg"\|null`, `drop_every?: int`, `miss_next?: int` (single missed DOUT edges), `sck_overrun?: bool` (power-down symptom on the next read), `raw_script?: [int]` (next samples verbatim); v0.7.2: `drift_counts_per_s?`, `creep_pct?`, `creep_tau_s?`, `nonlin_pct_fs?`, `fs_n?` (cell model, see the AFE model above) | HX711 model | stall / rate / rails ✓ | both (`sck_overrun`: T; v0.7.2 cell terms in the simulator too) |
-| `world_shift` | `um: int` | lost steps: shift `x_um_true` against the step counter (open-loop model; HOME_DRIFT tests) |  | both |
+| `world_shift` | `um: int` | lost steps: shift `x_um_true` against the step counter (open-loop model; HOME_DRIFT tests); acts at once in every state, also while the step output runs (lost pulses mid-move: the move continues from the shifted world x, the FW count is unaffected; OI-F-BRU-02, twin self-test `test_world_shift_while_moving_lost_steps`) |  | both |
 | `inject` | `fault: "step_fault"\|"tx_congestion"\|"rx_corrupt"\|"link_silence"\|"hang"\|"isr_storm"\|"loop_load"\|"step_stall"\|"drop_next"\|"duplicate_next"\|"delay_next"\|"corrupt_next"`, `duration_ms?`, `where?: "main"\|"tick"\|"isr1"` (hang / storm), `cmd?: <CMD name>`, `what?: "request"\|"response"`, `n?: int`, `ms?: int` | fault injection (per-command link faults = B's LinkModel hooks); v0.7.5 **`step_stall`** (`duration_ms`, 0 / absent = until the move ends): move stall without a FW stop cause, see "Move stall" below | step_fault, tx_congestion, link_silence, hang ✓ | both (`isr_storm`, `loop_load`, `where`: T) |
 | `rx_bytes` | `hex: str`, `at_us?: int` | inject raw bytes into the FW RX at a virtual time (lock-step: exact) | ✓ | both |
 | `on_frame` / `on_event` | `cmd` / `code`, `nth?: int`, `delay_us: int`, `then: {action…}` | run an action `delay_us` after the board received the nth matching request / sent the nth matching EVENT | ✓ | both |

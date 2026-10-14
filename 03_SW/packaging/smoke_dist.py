@@ -21,6 +21,13 @@ S7     layout: no test / build-tool packages in ``_internal`` (pytest, PyInstall
 S9     windowed exe started without console handles (``DETACHED_PROCESS``): stdio in ``logs/BirdBendStand.log``,
        logging records in ``logs/bend_stand.log`` only — the GUI exit line exactly once (SWR-14, OI-F-RV-04);
        S2 / S3 also require ``bend_stand.log`` with the start line and the incident lines (link, FW BOOT)
+S10    bring-up (SW-BRU-002/003): ``BirdBendStand-cli.exe --headless --sim --bringup-mark <first step>`` opens a
+       session and marks the step PASS, ``bringup-export --out <tmp>`` (same data folder) writes one zip,
+       ``bringup-export --verify <zip>`` → rc 0 "package OK"; a copy with one flipped byte → rc ≠ 0; the package
+       HTML shows "marked from the command line (test)"; ``--bringup-mark`` with ``--port COM250`` → rc 2, refused
+       before anything is opened.
+       S7 also checks ``bend_stand/resources/*.json`` (byte-identical to the source tree) and validates the bundled
+       step file with ``core.bringup.load_definitions``
 S8     offline report: ``BirdBendStand-cli.exe --headless --sim --record --recordings <tmp>`` writes a recording,
        ``BirdBendStand-cli.exe report <recording> --out <tmp>`` → rc 0, ``report.json`` (bird.bend.report, rows > 0)
        + ``report.html``; a missing folder → rc 2
@@ -42,11 +49,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 GUI_EXE = "BirdBendStand.exe"
 CLI_EXE = "BirdBendStand-cli.exe"
+SW_SRC = Path(__file__).resolve().parent.parent / "src"     # source tree: reference copies + validator
+BRINGUP_FILES = ("bringup_steps.json", "bringup_steps.schema.json", "bringup_record.schema.json")
 LOG_REL = Path("logs") / "BirdBendStand.log"          # stdio of the windowed exe (runtime hook)
 APP_LOG_REL = Path("logs") / "bend_stand.log"         # application log (core.logfile, SWR-14)
 DOC_FILES = ("USER_MANUAL.md", "QUICK_REFERENCE.md")
@@ -67,9 +77,9 @@ class Runner:
         self.dist, self.work, self.gui_ms, self.native_gui = dist, work, gui_ms, native_gui
         self.n = 0
 
-    def env(self, gui: bool) -> tuple[dict[str, str], Path]:
+    def env(self, gui: bool, data: Path | None = None) -> tuple[dict[str, str], Path]:
         self.n += 1
-        data = self.work / f"appdata-{self.n}"
+        data = data or self.work / f"appdata-{self.n}"
         e = dict(os.environ)
         e.update(BEND_STAND_DATA_DIR=str(data), BEND_STAND_GUI_SETTINGS=str(data / "gui.ini"),
                  BEND_STAND_HOTKEY="off", BEND_STAND_D06_GUARD="1")
@@ -81,10 +91,11 @@ class Runner:
                 e["QT_QPA_PLATFORM"] = "offscreen"
         return e, data
 
-    def run(self, exe: str, args: list[str], gui: bool = False, timeout: float = 120.0,
+    def run(self, exe: str, args: list[str], gui: bool = False, timeout: float = 120.0, data: Path | None = None,
             ) -> tuple[int, str, float, float | None, Path]:
-        """(rc, stdout+stderr+log file, wall s, s until a 'connected:' line or None, data dir)."""
-        env, data = self.env(gui)
+        """(rc, stdout+stderr+log file, wall s, s until a 'connected:' line or None, data dir). ``data``: reuse a
+        data folder (consecutive runs on one application state), else a fresh one per run."""
+        env, data = self.env(gui, data)
         t0 = time.perf_counter()
         p = subprocess.Popen([str(self.dist / exe), *args], cwd=str(self.work), env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
@@ -238,6 +249,86 @@ def check_report(r: Runner, duration: float) -> Result:
                   {"rows": rows})
 
 
+def bringup_problems(dist: Path) -> list[str]:
+    """Bring-up package data (SW-BRU-001, D-56 a): ``bend_stand/resources/*.json`` in the bundle, byte-identical to
+    the source tree, and the bundled step file passes the application's own validator (schema + semantic check,
+    ``core.bringup.load_definitions``) — otherwise the frozen app reports "bring-up step file not usable"."""
+    res = dist / "_internal" / "bend_stand" / "resources"
+    out = []
+    for name in BRINGUP_FILES:
+        f = res / name
+        if not f.is_file():
+            out.append(f"bend_stand/resources/{name} missing")
+        elif (SW_SRC / "bend_stand" / "resources" / name).is_file() and \
+                f.read_bytes() != (SW_SRC / "bend_stand" / "resources" / name).read_bytes():
+            out.append(f"bend_stand/resources/{name} differs from the source tree")
+    steps = res / "bringup_steps.json"
+    if steps.is_file():
+        if str(SW_SRC) not in sys.path:
+            sys.path.insert(0, str(SW_SRC))
+        try:
+            from bend_stand.core.bringup import load_definitions  # noqa: PLC0415
+            from bend_stand.core.errors import FileFormatError  # noqa: PLC0415
+        except ImportError as exc:                       # the smoke test runs from the repo (03_SW/src present)
+            return [*out, f"step file not validated: validator not importable ({exc})"]
+        try:
+            load_definitions(steps)
+        except FileFormatError as exc:
+            out.append(f"bundled step file invalid: {exc}")
+    return out
+
+
+def first_bringup_step(dist: Path) -> str | None:
+    f = dist / "_internal" / "bend_stand" / "resources" / "bringup_steps.json"
+    try:
+        steps = json.loads(f.read_text(encoding="utf-8"))["steps"]
+        return str(steps[0]["id"]) if steps else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def check_bringup_export(r: Runner, duration: float) -> Result:
+    """S10 (SW-BRU-002/003): a headless simulator run opens a bring-up session and marks the first step PASS
+    (``--bringup-mark``), ``bringup-export`` packs that session from the same data folder, ``--verify`` checks the
+    zip (and refuses a damaged copy)."""
+    name = "S10 bringup-export + --verify"
+    step = first_bringup_step(r.dist)
+    if step is None:
+        return Result(name, False, None, 0.0, "no step in the bundled bringup_steps.json")
+    data = r.work / "appdata-bringup"
+    out_dir = r.work / "bringup-out"
+    rc1, out1, w1, _, _ = r.run(CLI_EXE, ["--headless", "--sim", "--duration", f"{duration:g}", "--bringup-mark", step],
+                                data=data)
+    m = re.search(r"^bring-up session: (\S+)\s+passed (\d+)/(\d+)", out1, re.M)
+    if rc1 != 0 or m is None:
+        return Result(name, False, rc1, w1, _tail(out1, 6))
+    rc2, out2, w2, _, _ = r.run(CLI_EXE, ["bringup-export", "--out", str(out_dir)], data=data)
+    zips = sorted(out_dir.glob("*.zip")) if out_dir.is_dir() else []
+    if rc2 != 0 or len(zips) != 1:
+        return Result(name, False, rc2, w1 + w2, _tail(out2, 6))
+    rc3, out3, w3, _, _ = r.run(CLI_EXE, ["bringup-export", "--verify", str(zips[0])], data=data)
+    bad = r.work / "damaged.zip"
+    raw = bytearray(zips[0].read_bytes())
+    raw[len(raw) // 2] ^= 0xFF                              # flip one byte inside the archive
+    bad.write_bytes(bytes(raw))
+    rc4, out4, w4, _, _ = r.run(CLI_EXE, ["bringup-export", "--verify", str(bad)], data=data)
+    try:                                                    # the CLI mark is visibly a command-line test
+        with zipfile.ZipFile(zips[0]) as zf:
+            html_ok = "marked from the command line (test)" in zf.read("report.html").decode("utf-8", "replace")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        html_ok = False
+    rc5, out5, w5, _, _ = r.run(CLI_EXE, ["--headless", "--port", "COM250", "--duration", "1", "--bringup-mark",
+                                          step])        # never with a board: refused before anything is opened
+    refused = rc5 == 2 and "simulator test option" in out5 and "HardwareAccessForbidden" not in out5
+    ok = rc3 == 0 and "package OK" in out3 and rc4 != 0 and int(m.group(2)) >= 1 and html_ok and refused
+    return Result(name, ok, rc3, w1 + w2 + w3 + w4,
+                  f"session {m.group(1)}: step {step} PASS ({m.group(2)}/{m.group(3)}); "
+                  f"zip {zips[0].name} {zips[0].stat().st_size} B; verify rc {rc3} "
+                  f"({'package OK' if 'package OK' in out3 else 'no OK line'}); damaged copy rc {rc4}; HTML shows the CLI "
+                  f"origin: {html_ok}; --bringup-mark with --port COM250 → rc {rc5} (refused: {refused})",
+                  {"zip": str(zips[0])})
+
+
 def check_layout(dist: Path) -> Result:
     internal = dist / "_internal"
     problems = []
@@ -257,6 +348,7 @@ def check_layout(dist: Path) -> Result:
     elif gui_icon.read_bytes()[:4] != b"\x00\x00\x01\x00":
         problems.append("bend_stand/gui/resources/BirdBendStand.ico is not an ICO file")
     problems += docs_problems(dist)
+    problems += bringup_problems(dist)
     size = sum(p.stat().st_size for p in dist.rglob("*") if p.is_file())
     return Result("S7 layout", not problems, None, 0.0, "; ".join(problems) or "ok",
                   {"size_mib": round(size / 2**20, 1), "files": sum(1 for p in dist.rglob("*") if p.is_file())})
@@ -286,7 +378,8 @@ def main(argv: list[str] | None = None) -> int:
                check_headless(r, GUI_EXE, "S3 exe --headless --sim", args.headless_s),
                check_gui(r, ["--sim"], "S4 GUI --sim (auto-quit)", True),
                check_gui(r, [], "S5 GUI disconnected (auto-quit)", False),
-               check_guard(r), check_report(r, args.headless_s), check_windowed_log_once(r)]
+               check_guard(r), check_report(r, args.headless_s), check_windowed_log_once(r),
+               check_bringup_export(r, args.headless_s)]
     for res in results:
         print(f"[{'PASS' if res.ok else 'FAIL'}] {res.name}: rc={res.rc} {res.seconds:.2f} s  {res.extra}")
         for line in res.detail.splitlines():

@@ -1,0 +1,7 @@
+# BirdBendStand-GateRunner (D-57, GR-1) — build dependencies of the frozen hardware-gate runner (00_System/tools/hil).
+# Owner: Implementer B (packaging). = the application build set + PyYAML (gen_params reads params.yaml).
+# Reproducible install (SWR-27): hash-pinned lock requirements-gaterunner.lock.txt, install with
+#   .venv\Scripts\python -m pip install --require-hashes -r 03_SW\requirements-gaterunner.lock.txt
+# Re-lock after changing a pin: .venv\Scripts\python 03_SW\packaging\lock_requirements.py generate
+-r requirements-build.txt
+PyYAML==6.0.3

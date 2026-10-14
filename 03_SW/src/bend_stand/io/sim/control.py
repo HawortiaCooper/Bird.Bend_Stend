@@ -83,9 +83,10 @@ class SimControl:
         b = self.board
         with b._lock:  # noqa: SLF001
             self._set_with_bounce(lambda v: setattr(b.world, "estop_open", v), bool(open), bounce_ms)
-            if open and drv_power_follows:          # vocabulary v2: supply drops k1_delay_ms later (no contactor
-                                                    # since D-41; only seen with the optional presence sense)
-                _delayed(b, k1_delay_ms, lambda: setattr(b.world, "drv_power", False))
+            if drv_power_follows:                   # vocabulary v2: supply drops k1_delay_ms after the opening and
+                                                    # returns k1_delay_ms after the closing (tools/README, twin; no
+                                                    # contactor since D-41 — release-1 scenarios pass False)
+                _delayed(b, k1_delay_ms, lambda v=not bool(open): setattr(b.world, "drv_power", v))
 
     def _a_drv_power(self, on: bool, bounce_ms: list[float] | None = None) -> None:
         self._set_with_bounce(lambda v: setattr(self.board.world, "drv_power", v), bool(on), bounce_ms)

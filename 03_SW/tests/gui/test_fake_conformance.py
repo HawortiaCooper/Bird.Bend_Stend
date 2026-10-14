@@ -17,6 +17,7 @@ ATTR = {
     api.DataViewAPI: "data", api.ChannelRegistryAPI: "channels", api.MarksAPI: "marks", api.SessionAPI: "session",
     api.EngineAPI: "travel_cal", api.TareEngineAPI: "tare_engine", api.LoadCalEngineAPI: "load_cal",
     api.CalibrationStoreAPI: "calibrations", api.SequencerAPI: "sequencer", api.ReportAPI: "reports",
+    **({api.BringupAPI: "bringup"} if hasattr(api, "BringupAPI") else {}),              # D-56 a (fake_bringup.py)
     api.EventBusAPI: "events",
 }
 OPTIONAL = {api.SimControlAPI, api.TestHooksAPI}       # None in the fake (present only with the real simulator)

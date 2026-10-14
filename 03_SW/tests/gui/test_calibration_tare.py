@@ -20,6 +20,7 @@ from bend_stand.core.api import (
 )
 from bend_stand.gui.widgets.stop_button import StopButton
 from bend_stand.gui.wizards import phase_views as pv
+from bend_stand.core.testing import isolated_settings  # noqa: E402  B-SAFE-01: never the real user folders
 
 
 def calls(fake, name):
@@ -55,7 +56,7 @@ def test_every_engine_phase_has_a_view(fake) -> None:
     engines = {"travel_cal": fake.travel_cal, "load_cal": fake.load_cal, "tare": fake.tare_engine}
     try:
         from bend_stand.core.backend import Backend, BackendSettings  # noqa: PLC0415
-        be = Backend(BackendSettings(hotkey="off"))
+        be = Backend(BackendSettings(**isolated_settings(hotkey="off")))
     except ImportError:                                # backend not importable: fake only
         be = None
     real = {} if be is None else {"travel_cal": be.travel_cal, "load_cal": be.load_cal, "tare": be.tare_engine}

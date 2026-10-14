@@ -12,12 +12,39 @@ Implements: SW-PLT-003 (testability), SAF-SW-003 / NFR-002 test support (wire ti
 """
 from __future__ import annotations
 
+import os
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
     from bend_stand.core.backend import Backend
 
 MS = 1_000_000
+#: environment overrides honoured by ``isolated_settings`` (the pytest conftest sets them per test)
+DATA_ENV = "BEND_STAND_DATA_DIR"
+RECORDINGS_ENV = "BEND_STAND_RECORDINGS_DIR"
+BRINGUP_ENV = "BEND_STAND_BRINGUP_DIR"
+
+
+def isolated_settings(*, real_user_data: bool = False, **kw: Any) -> dict[str, Any]:
+    """``BackendSettings`` keyword arguments for tests, simulator scripts and helpers (data-safety rule after the
+    2026-10-14 incident): unless ``real_user_data=True`` or the folders are passed explicitly, the data folder
+    (sessions, calibration, presets, logs, bring-up sessions), the recordings root and the bring-up package folder
+    are a **fresh temp folder** (or the per-test folders of the pytest conftest env) — never ``%APPDATA%`` /
+    ``Documents``. The application itself (GUI / CLI) does not use this function and keeps the real folders."""
+    if real_user_data:
+        return dict(kw)
+    out = dict(kw)
+    data = out.get("data_dir") or os.environ.get(DATA_ENV, "").strip() or tempfile.mkdtemp(prefix="bbs-test-data-")
+    out["data_dir"] = str(data)
+    # a key passed explicitly (also ``None`` = the application's own lookup, read-only tests) is kept; with the env
+    # override set the default is already safe
+    if "recordings_root" not in out and not os.environ.get(RECORDINGS_ENV, "").strip():
+        out["recordings_root"] = str(Path(data) / "recordings")
+    if "bringup_root" not in out and not os.environ.get(BRINGUP_ENV, "").strip():
+        out["bringup_root"] = str(Path(data) / "bringup_packages")
+    return out
 
 
 class TestHooks:

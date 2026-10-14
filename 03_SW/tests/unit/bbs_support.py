@@ -15,12 +15,15 @@ def vectors(name: str) -> dict:
 
 
 def lockstep_backend(*, connect: bool = True, wire_log: bool = True, seed: int = 7, endpoint: str = "sim",
-                     no_specimen: bool = False, **kw):
+                     no_specimen: bool = False, real_user_data: bool = False, **kw):
     """A started lock-step Backend (test hooks on), optionally connected to the in-process simulator.
     ``no_specimen=True``: enter the no-specimen mode after connecting (M3: motion without a load calibration + tare
-    is refused otherwise, SAF-SW-001 / SW-LIM-004)."""
+    is refused otherwise, SAF-SW-001 / SW-LIM-004). Data safety: data folder, recordings and bring-up packages go
+    to a temp folder (``core.testing.isolated_settings``) unless passed explicitly or ``real_user_data=True``."""
     from bend_stand.core.backend import Backend, BackendSettings  # noqa: PLC0415
+    from bend_stand.core.testing import isolated_settings  # noqa: PLC0415
 
+    kw = isolated_settings(real_user_data=real_user_data, **kw)
     be = Backend(BackendSettings(clock="lockstep", test_hooks=True, wire_log=wire_log, seq_seed=seed, **kw))
     be.start()
     if connect:

@@ -21,6 +21,7 @@ from bend_stand.gui.mode_state import no_specimen
 from bend_stand.gui.wizards import phase_views as pv
 
 from test_calibration_tare import travel  # noqa: F401  (fixture re-used)
+from bend_stand.core.testing import isolated_settings  # noqa: E402  B-SAFE-01: never the real user folders
 
 
 def _scope(fake, scope):
@@ -90,9 +91,9 @@ def test_travel_wizard_without_load_calibration_on_simulator(make_window, tmp_pa
     backend_mod = pytest.importorskip("bend_stand.core.backend")
     from test_sim_calibration import drive
     from test_sim_manual import run_until, step
-    be = backend_mod.Backend(backend_mod.BackendSettings(
+    be = backend_mod.Backend(backend_mod.BackendSettings(**isolated_settings(
         clock="lockstep", test_hooks=True, hotkey="off", sim_nvm_path=str(tmp_path / "nvm.json"),
-        recordings_root=str(tmp_path / "rec")))
+        recordings_root=str(tmp_path / "rec"))))
     be.start()
     try:
         h = be.test_hooks

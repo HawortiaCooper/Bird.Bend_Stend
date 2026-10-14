@@ -132,3 +132,14 @@ def test_report_tab_uses_backend_root_first(window, connected_fake, tmp_path) ->
     connected_fake.reports.root = broken
     tab.refresh_list()
     assert tab.root_edit.text() == str(tmp_path / "s")
+
+
+@pytest.mark.req("SW-ACQ-002")
+def test_default_recordings_root_honours_env_like_core(monkeypatch, tmp_path) -> None:
+    """Verifies: SW-ACQ-002 (B-SAFE-02) — the GUI default and ``core.paths`` both follow BEND_STAND_RECORDINGS_DIR, and
+    both fall back to Documents/BirdBendStand/recordings without it."""
+    from bend_stand.core.paths import default_recordings_root as core_default
+    monkeypatch.setenv("BEND_STAND_RECORDINGS_DIR", str(tmp_path / "recs"))
+    assert rt.default_recordings_root() == core_default() == tmp_path / "recs"
+    monkeypatch.delenv("BEND_STAND_RECORDINGS_DIR")
+    assert rt.default_recordings_root() == core_default() == Path.home() / "Documents" / "BirdBendStand" / "recordings"

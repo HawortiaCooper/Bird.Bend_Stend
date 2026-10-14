@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="297mm" height="210mm" viewBox="0 0 1485 1050" font-family="Arial, Helvetica, sans-serif">
+<title>Bird Bend Stand wiring — sheet 5: Flashing the gate images — STM32CubeProgrammer, .hex, method B2</title>
+<rect x="0" y="0" width="1485" height="1050" fill="#ffffff"/>
+<rect x="15.0" y="15.0" width="1455.0" height="1020.0" fill="none" stroke="#222" stroke-width="1.6"/>
+<text x="30.0" y="52.0" font-size="22" fill="#123a6b" font-weight="bold">B5 — Flashing the gate images — STM32CubeProgrammer, .hex, method B2</text>
+<text x="1455.0" y="52.0" font-size="13" fill="#555" text-anchor="end">Bird Bend Stand — HW-gate bench pictures</text>
+<text x="40.0" y="92.0" font-size="13" fill="#000" font-weight="bold">Image sequence in the gate session (HW_GATE_RUNBOOK v0.4 §4; the runner prompts "flash …")</text>
+<rect x="40.0" y="110.0" width="325.0" height="170.0" fill="#eef3fb" stroke="#1f4e9a" stroke-width="1.6" rx="5"/>
+<text x="50.0" y="134.0" font-size="16" fill="#123a6b" font-weight="bold">1  IMG-MEAS</text>
+<text x="50.0" y="156.0" font-size="11.5" fill="#555">before phase 1</text>
+<text x="50.0" y="182.0" font-size="10.5" fill="#000" font-weight="bold">BBS_FW_0.8.6_HW_MEAS_GATE-ONLY.hex</text>
+<text x="50.0" y="202.0" font-size="10" fill="#000">04_Delivery/GateKit_FW0.8.6/</text>
+<text x="50.0" y="226.0" font-size="13" fill="#000" font-weight="bold">build 261010-2135-MEAS</text>
+<text x="50.0" y="248.0" font-size="11.5" fill="#000">features: … NVM HW_MEAS</text>
+<text x="50.0" y="270.0" font-size="11.5" fill="#000">SHA-256 c39126e95fb6f299…</text>
+<polygon points="392.0,195.0 380.0,188.4 380.0,201.6" fill="#1f4e9a" stroke="none" stroke-width="1"/>
+<polyline points="365.0,195.0 390.0,195.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="400.0" y="110.0" width="325.0" height="170.0" fill="#eef3fb" stroke="#1f4e9a" stroke-width="1.6" rx="5"/>
+<text x="410.0" y="134.0" font-size="16" fill="#123a6b" font-weight="bold">2  IMG-DWT</text>
+<text x="410.0" y="156.0" font-size="11.5" fill="#555">before HG-05 / 18 / 27</text>
+<text x="410.0" y="182.0" font-size="10.5" fill="#000" font-weight="bold">BBS_FW_0.8.6_HW_MEAS_DWT_GATE-ONLY.hex</text>
+<text x="410.0" y="202.0" font-size="10" fill="#000">04_Delivery/GateKit_FW0.8.6/</text>
+<text x="410.0" y="226.0" font-size="13" fill="#000" font-weight="bold">build 261010-2135-DWT</text>
+<text x="410.0" y="248.0" font-size="11.5" fill="#000">features: … NVM HW_MEAS</text>
+<text x="410.0" y="270.0" font-size="11.5" fill="#000">SHA-256 3eccb1fb2837dbae…</text>
+<polygon points="752.0,195.0 740.0,188.4 740.0,201.6" fill="#1f4e9a" stroke="none" stroke-width="1"/>
+<polyline points="725.0,195.0 750.0,195.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="760.0" y="110.0" width="325.0" height="170.0" fill="#eef3fb" stroke="#1f4e9a" stroke-width="1.6" rx="5"/>
+<text x="770.0" y="134.0" font-size="16" fill="#123a6b" font-weight="bold">3  IMG-MEAS2</text>
+<text x="770.0" y="156.0" font-size="11.5" fill="#555">after HG-27</text>
+<text x="770.0" y="182.0" font-size="10.5" fill="#000" font-weight="bold">BBS_FW_0.8.6_HW_MEAS_GATE-ONLY.hex</text>
+<text x="770.0" y="202.0" font-size="10" fill="#000">04_Delivery/GateKit_FW0.8.6/</text>
+<text x="770.0" y="226.0" font-size="13" fill="#000" font-weight="bold">build 261010-2135-MEAS</text>
+<text x="770.0" y="248.0" font-size="11.5" fill="#000">features: … NVM HW_MEAS</text>
+<text x="770.0" y="270.0" font-size="11.5" fill="#000">SHA-256 c39126e95fb6f299…</text>
+<polygon points="1112.0,195.0 1100.0,188.4 1100.0,201.6" fill="#1f4e9a" stroke="none" stroke-width="1"/>
+<polyline points="1085.0,195.0 1110.0,195.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="1120.0" y="110.0" width="325.0" height="170.0" fill="#eef7ee" stroke="#2e7d32" stroke-width="1.6" rx="5"/>
+<text x="1130.0" y="134.0" font-size="16" fill="#123a6b" font-weight="bold">4  IMG-REL</text>
+<text x="1130.0" y="156.0" font-size="11.5" fill="#555">before HG-30 (end)</text>
+<text x="1130.0" y="182.0" font-size="10.5" fill="#000" font-weight="bold">BBS_FW_0.8.6_release.hex</text>
+<text x="1130.0" y="202.0" font-size="10" fill="#000">04_Delivery/BringUp_FW0.8.6/firmware/</text>
+<text x="1130.0" y="226.0" font-size="13" fill="#000" font-weight="bold">build 20261010-2135</text>
+<text x="1130.0" y="248.0" font-size="11.5" fill="#000">features: no HW_MEAS</text>
+<text x="1130.0" y="270.0" font-size="11.5" fill="#000">SHA-256 30989ec53529fd25…</text>
+<text x="40.0" y="308.0" font-size="11.5" fill="#b71c1c">Gate images (HW_MEAS, -DWT) only from the gate kit — never for normal operation; the release image comes from the operator package.</text>
+<rect x="40.0" y="330.0" width="940.0" height="580.0" fill="#fafafa" stroke="#888" stroke-width="1.2" rx="4"/>
+<text x="52.0" y="356.0" font-size="16" fill="#123a6b" font-weight="bold">Each flash (method B2 of FLASHING.md: .hex, no full-chip erase)</text>
+<text x="52.0" y="390.0" font-size="13" fill="#000">0. Once, before the first flash of the session: PC application → Save to file… (*.bbboard.json).</text>
+<text x="52.0" y="407.2" font-size="13" fill="#000">1. The runner closes the COM port and names the file; check its SHA-256 against SHA256SUMS.txt:</text>
+<text x="90.0" y="426.3" font-size="13" font-family="Consolas, Courier New, monospace" font-weight="bold" fill="#0d47a1">Get-FileHash &lt;file&gt;.hex -Algorithm SHA256</text>
+<text x="52.0" y="452.3" font-size="13" fill="#000">2. Flash (the driver PSU may stay on: the MCU reset keeps the driver holding, D-13):</text>
+<text x="90.0" y="471.5" font-size="13" font-family="Consolas, Courier New, monospace" font-weight="bold" fill="#0d47a1">STM32_Programmer_CLI -c port=SWD mode=UR -w &lt;file&gt;.hex -v -rst</text>
+<text x="52.0" y="497.5" font-size="13" fill="#000">   GUI: ST-LINK, SWD, Under reset → Connect → Erasing &amp; Programming → file = the .hex,</text>
+<text x="52.0" y="514.6" font-size="13" fill="#000">   Full chip erase NOT pressed, Skip flash erase unticked, Verify + Run ticked → Start Programming.</text>
+<text x="52.0" y="531.8" font-size="13" fill="#000">3. Expected: "File download complete", "Download verified successfully"; the board restarts.</text>
+<text x="52.0" y="549.0" font-size="13" fill="#000">4. Tell the runner: it re-opens the port and checks GET_INFO — build string as in the box above,</text>
+<text x="52.0" y="566.1" font-size="13" fill="#000">   HW_MEAS in the features for the gate images, none (DIAG_MEAS → NOT_IN_BUILD) for the release.</text>
+<text x="52.0" y="583.3" font-size="13" fill="#000">   A different build / dict hash / UID → the runner stops the session.</text>
+<rect x="52.0" y="720.0" width="916.0" height="130.0" fill="#fff3f3" stroke="#b71c1c" stroke-width="1.6" rx="4"/>
+<text x="64.0" y="746.0" font-size="16" fill="#b71c1c" font-weight="bold">NEVER during the gate</text>
+<text x="64.0" y="774.0" font-size="13" fill="#000">· the .bin, drag-and-drop or -e all / "Full chip erase": they wipe the saved configuration</text>
+<text x="64.0" y="791.2" font-size="13" fill="#000">  (flash sectors 1–2: steps/mm, dir_invert, ALM level …);</text>
+<text x="64.0" y="808.3" font-size="13" fill="#000">· an image from anywhere else than the gate kit / the operator package (check the SHA-256).</text>
+<text x="1005.0" y="350.0" font-size="13" fill="#000" font-weight="bold">Flash map (all three .hex):</text>
+<rect x="1005.0" y="365.0" width="300.0" height="38.0" fill="#90caf9" stroke="#333" stroke-width="1"/>
+<text x="1015.0" y="389.0" font-size="11.5" fill="#000">sector 0: vector table</text>
+<rect x="1005.0" y="409.0" width="300.0" height="38.0" fill="#ffcc80" stroke="#333" stroke-width="1"/>
+<text x="1015.0" y="433.0" font-size="11.5" fill="#000">sectors 1–2: NVM — untouched</text>
+<rect x="1005.0" y="453.0" width="300.0" height="38.0" fill="#90caf9" stroke="#333" stroke-width="1"/>
+<text x="1015.0" y="477.0" font-size="11.5" fill="#000">sectors 3–4: code</text>
+<rect x="1005.0" y="497.0" width="300.0" height="38.0" fill="#eeeeee" stroke="#333" stroke-width="1"/>
+<text x="1015.0" y="521.0" font-size="11.5" fill="#000">sectors 5–7: empty</text>
+<text x="1005.0" y="560.0" font-size="11.5" fill="#555">0x08000000 … 0x080188xx</text>
+<rect x="1005.0" y="925.0" width="465.0" height="110.0" fill="#fff" stroke="#222" stroke-width="1.6"/>
+<line x1="1005" y1="953" x2="1470" y2="953" stroke="#222" stroke-width="1"/>
+<line x1="1305" y1="925" x2="1305" y2="953" stroke="#222" stroke-width="1"/>
+<text x="1013.0" y="944.0" font-size="13" fill="#123a6b" font-weight="bold">HW-gate bench pictures (D-57)</text>
+<text x="1313.0" y="944.0" font-size="13" fill="#000" font-weight="bold">Picture B5 / 9</text>
+<text x="1013.0" y="969.0" font-size="11" fill="#000" font-weight="bold">Flashing the gate images — STM32CubeProgrammer, .hex, method B2</text>
+<text x="1013.0" y="984.0" font-size="10" fill="#000">Version 1.1 · 2026-10-14 · owner Implementer A (01_HW)</text>
+<text x="1013.0" y="998.0" font-size="8.5" fill="#000">Source: wiring.md v0.7.1 §6.1/§11.1 · FW_test_plan §6/§6.8 · HW_GATE_RUNBOOK v0.4 · pinout.md v0.6</text>
+<text x="1013.0" y="1011.0" font-size="9" fill="#555">Generated by 01_HW/diagrams/bench/gen_bench_svg.py — do not edit the SVG/PNG</text>
+<text x="1013.0" y="1024.0" font-size="9.5" fill="#b71c1c" font-weight="bold">NOT A CERTIFIED SAFETY DESIGN — bench aid for the HW gate (D-06-GATE)</text>
+</svg>

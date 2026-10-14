@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bird.bend.bringup_record/1",
+  "title": "Bird Bend Stand bring-up record (bringup.json of the bring-up package, SRS SW-BRU-003)",
+  "type": "object",
+  "required": ["schema", "schema_version", "created_utc", "partial", "session", "summary", "guide", "versions",
+               "steps", "orphan_steps", "files", "notes"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "bird.bend.bringup_record"},
+    "schema_version": {"const": 1},
+    "created_utc": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$"},
+    "partial": {"type": "boolean", "description": "session still open or steps not done"},
+    "session": {
+      "type": "object",
+      "required": ["session_id", "created_utc", "closed_utc", "board", "boards_seen", "definitions", "param_dumps",
+                   "recordings"],
+      "properties": {
+        "session_id": {"type": "string", "minLength": 1},
+        "created_utc": {"type": "string"},
+        "updated_utc": {"type": ["string", "null"]},
+        "closed_utc": {"type": ["string", "null"]},
+        "current": {"type": ["string", "null"]},
+        "sw_version": {"type": ["string", "null"]},
+        "board": {"type": ["object", "null"]},
+        "boards_seen": {"type": "array", "items": {"type": "object"}},
+        "definitions": {"type": "object", "required": ["sha256"]},
+        "param_dumps": {"type": "array", "items": {"type": "object", "required": ["file", "tag", "t_utc"]}},
+        "recordings": {"type": "array", "items": {"type": "object", "required": ["step", "folder"]}}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total", "pass", "fail", "skipped", "not_done", "cli_test"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "pass": {"type": "integer", "minimum": 0},
+        "fail": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0},
+        "not_done": {"type": "integer", "minimum": 0},
+        "cli_test": {"type": "integer", "minimum": 0, "description": "steps marked by the headless simulator smoke test"}
+      }
+    },
+    "guide": {"type": "object", "required": ["title", "version"]},
+    "versions": {"type": "object", "required": ["sw_version", "icd_version", "proto", "param_dict_hash", "python", "os"]},
+    "steps": {"type": "array", "items": {"$ref": "#/$defs/step"}},
+    "orphan_steps": {"type": "object", "description": "records of step ids no longer in the step file"},
+    "files": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "section", "title", "kind", "expected", "state", "manual", "origin", "entries", "remark",
+                   "skip_reason", "auto", "action", "recordings", "history"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "section": {"type": "string"},
+        "title": {"type": "string"},
+        "kind": {"enum": ["info", "confirm", "measure", "auto", "motion", "wizard", "nvm", "pulse_integrity"]},
+        "expected": {"type": "string"},
+        "optional": {"type": "boolean"},
+        "stop_if_fail": {"type": "boolean"},
+        "state": {"enum": ["NOT_DONE", "PASS", "FAIL", "SKIPPED"]},
+        "manual": {"type": "boolean"},
+        "origin": {"type": "string", "pattern": "^(|auto|operator|auto\\+operator|cli-test)$",
+                   "description": "who set the state: auto, operator, auto+operator, cli-test (simulator smoke test), '' = not done"},
+        "entries": {"type": "object"},
+        "remark": {"type": "string"},
+        "skip_reason": {"type": "string"},
+        "auto": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": {"enum": ["NA", "WAITING", "PASS", "FAIL"]},
+            "text": {"type": "string"},
+            "observed": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "state": {"enum": [null, "RUNNING", "PASS", "FAIL", "ABORTED"]},
+            "text": {"type": "string"},
+            "attempts": {"type": "array", "items": {"type": "object"}}
+          }
+        },
+        "recordings": {"type": "array", "items": {"type": "string"}},
+        "history": {"type": "array", "items": {"type": "object", "required": ["t_utc", "what"]}},
+        "updated_utc": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

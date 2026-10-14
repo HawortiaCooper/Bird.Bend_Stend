@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="297mm" height="210mm" viewBox="0 0 1485 1050" font-family="Arial, Helvetica, sans-serif">
+<title>Bird Bend Stand wiring — sheet 3: J-STIM stimulus wiring for the bench trials (FW_test_plan §6.8)</title>
+<rect x="0" y="0" width="1485" height="1050" fill="#ffffff"/>
+<rect x="15.0" y="15.0" width="1455.0" height="1020.0" fill="none" stroke="#222" stroke-width="1.6"/>
+<text x="30.0" y="52.0" font-size="22" fill="#123a6b" font-weight="bold">B3 — J-STIM stimulus wiring for the bench trials (FW_test_plan §6.8)</text>
+<text x="1455.0" y="52.0" font-size="13" fill="#555" text-anchor="end">Bird Bend Stand — HW-gate bench pictures</text>
+<rect x="40.0" y="90.0" width="520.0" height="400.0" fill="#fff" stroke="#333" stroke-width="1.6" rx="4"/>
+<text x="50.0" y="112.0" font-size="16" fill="#123a6b" font-weight="bold">Interface board</text>
+<rect x="70.0" y="150.0" width="200.0" height="110.0" fill="#fbeef5" stroke="#b0006a" stroke-width="1.4" rx="3"/>
+<text x="80.0" y="172.0" font-size="13" fill="#b0006a" font-weight="bold">E-stop sense input</text>
+<text x="80.0" y="196.0" font-size="13" fill="#000">connector (J3)</text>
+<rect x="240.0" y="180.0" width="22.0" height="22.0" fill="#ffd54f" stroke="#333" stroke-width="1"/>
+<text x="232.0" y="196.0" font-size="11.5" fill="#000" text-anchor="end">sense</text>
+<rect x="240.0" y="222.0" width="22.0" height="22.0" fill="#9e9e9e" stroke="#333" stroke-width="1"/>
+<text x="232.0" y="238.0" font-size="11.5" fill="#000" text-anchor="end">GND</text>
+<rect x="80.0" y="270.5" width="247.0" height="16.5" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="85.0" y="283.0" font-size="9.5" fill="#b26a00" font-weight="bold">connector pin positions ASSUMED (wiring §12)</text>
+<text x="80.0" y="320.0" font-size="11.5" fill="#000">PA10 input cell: 1k pull-up, 1k + 4.7 nF</text>
+<text x="80.0" y="340.0" font-size="11.5" fill="#555">(sheet 3, cell C)</text>
+<rect x="330.0" y="380.0" width="210.0" height="90.0" fill="#fff" stroke="#333" stroke-width="1.2" rx="3"/>
+<text x="340.0" y="402.0" font-size="13" fill="#000" font-weight="bold">MH: J-STIM = PB8</text>
+<text x="340.0" y="424.0" font-size="11.5" fill="#000">(D15 · CN5-10 / CN10-3)</text>
+<text x="340.0" y="446.0" font-size="11.5" fill="#b0006a" font-weight="bold">220 Ω at the MCU end</text>
+<polyline points="330.0,425.0 300.0,425.0 300.0,191.0 262.0,191.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="264.0,191.0 271.0,187.2 271.0,194.8" fill="#b0006a" stroke="none" stroke-width="1"/>
+<text x="306.0" y="320.0" font-size="13" fill="#b0006a" font-weight="bold">J-STIM</text>
+<rect x="620.0" y="160.0" width="230.0" height="110.0" fill="#f5f5f5" stroke="#999" stroke-width="1.2" stroke-dasharray="5,3" rx="3"/>
+<text x="630.0" y="182.0" font-size="13" fill="#777" font-weight="bold">panel plug of S0 NC</text>
+<text x="630.0" y="206.0" font-size="13" fill="#b71c1c" font-weight="bold">UNPLUGGED for the trial</text>
+<text x="630.0" y="230.0" font-size="11.5" fill="#777">(MCU channel out of service)</text>
+<polyline points="620.0,215.0 562.0,215.0" fill="none" stroke="#9e9e9e" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2,3"/>
+<circle cx="650.0" cy="340.0" r="28" fill="#e53935" stroke="#7f0000" stroke-width="2"/>
+<circle cx="650.0" cy="340.0" r="36" fill="none" stroke="#fbc02d" stroke-width="5"/>
+<text x="697.0" y="326.0" font-size="13" fill="#b0006a" font-weight="bold">S0 NO block stays WIRED</text>
+<text x="697.0" y="346.0" font-size="11.5" fill="#000">→ the D-42 ENA cut still</text>
+<text x="697.0" y="364.0" font-size="11.5" fill="#000">works: pressing de-energises</text>
+<text x="697.0" y="382.0" font-size="11.5" fill="#000">the motor</text>
+<rect x="620.0" y="400.0" width="250.0" height="50.0" fill="#fff3f3" stroke="#b71c1c" stroke-width="1.6" rx="3"/>
+<text x="632.0" y="421.0" font-size="13" fill="#b71c1c" font-weight="bold">tag on the button: E-STOP</text>
+<text x="632.0" y="441.0" font-size="13" fill="#b71c1c" font-weight="bold">SENSE BYPASSED — TEST</text>
+<rect x="620.0" y="470.0" width="250.0" height="60.0" fill="#fff" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="632.0" y="492.0" font-size="13" fill="#000" font-weight="bold">48 V PSU mains switch</text>
+<text x="632.0" y="512.0" font-size="11.5" fill="#000">within the observer's reach</text>
+<text x="40.0" y="520.0" font-size="11.5" fill="#000">Same wiring for HG-11 (START / END): unplug that limit switch, J-STIM → its connector;</text>
+<text x="40.0" y="540.0" font-size="11.5" fill="#000">the red button stays fully operational on both channels (no P-2 needed).</text>
+<text x="40.0" y="566.0" font-size="11.5" fill="#b71c1c" font-weight="bold">Never stimulate a limit and the E-stop in the same trial.</text>
+<rect x="900.0" y="90.0" width="560.0" height="820.0" fill="#fafafa" stroke="#888" stroke-width="1.2" rx="4"/>
+<text x="910.0" y="114.0" font-size="16" fill="#123a6b" font-weight="bold">Steps (§6.8; the runner prompts each one)</text>
+<text x="912.0" y="146.0" font-size="13" fill="#b0006a" font-weight="bold">P-1</text>
+<text x="962.0" y="146.0" font-size="13" fill="#000">no specimen, nothing in the travel; two persons;</text>
+<text x="962.0" y="163.2" font-size="13" fill="#000">soft limits 5…55 mm (runner); both limit</text>
+<text x="962.0" y="180.3" font-size="13" fill="#000">switches connected; trial speed ≤ 30 mm/s</text>
+<text x="912.0" y="205.5" font-size="13" fill="#b0006a" font-weight="bold">P-2</text>
+<text x="962.0" y="205.5" font-size="13" fill="#000">HG-10 c/d PASSED in this session (D-42 path</text>
+<text x="962.0" y="222.6" font-size="13" fill="#000">checked with the sense still wired) — else</text>
+<text x="962.0" y="239.8" font-size="13" fill="#000">the runner refuses the bypass</text>
+<text x="912.0" y="265.0" font-size="13" fill="#b0006a" font-weight="bold">P-3</text>
+<text x="962.0" y="265.0" font-size="13" fill="#000">PSU OFF; unplug the S0 NC plug; fit J-STIM</text>
+<text x="962.0" y="282.1" font-size="13" fill="#000">(PB8, 220 Ω) to the sense pin; tag on the</text>
+<text x="962.0" y="299.3" font-size="13" fill="#000">button; photo</text>
+<text x="912.0" y="324.4" font-size="13" fill="#b0006a" font-weight="bold">P-4</text>
+<text x="962.0" y="324.4" font-size="13" fill="#000">DMM: resistor 200…240 Ω; PA10 ≤ 0.99 V</text>
+<text x="962.0" y="341.6" font-size="13" fill="#000">with STIM idle (M-7, picture B2)</text>
+<text x="912.0" y="366.8" font-size="13" fill="#b0006a" font-weight="bold">P-5</text>
+<text x="962.0" y="366.8" font-size="13" fill="#000">driver still unpowered: ESTOP_OPEN 0 idle,</text>
+<text x="962.0" y="383.9" font-size="13" fill="#000">1 during a STIM hold (runner checks)</text>
+<text x="912.0" y="409.1" font-size="13" fill="#b0006a" font-weight="bold">P-6</text>
+<text x="962.0" y="409.1" font-size="13" fill="#000">PSU on; trials run; observer's hand at the</text>
+<text x="962.0" y="426.2" font-size="13" fill="#000">red button and the PSU switch</text>
+<text x="912.0" y="451.4" font-size="13" fill="#b0006a" font-weight="bold">P-7</text>
+<text x="962.0" y="451.4" font-size="13" fill="#000">anything unexpected → red button + PSU off;</text>
+<text x="962.0" y="468.6" font-size="13" fill="#000">operator types 'abort' (HALT)</text>
+<text x="912.0" y="493.7" font-size="13" fill="#b0006a" font-weight="bold">P-8</text>
+<text x="962.0" y="493.7" font-size="13" fill="#000">PSU off, remove J-STIM, reconnect the NC plug,</text>
+<text x="962.0" y="510.9" font-size="13" fill="#000">remove the tag, PSU on; press / release</text>
+<text x="962.0" y="528.0" font-size="13" fill="#000">checks must PASS before any further motion</text>
+<rect x="40.0" y="610.0" width="830.0" height="300.0" fill="#fafafa" stroke="#888" stroke-width="1.2" rx="4"/>
+<text x="50.0" y="634.0" font-size="16" fill="#123a6b" font-weight="bold">Variants without the E-stop bypass</text>
+<text x="50.0" y="664.0" font-size="13" fill="#b0006a" font-weight="bold">HG-29 c  self-test</text>
+<text x="50.0" y="686.0" font-size="11.5" fill="#000">J-STIM plugged into NOTHING (free end, insulated);</text>
+<text x="50.0" y="701.2" font-size="11.5" fill="#000">J-EVT ← PB8 (STIM), J-AUX ← PB8 (STIM);</text>
+<text x="50.0" y="716.4" font-size="11.5" fill="#000">the runner pulses STIM 5 × 10 ms and compares the stamps.</text>
+<text x="460.0" y="664.0" font-size="13" fill="#b0006a" font-weight="bold">HG-29 e  RC delay of one input</text>
+<text x="460.0" y="686.0" font-size="11.5" fill="#000">switch of that input unplugged (START, END,</text>
+<text x="460.0" y="701.2" font-size="11.5" fill="#000">PAUSE; E-stop sense only inside §6.8);</text>
+<text x="460.0" y="716.4" font-size="11.5" fill="#000">J-STIM → its input connector (sense pin);</text>
+<text x="460.0" y="731.5" font-size="11.5" fill="#000">J-EVT ← PB8 (STIM), J-AUX ← the MCU pin node</text>
+<text x="460.0" y="746.7" font-size="11.5" fill="#000">of that input; afterwards reconnect the switch.</text>
+<polygon points="120.0,840.0 113.0,832.0 86.4,832.0 86.4,848.0 113.0,848.0" fill="#fff" stroke="#b0006a" stroke-width="1.3"/>
+<text x="100.2" y="843.6" font-size="10" fill="#b0006a" text-anchor="middle" font-weight="bold">PB8</text>
+<polyline points="120.0,840.0 157.0,840.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="183.0,840.0 220.0,840.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="157.0" y="835.0" width="26.0" height="10.0" fill="#fff" stroke="#b0006a" stroke-width="1.4"/>
+<text x="170.0" y="831.0" font-size="11" fill="#000" text-anchor="middle">220 Ω</text>
+<polyline points="220.0,840.0 280.0,840.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="288.0" y="845.0" font-size="11.5" fill="#000">free end (29 c)</text>
+<polygon points="520.0,860.0 513.0,852.0 486.4,852.0 486.4,868.0 513.0,868.0" fill="#fff" stroke="#b0006a" stroke-width="1.3"/>
+<text x="500.2" y="863.6" font-size="10" fill="#b0006a" text-anchor="middle" font-weight="bold">PB8</text>
+<polyline points="520.0,860.0 557.0,860.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="583.0,860.0 620.0,860.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="557.0" y="855.0" width="26.0" height="10.0" fill="#fff" stroke="#b0006a" stroke-width="1.4"/>
+<text x="570.0" y="851.0" font-size="11" fill="#000" text-anchor="middle">220 Ω</text>
+<polyline points="620.0,860.0 680.0,860.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="680.0" y="846.0" width="22.0" height="28.0" fill="#ffd54f" stroke="#333" stroke-width="1"/>
+<text x="710.0" y="858.0" font-size="11.5" fill="#000">sense pin of</text>
+<text x="710.0" y="874.0" font-size="11.5" fill="#000">the input</text>
+<text x="520.0" y="900.0" font-size="11.5" fill="#555">J-AUX tap on the MCU pin node (after the RC)</text>
+<rect x="1005.0" y="925.0" width="465.0" height="110.0" fill="#fff" stroke="#222" stroke-width="1.6"/>
+<line x1="1005" y1="953" x2="1470" y2="953" stroke="#222" stroke-width="1"/>
+<line x1="1305" y1="925" x2="1305" y2="953" stroke="#222" stroke-width="1"/>
+<text x="1013.0" y="944.0" font-size="13" fill="#123a6b" font-weight="bold">HW-gate bench pictures (D-57)</text>
+<text x="1313.0" y="944.0" font-size="13" fill="#000" font-weight="bold">Picture B3 / 9</text>
+<text x="1013.0" y="969.0" font-size="11" fill="#000" font-weight="bold">J-STIM stimulus wiring for the bench trials (FW_test_plan §6.8)</text>
+<text x="1013.0" y="984.0" font-size="10" fill="#000">Version 1.1 · 2026-10-14 · owner Implementer A (01_HW)</text>
+<text x="1013.0" y="998.0" font-size="8.5" fill="#000">Source: wiring.md v0.7.1 §6.1/§11.1 · FW_test_plan §6/§6.8 · HW_GATE_RUNBOOK v0.4 · pinout.md v0.6</text>
+<text x="1013.0" y="1011.0" font-size="9" fill="#555">Generated by 01_HW/diagrams/bench/gen_bench_svg.py — do not edit the SVG/PNG</text>
+<text x="1013.0" y="1024.0" font-size="9.5" fill="#b71c1c" font-weight="bold">NOT A CERTIFIED SAFETY DESIGN — bench aid for the HW gate (D-06-GATE)</text>
+</svg>

@@ -298,8 +298,10 @@ def test_tc_if_002_01_serial_settings_once_and_no_port_opened(monkeypatch):
     tr.close()
     from bend_stand.core.backend import Backend
 
+    import harness as H  # noqa: PLC0415
+
     calls.clear()
-    eps = Backend().endpoints()
+    eps = Backend(H.safe_settings()).endpoints()                      # data-safety rule (2026-10-14)
     assert any(e.endpoint == "sim" for e in eps) and not calls
 
 

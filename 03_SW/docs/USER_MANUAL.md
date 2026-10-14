@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Version | 1.0 (2026-10-08) — PC application SW 0.1.0, FW 0.2.0, baseline SRS v0.6.4 / ICD v0.7.4 |
+| Version | 1.1 (2026-10-14) — PC application SW 0.1.0, FW 0.8.6 (the Connection tab's Device line shows the board's own version), baseline SRS v0.6.7 / ICD v0.7.5 |
 | Audience | Lab operators of the bend (pull / push) test stand |
 | Owner | Implementer D (GUI); safety texts follow `00_System/specs/SRS.md` §2, §3.2, §8.1 and `00_System/specs/DECISIONS.md` |
 | Short form | [`QUICK_REFERENCE.md`](QUICK_REFERENCE.md) — one page: stops and clears, start-up and pre-test checklists |
@@ -33,6 +33,7 @@ Texts in **bold** or in `code` are the exact labels you see in the application.
 14. [Recording and Take sample](#14-recording-and-take-sample)
 15. [Sequences](#15-sequences)
 16. [Reports](#16-reports)
+16a. [Bring-up assistant](#16a-bring-up-assistant)
 17. [Troubleshooting](#17-troubleshooting)
 18. [Files and folders](#18-files-and-folders)
 19. [Appendix A — indicator chips](#19-appendix-a--indicator-chips)
@@ -91,7 +92,10 @@ board watchdog (≤ 100 ms) and by the hardwired ENA cut. The PO accepted this r
 
 - The hardwired ENA cut is **not monitored** (KL-09): a broken wire is not detected. **Periodic check**
   (wiring.md C-25, by a trained person): hold the Nucleo in reset (black RESET button), press the E-stop → the motor
-  shaft must turn freely by hand; release → it holds again only after the board runs and the driver is enabled.
+  shaft must turn freely by hand (the E-stop's own contact has cut ENA, without the MCU). Release the E-stop while
+  still holding RESET → the shaft **holds again at once**: with the MCU in reset the ENA line falls back to "enabled"
+  and the driver holds; no step pulses are possible (D-45 a). Release RESET → the board starts and the driver keeps
+  holding (D-13); the axis is NOT homed.
   Do this at the start of every test campaign (confirmed by the PO, D-54 e) and after any work on the operator
   panel.
 - To remove all energy from the motor, switch off the 48 V driver supply (mains switch of the PSU).
@@ -209,7 +213,7 @@ Menus:
 |---|---|
 | File | **Open session…**, **Save session as…** (`*.bbsession.json`: limits, speeds, display unit; never tare or no-specimen mode), **Exit** (Ctrl+Q) |
 | View | **New plot window** (up to 4), **Save layout now**, **Units** ▸ **N** / **kgf**, **OpenGL rendering**, show / hide **Plot 1**…, **Readouts**, **Event log** |
-| Tools | **Link statistics…**, **Test Pause/Break key…** |
+| Tools | **Link statistics…**, **Test Pause/Break key…**, **Bring-up assistant…** (§16a) |
 | Help | **Status indicators & clear procedures…**, **Keyboard…**, **About…** (SW, FW, protocol and dictionary versions) |
 
 Closing the window while the axis moves, a wizard / sequence runs or a recording is open asks first:
@@ -685,6 +689,52 @@ travel = deflection.
 
 ---
 
+## 16a. Bring-up assistant
+For the first start of a new or rewired stand without a specialist (D-56). **Tools ▸ Bring-up assistant…** opens a
+window next to the plots (it can float, **Float**). It walks you through the steps of the bring-up guide that comes
+with the board package (same step numbers, e.g. "8.4") and collects everything the PO needs into one file.
+
+![Bring-up assistant](img/41_bringup_assistant.png)
+
+- **Start bring-up session…** starts a session. The session is saved all the time: after closing the application or a
+  PC restart, open the assistant again and it continues where you stopped. Starting a new session while one exists
+  asks first; the old one stays on the disk.
+- On the left: the sections with their progress and every step with its state — ○ not done, ✓ PASS, ✗ FAIL,
+  – skipped. Click a step to show it.
+- On the right, for the selected step: **Instruction** (what to do), **Expected** (what you should see), a safety
+  note, and a red line **"If this step fails → STOP the bring-up …"** where the guide says so.
+  - **Automatic check**: when the application can see the result itself (latches, chips, the Device line, parameter
+    values, homing), it shows *waiting …*, *PASS* (green) or *FAIL* (red) by itself.
+  - Your entries: tick the confirmation boxes, type measured values (the unit and the allowed limits are shown next
+    to the field), add a remark, press **Save entries**. A value outside the limits makes the step FAIL.
+  - **Pass ✓** / **Fail ✗** set the state yourself; **Skip…** asks for the reason (it goes into the record).
+  - **◀ Previous** / **Next ▶** move between steps. The assistant **never moves on by itself**.
+- **Action buttons.** Steps that need an action show one button, e.g. **HOME ▶**, **Enter no-specimen mode…**,
+  **Start travel calibration wizard…**, **TARE**, **Save to NVM** or **Show Manual tab**. The button does exactly what
+  the normal button does — with the same refusals (shown next to it, e.g. "Not possible now: driver not enabled") and
+  the same confirmations (for HOME the normal *Home under load* question). Jogging is done on the **Manual** tab
+  (**Show Manual tab**). Buttons that move the axis say so and work with the mouse only.
+- **Pulse-integrity check** (direct-drive qualification, SYS-011): **Run pulse-integrity check ▶** asks first (tick
+  *Nothing in the travel, no specimen, people clear*, then **Run check**). The application then re-homes, drives
+  round trips over the stroke at travel speed and re-homes again by itself, and judges the home drift. The step shows
+  *Check: RUNNING — …* while it runs; **Cancel check** stops it (run it again from the start). A FAIL here means the
+  buffer board is needed (the step text says so).
+- **STOP** is always there: in the assistant's title bar (also when it floats), as a big button in every step and in
+  every assistant dialog. The toolbar STOP, the Pause/Break key, the red E-stop and the stop banners work as always.
+- **Red STOP banner.** If a step's result says **"STOP the bring-up and report"** (for example the board restarted
+  during the pulse-integrity check), a red banner appears on that step and at the top of the assistant. Stop there,
+  make the stand safe (48 V off), create the bring-up package and send it; continue only after the PO's answer.
+- **Another board connected** (red banner "BOARD CHANGED: this session belongs to board … , board … is connected"):
+  the open session takes no more results (they are refused with `[BOARD_CHANGED]`). Either press **New session for
+  this board** (it asks first and names both boards; the old session is kept) or **Create package** to send the old
+  session's record.
+- Some entries are required only in a certain case — the form says so ("required only when …").
+- **Create bring-up package…** writes one zip file (date, board number and FW build in the name) with a report, all
+  steps and entries, the board configuration, the logs and the calibration files. You can create it at any time (a
+  partial package is fine). The window then shows where the file is, **Open folder**, and to whom to send it.
+
+---
+
 ## 17. Troubleshooting
 
 | Symptom | Meaning | What to do |
@@ -816,3 +866,4 @@ All in `03_SW/docs/img/`, regenerated with
 | 34_sequence_break_detected | BREAK_DETECTED guard |
 | 35 … 38 | HALT and E-stop banners, Clear stop |
 | 39_status_help, 40_hotkey_test | help dialogs |
+| 41_bringup_assistant | Bring-up assistant (§16a) |

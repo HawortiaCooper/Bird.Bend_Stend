@@ -32,10 +32,21 @@ def backend_cls():
     return Backend, BackendSettings
 
 
+def safe_settings(**kw: Any):
+    """``BackendSettings`` through B's ``core.testing.isolated_settings`` (data-safety rule, incident 2026-10-14):
+    the data folder, the recordings root and the bring-up package folder are the per-test folders of the conftest
+    env or a fresh temp folder — never the real ``%APPDATA%`` / ``Documents``, also when this harness is imported
+    by a script outside pytest. A key passed as None is dropped (None would mean the application's own lookup)."""
+    from bend_stand.core.testing import isolated_settings  # noqa: PLC0415
+
+    _Backend, BackendSettings = backend_cls()
+    return BackendSettings(**isolated_settings(**{k: v for k, v in kw.items() if v is not None}))
+
+
 def lockstep_backend(*, connect: bool = True, endpoint: str = "sim", seed: int = 7, wire_log: bool = True,
                      **kw: Any):
-    Backend, BackendSettings = backend_cls()
-    be = Backend(BackendSettings(clock="lockstep", test_hooks=True, wire_log=wire_log, seq_seed=seed, **kw))
+    Backend, _BackendSettings = backend_cls()
+    be = Backend(safe_settings(clock="lockstep", test_hooks=True, wire_log=wire_log, seq_seed=seed, **kw))
     be.start()
     if connect:
         be.test_hooks.result(be.connect_async(endpoint), 5000)
@@ -44,8 +55,8 @@ def lockstep_backend(*, connect: bool = True, endpoint: str = "sim", seed: int =
 
 
 def realtime_backend(**kw: Any):
-    Backend, BackendSettings = backend_cls()
-    be = Backend(BackendSettings(wire_log=True, test_hooks=True, **kw))
+    Backend, _BackendSettings = backend_cls()
+    be = Backend(safe_settings(wire_log=True, test_hooks=True, **kw))
     be.start()
     return be
 
@@ -721,3 +732,114 @@ def ready_for_sequence(be, *, calibrate: bool = True) -> None:
     if be.status().safety.no_specimen_mode and calibrate:
         g = be.limits.set_no_specimen_mode(False)
         assert g.ok, g
+
+
+# =============================================================================================== D-56 verbs
+# Only this block names the bring-up API (SW_design §25.6, api.BringupAPI GRQ-B-40) and its settings.
+
+def bu(be):
+    """``backend.bringup`` (api.BringupAPI)."""
+    return be.bringup
+
+
+def bu_backend(tmp_path, *, steps: str | None = None, out_dir: str | None = None, **kw: Any):
+    """Lock-step backend with a private recordings root; ``steps`` = step-file override (None = the shipped file)."""
+    return lockstep_backend(recordings_root=str(Path(tmp_path) / "rec"), bringup_steps=steps,
+                            bringup_root=out_dir, **kw)
+
+
+def bu_start(be, confirmed: bool = False):
+    return be.bringup.start(confirmed=confirmed)
+
+
+def bu_status(be):
+    return be.bringup.status()
+
+
+def bu_steps(be) -> list:
+    return be.bringup.steps()
+
+
+def bu_sections(be) -> list:
+    return be.bringup.sections()
+
+
+def bu_step(be, step_id: str):
+    return be.bringup.step(step_id)
+
+
+def bu_select(be, step_id: str) -> None:
+    be.bringup.select(step_id)
+
+
+def bu_submit(be, step_id: str, entries: dict, remark: str = "") -> list:
+    return be.bringup.submit(step_id, entries, remark)
+
+
+def bu_mark(be, step_id: str, state: str, reason: str = "", remark: str = ""):
+    return be.bringup.mark(step_id, state, reason=reason, remark=remark)
+
+
+def bu_run(be, step_id: str, confirmed: bool = False):
+    return be.bringup.run_action(step_id, confirmed=confirmed)
+
+
+def bu_cancel(be):
+    return be.bringup.cancel_action()
+
+
+def bu_close(be, why: str = "validator"):
+    return be.bringup.close_session(why)
+
+
+def bu_resume(be, session_id: str):
+    return be.bringup.resume(session_id)
+
+
+def bu_sessions(be) -> list:
+    return be.bringup.sessions()
+
+
+def bu_package(be, timeout_ms: float = 60_000.0):
+    """Create bring-up package → BuPackage (path, size_bytes, files, send_to, partial, sha256)."""
+    return result(be, be.bringup.create_package_async(), timeout_ms)
+
+
+def bu_package_future(be):
+    return be.bringup.create_package_async()
+
+
+def world_x_um(be) -> float:
+    """True carriage position of the simulator world (µm) — the caliper of the walk-through."""
+    return float(sim_query(be, "world")["x_um_true"])
+
+
+def travel_cal(be):
+    return be.travel_cal
+
+
+def load_cal_state(be):
+    return be.load_cal.state()
+
+
+def bu_cli_export(argv: list[str]) -> int:
+    """``python -m bend_stand bringup-export …`` in this process (offline package, SW-BRU-003)."""
+    from bend_stand.__main__ import run_bringup_export  # noqa: PLC0415
+
+    return int(run_bringup_export(list(argv)))
+
+
+def gui_beat(be) -> None:
+    """The GUI thread's liveness beat (the jog dead-man refresh needs it on the lock-step clock as well)."""
+    be.gui_beat()
+
+
+def world_switches(be) -> tuple[int, int]:
+    """(START, END) switch positions of the simulator world, µm (vocabulary ``limit … position_um``)."""
+    w = be.sim.board.world
+    return int(w.start_switch_um), int(w.end_switch_um)
+
+
+def set_no_specimen(be, on: bool, confirmed: bool = True):
+    """Session no-specimen mode on / off (SW-LIM-004); returns the GateResult."""
+    return be.limits.set_no_specimen_mode(on, confirmed=confirmed)

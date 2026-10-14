@@ -30,6 +30,8 @@ SW = HERE.parents[1]
 sys.path.insert(0, str(SW / "src"))
 sys.path.insert(0, str(HERE))
 
+from bend_stand.core.testing import isolated_settings  # noqa: E402  B-SAFE-01: never the real user folders
+
 FONT_FILES = ("segoeui.ttf", "segoeuib.ttf", "seguisym.ttf", "consola.ttf", "arial.ttf")
 
 
@@ -60,9 +62,9 @@ class Shooter:
         configure_pyqtgraph()
         self.out = out
         self.shots: list[str] = []
-        self.be = backend_mod.Backend(backend_mod.BackendSettings(
+        self.be = backend_mod.Backend(backend_mod.BackendSettings(**isolated_settings(
             clock="lockstep", test_hooks=True, wire_log=False, hotkey="off", sim_nvm_path=str(tmp / "nvm.json"),
-            recordings_root=str(tmp / "rec")))
+            recordings_root=str(tmp / "rec"))))
         self.be.start()
         self.win = MainWindow(self.be, settings=make_settings(tmp / "gui.ini"), start_refresh=False)
         self.win.resize(1600, 960)
@@ -467,6 +469,28 @@ class Shooter:
         hk.close()
         self.settle()
 
+        print("41 bring-up assistant")
+        if getattr(be, "bringup", None) is not None:
+            dock = win.open_bringup()
+            dock.setFloating(True)
+            dock.resize(1150, 720)
+            self.settle(2)
+            dock.start_button.click()
+            self.step()
+            if dock.confirm_dialog is not None and getattr(dock.confirm_dialog, "outcome", "") == "pending":
+                self.click(dock.confirm_dialog.confirm_button)
+            self.run_until(lambda: be.bringup.status().active, 3000)
+            dock.select("6.5")
+            self.run_until(lambda: be.bringup.step("6.5").state == "PASS", 5000)
+            dock.select("8.8")
+            dock._editors["m1"].setValue(0.72)                           # noqa: SLF001
+            dock._editors["m5"].setValue(5.01)                           # noqa: SLF001
+            dock.remark_edit.setText("measured with the 100 Ω shunt")
+            dock.on_save()
+            self.settle(10)
+            self.shot(dock, "41_bringup_assistant")
+            dock.setFloating(False)
+
     def close(self) -> None:
         try:
             self.win._force_close = True                                # noqa: SLF001
@@ -516,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         tmp = Path(td)
         os.environ["BEND_STAND_DATA_DIR"] = str(tmp / "data")
         os.environ["BEND_STAND_GUI_SETTINGS"] = str(tmp / "gui.ini")
+        os.environ["BEND_STAND_BRINGUP_DIR"] = str(tmp / "bringup_packages")
         s = Shooter(out, tmp)
         try:
             s.run()

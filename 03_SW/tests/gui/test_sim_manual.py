@@ -21,15 +21,16 @@ backend_mod = pytest.importorskip("bend_stand.core.backend")
 from bend_stand.core import protocol_gen as pg  # noqa: E402
 from bend_stand.core.api import GateId  # noqa: E402
 from bend_stand.gui import gating  # noqa: E402
+from bend_stand.core.testing import isolated_settings  # noqa: E402  B-SAFE-01: never the real user folders
 
 Cmd = pg.Cmd
 
 
 @pytest.fixture
 def lock_be(tmp_path):
-    be = backend_mod.Backend(backend_mod.BackendSettings(
+    be = backend_mod.Backend(backend_mod.BackendSettings(**isolated_settings(
         clock="lockstep", test_hooks=True, wire_log=True, hotkey="off", sim_nvm_path=str(tmp_path / "nvm.json"),
-        recordings_root=str(tmp_path / "rec")))
+        recordings_root=str(tmp_path / "rec"))))
     be.start()
     h = be.test_hooks
     h.result(be.connect_async("sim"), 5000)

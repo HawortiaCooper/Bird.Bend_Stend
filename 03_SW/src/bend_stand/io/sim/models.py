@@ -250,7 +250,10 @@ class World:
         return self.pause_btn if self.pause_contact == "NO" else not self.pause_btn
 
     def alm_active(self) -> bool:
-        return self.alm or "alm" in self.broken          # broken ALM wire reads "alarm" (fail-safe, A-09)
+        """ALM output of the driver: alarm, a broken wire (fail-safe, A-09) or the driver unpowered — the open ALM
+        output of an unpowered driver reads "alarm" like on the real driver (tools/README seam "ALM active or driver
+        unpowered = 1", twin ``_level("alm")``; OBS-F-BRU-01)."""
+        return self.alm or "alm" in self.broken or not self.drv_power
 
     def pend_active(self) -> bool:
         return self.pend and "pend" not in self.broken

@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="297mm" height="210mm" viewBox="0 0 1485 1050" font-family="Arial, Helvetica, sans-serif">
+<title>Bird Bend Stand wiring — sheet 8: Spring specimen, preload direction and dial indicator (HG-12 / 15 / 25 / 26)</title>
+<rect x="0" y="0" width="1485" height="1050" fill="#ffffff"/>
+<rect x="15.0" y="15.0" width="1455.0" height="1020.0" fill="none" stroke="#222" stroke-width="1.6"/>
+<text x="30.0" y="52.0" font-size="22" fill="#123a6b" font-weight="bold">B8 — Spring specimen, preload direction and dial indicator (HG-12 / 15 / 25 / 26)</text>
+<text x="1455.0" y="52.0" font-size="13" fill="#555" text-anchor="end">Bird Bend Stand — HW-gate bench pictures</text>
+<rect x="40.0" y="300.0" width="900.0" height="18.0" fill="#9e9e9e" stroke="#555" stroke-width="1"/>
+<text x="48.0" y="340.0" font-size="11.5" fill="#555">frame (fixed)</text>
+<rect x="60.0" y="210.0" width="90.0" height="90.0" fill="#cfd8dc" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="105.0" y="260.0" font-size="13" fill="#000" text-anchor="middle" font-weight="bold">motor</text>
+<rect x="150.0" y="248.0" width="600.0" height="12.0" fill="#e0e0e0" stroke="#555" stroke-width="1"/>
+<line x1="158" y1="260" x2="172" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="187" y1="260" x2="201" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="216" y1="260" x2="230" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="245" y1="260" x2="259" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="274" y1="260" x2="288" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="303" y1="260" x2="317" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="332" y1="260" x2="346" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="361" y1="260" x2="375" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="390" y1="260" x2="404" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="419" y1="260" x2="433" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="448" y1="260" x2="462" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="477" y1="260" x2="491" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="506" y1="260" x2="520" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="535" y1="260" x2="549" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="564" y1="260" x2="578" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="593" y1="260" x2="607" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="622" y1="260" x2="636" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="651" y1="260" x2="665" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="680" y1="260" x2="694" y2="248" stroke="#999" stroke-width="1"/>
+<line x1="709" y1="260" x2="723" y2="248" stroke="#999" stroke-width="1"/>
+<text x="345.0" y="290.0" font-size="11.5" fill="#555">ball screw</text>
+<rect x="200.0" y="200.0" width="50.0" height="100.0" fill="#9e9e9e" stroke="#333" stroke-width="1.4"/>
+<text x="225.0" y="190.0" font-size="11.5" fill="#000" text-anchor="middle">fixed mount</text>
+<rect x="250.0" y="205.0" width="70.0" height="50.0" fill="#ffe082" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="285.0" y="235.0" font-size="13" fill="#000" text-anchor="middle" font-weight="bold">cell</text>
+<polyline points="320.0,230.0 332.0,214.0 347.0,246.0 362.0,214.0 377.0,246.0 392.0,214.0 407.0,246.0 422.0,214.0 437.0,246.0 460.0,230.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="390.0" y="200.0" font-size="13" fill="#b0006a" text-anchor="middle" font-weight="bold">spring specimen</text>
+<rect x="460.0" y="200.0" width="110.0" height="100.0" fill="#90a4ae" stroke="#333" stroke-width="1.6" rx="3"/>
+<text x="515.0" y="255.0" font-size="13" fill="#000" text-anchor="middle" font-weight="bold">table</text>
+<polyline points="470.0,160.0 600.0,160.0" fill="none" stroke="#b0006a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="602.0,160.0 590.0,153.4 590.0,166.6" fill="#b0006a" stroke="none" stroke-width="1"/>
+<text x="610.0" y="156.0" font-size="13" fill="#b0006a" font-weight="bold">+x = away from START = pull</text>
+<text x="610.0" y="176.0" font-size="11.5" fill="#000">→ spring in tension, +F; the runner preloads ≥ 98 N</text>
+<rect x="40.0" y="129.0" width="482.2" height="16.0" fill="#fff4e0" stroke="#b26a00" stroke-width="1" rx="2"/>
+<text x="45.0" y="141.0" font-size="9" fill="#b26a00" font-weight="bold">geometry schematic (sheet 1 load path); cell side ASSUMED — confirm that +x stretches the spring</text>
+<rect x="860.0" y="250.0" width="60.0" height="50.0" fill="#eceff1" stroke="#333" stroke-width="1.4" rx="3"/>
+<text x="830.0" y="340.0" font-size="11.5" fill="#000" text-anchor="middle">magnetic stand on the frame</text>
+<circle cx="745.0" cy="216.0" r="27" fill="#fff" stroke="#333" stroke-width="2"/>
+<text x="745.0" y="221.0" font-size="10" fill="#000" text-anchor="middle">0.001</text>
+<polyline points="890.0,250.0 772.0,216.0" fill="none" stroke="#5f5f5f" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5,3"/>
+<polyline points="718.0,216.0 570.0,216.0" fill="none" stroke="#1f4e9a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="560.0" y="360.0" font-size="11.5" fill="#000">dial plunger on the +x face of the table, parallel to x,</text>
+<text x="560.0" y="378.0" font-size="11.5" fill="#000">pre-loaded ≈ 1 mm, then zeroed when the runner says so</text>
+<rect x="960.0" y="90.0" width="500.0" height="820.0" fill="#fafafa" stroke="#888" stroke-width="1.2" rx="4"/>
+<text x="970.0" y="116.0" font-size="16" fill="#123a6b" font-weight="bold">Use per HG item</text>
+<text x="972.0" y="148.0" font-size="13" fill="#000">Spring: k ≈ 10…50 N/mm, safe load ≥ 300 N.</text>
+<text x="972.0" y="165.2" font-size="13" fill="#000"></text>
+<text x="972.0" y="182.3" font-size="13" fill="#000">HG-12 load-limit trips: spring fitted, no dial</text>
+<text x="972.0" y="199.5" font-size="13" fill="#000">needed; J-EVT ← PB4 (B1); the runner searches</text>
+<text x="972.0" y="216.6" font-size="13" fill="#000">contact and trips the limit 100 ×.</text>
+<text x="972.0" y="233.8" font-size="13" fill="#000"></text>
+<text x="972.0" y="251.0" font-size="13" fill="#000">HG-15 reset under load: spring preloaded</text>
+<text x="972.0" y="268.1" font-size="13" fill="#000">≥ 98 N (runner); dial on the table, zeroed;</text>
+<text x="972.0" y="285.3" font-size="13" fill="#000">NRST / power cycle / IWDG (picture B7);</text>
+<text x="972.0" y="302.4" font-size="13" fill="#000">pass: dial ≤ 0.01 mm.</text>
+<text x="972.0" y="319.6" font-size="13" fill="#000"></text>
+<text x="972.0" y="336.8" font-size="13" fill="#000">HG-25 speed: spring REMOVED; dial for</text>
+<text x="972.0" y="353.9" font-size="13" fill="#000">0.01 mm/s × 2 mm; caliper for 50 mm (B9).</text>
+<text x="972.0" y="371.1" font-size="13" fill="#000"></text>
+<text x="972.0" y="388.2" font-size="13" fill="#000">HG-26 home repeatability: spring removed;</text>
+<text x="972.0" y="405.4" font-size="13" fill="#000">dial at x = 0 (home position), zeroed;</text>
+<text x="972.0" y="422.6" font-size="13" fill="#000">10 × (20 mm → HOME); 2σ ≤ 0.02 mm.</text>
+<text x="972.0" y="439.7" font-size="13" fill="#000"></text>
+<text x="972.0" y="456.9" font-size="13" fill="#000">Mount / remove the spring only with the</text>
+<text x="972.0" y="474.0" font-size="13" fill="#000">driver DISABLED or the 48 V OFF, as the</text>
+<text x="972.0" y="491.2" font-size="13" fill="#000">runner prompts. Never stand in line with</text>
+<text x="972.0" y="508.4" font-size="13" fill="#000">the spring while it is loaded.</text>
+<rect x="40.0" y="520.0" width="900.0" height="200.0" fill="#fafafa" stroke="#888" stroke-width="1.2" rx="4"/>
+<text x="52.0" y="546.0" font-size="16" fill="#123a6b" font-weight="bold">Dial indicator rules</text>
+<text x="52.0" y="578.0" font-size="13" fill="#000">· stand on the frame, never on the table; plunger axis parallel to the travel (x);</text>
+<text x="52.0" y="595.2" font-size="13" fill="#000">· touch a flat, clean face of the table; keep ≥ 1 mm pre-travel both ways;</text>
+<text x="52.0" y="612.3" font-size="13" fill="#000">· zero the dial when the runner says "zero the dial"; read when it asks;</text>
+<text x="52.0" y="629.5" font-size="13" fill="#000">· keep the plunger clear of the spring and of every moving cable.</text>
+<rect x="1005.0" y="925.0" width="465.0" height="110.0" fill="#fff" stroke="#222" stroke-width="1.6"/>
+<line x1="1005" y1="953" x2="1470" y2="953" stroke="#222" stroke-width="1"/>
+<line x1="1305" y1="925" x2="1305" y2="953" stroke="#222" stroke-width="1"/>
+<text x="1013.0" y="944.0" font-size="13" fill="#123a6b" font-weight="bold">HW-gate bench pictures (D-57)</text>
+<text x="1313.0" y="944.0" font-size="13" fill="#000" font-weight="bold">Picture B8 / 9</text>
+<text x="1013.0" y="969.0" font-size="11" fill="#000" font-weight="bold">Spring specimen, preload direction and dial indicator (HG-12 / 15 / 25 / 26)</text>
+<text x="1013.0" y="984.0" font-size="10" fill="#000">Version 1.1 · 2026-10-14 · owner Implementer A (01_HW)</text>
+<text x="1013.0" y="998.0" font-size="8.5" fill="#000">Source: wiring.md v0.7.1 §6.1/§11.1 · FW_test_plan §6/§6.8 · HW_GATE_RUNBOOK v0.4 · pinout.md v0.6</text>
+<text x="1013.0" y="1011.0" font-size="9" fill="#555">Generated by 01_HW/diagrams/bench/gen_bench_svg.py — do not edit the SVG/PNG</text>
+<text x="1013.0" y="1024.0" font-size="9.5" fill="#b71c1c" font-weight="bold">NOT A CERTIFIED SAFETY DESIGN — bench aid for the HW gate (D-06-GATE)</text>
+</svg>

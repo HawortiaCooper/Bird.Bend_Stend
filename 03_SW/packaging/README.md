@@ -127,8 +127,9 @@ COM port. Without that variable the shipped exe opens exactly the port the opera
 | S4 `BirdBendStand.exe --sim` (offscreen, `BEND_STAND_GUI_QUIT_AFTER_MS`) | rc 0; exit summary: link CONNECTED, stream on, DATA > 0 |
 | S5 `BirdBendStand.exe` without endpoint | rc 0, starts **disconnected** (no port touched) |
 | S6 `BirdBendStand-cli.exe --headless --port COM250` with the guard | rc ≠ 0, `HardwareAccessForbidden` (the OS is never asked to open the port) |
-| S7 folder layout | `qwindows.dll`, dist-info present; no pytest / PyInstaller / yaml; `docs\USER_MANUAL` and `docs\QUICK_REFERENCE` as `.md` + `.html`, every screenshot the manuals reference |
+| S7 folder layout | `qwindows.dll`, dist-info present; no pytest / PyInstaller / yaml; `docs\USER_MANUAL` and `docs\QUICK_REFERENCE` as `.md` + `.html`, every screenshot the manuals reference; `bend_stand\resources\*.json` (bring-up steps + schemas) byte-identical to the source tree and the bundled step file valid (`core.bringup.load_definitions`) |
 | S8 offline report | `BirdBendStand-cli.exe --headless --sim --record --recordings <tmp>` writes a short recording; `BirdBendStand-cli.exe report <recording> --out <tmp>` → rc 0, `report.json` (bird.bend.report, rows > 0) + `report.html`; a missing folder → rc 2 |
+| S10 bring-up package | `BirdBendStand-cli.exe --headless --sim --bringup-mark <first step>` opens a bring-up session and marks the step PASS; `bringup-export --out <tmp>` (same data folder) writes one zip; `bringup-export --verify <zip>` → rc 0 "package OK"; a copy with one flipped byte → rc ≠ 0; the package HTML shows "marked from the command line (test)"; `--bringup-mark` with `--port COM250` → rc 2, refused before anything is opened (SW-BRU-002/003) |
 | S9 log written once | `BirdBendStand.exe --sim --log-level INFO` started **without console handles** (as from Explorer): stdio in `BirdBendStand.log`, log records in `bend_stand.log` only — the GUI exit line exactly once (SWR-14, OI-F-RV-04). S2 / S3 also require `bend_stand.log` with the start and incident lines |
 
 Result 2026-10-08: S1–S7 **7/7 PASS** in the build run (offscreen) and again from the *extracted zip* in a scratch
@@ -178,6 +179,11 @@ More log detail: `BirdBendStand-cli.exe --log-level INFO` (console) or `BirdBend
 file). Command line of both executables = `python -m bend_stand`: `[--sim [scenario.simscn.json]] [--port COM7 |
 --port tcp://host:port] [--session file] [--recordings DIR] [--headless [--duration s] [--record]] [--log-level L]
 [--version]`. `--recordings DIR` sets the recordings folder for this run (GUI and headless).
+Bring-up package offline (SW-BRU-003): `BirdBendStand-cli.exe bringup-export [<session>] [--out DIR] [--data DIR]`,
+`BirdBendStand-cli.exe bringup-export --verify <zip>`; `--headless --sim --bringup-mark STEP_ID` (repeatable) opens
+a session with those steps PASS — **simulator only** (refused with exit code 2 for a COM port, a `tcp://` endpoint or
+without `--headless --sim`); every such mark is recorded with origin `cli-test` and the remark "marked from the
+command line (test)", and the package report flags it as not operator evidence.
 
 **Operator documentation**: `docs\USER_MANUAL.html` and `docs\QUICK_REFERENCE.html` in the program folder (Start
 menu *Operator manual* / *Quick reference card* with the installer); sources:

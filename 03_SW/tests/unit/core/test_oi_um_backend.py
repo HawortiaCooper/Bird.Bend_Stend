@@ -127,7 +127,7 @@ def test_record_start_refused_without_link_and_stop_stays_possible(tmp_path) -> 
 
 @pytest.mark.req("SW-ACQ-002")
 def test_reports_root_follows_the_backend_lookup(tmp_path) -> None:
-    be = lockstep_backend()
+    be = lockstep_backend(recordings_root=None)              # the application's own lookup (read-only here)
     try:
         assert be.reports.root() == be._recordings_root()  # noqa: SLF001
         s = be.session.get()

@@ -33,7 +33,9 @@ from bend_stand.core.api import TOPICS
 #: topics B publishes before they are listed in ``api.TOPICS`` (B6-33: listed there once the GUI maps them)
 TOPICS_PENDING_GUI: tuple[str, ...] = tuple(getattr(_api, "TOPICS_PENDING_GUI", ()))
 #: every topic the bridge knows (``TOPICS`` + pending ones)
-KNOWN_TOPICS: tuple[str, ...] = tuple(dict.fromkeys((*TOPICS, *TOPICS_PENDING_GUI)))
+#: D-56 a: bring-up engine topics (``api.BRINGUP_TOPICS``), mapped below; B moves them into ``TOPICS``
+BRINGUP_TOPICS: tuple[str, ...] = tuple(getattr(_api, "BRINGUP_TOPICS", ("bringup.state", "bringup.step")))
+KNOWN_TOPICS: tuple[str, ...] = tuple(dict.fromkeys((*TOPICS, *TOPICS_PENDING_GUI, *BRINGUP_TOPICS)))
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +62,8 @@ TOPIC_SIGNALS: Mapping[str, str] = {
     "log": "logMessage",
     "device.board_changed": "boardChanged",      # B6-33 (6), SWR-19: another board (UID) after a reconnect
     "safety.no_specimen_scope": "safetyEvent",   # D-54 a: wizard-scoped no-specimen state (scope str | None)
+    "bringup.state": "bringupEvent",             # D-56 a: BuStatus (session / progress / action running)
+    "bringup.step": "bringupEvent",              # D-56 a: BuStep (state, automatic result, action state)
 }
 
 if "safety.trip_cleared" in TOPICS:          # B6-15 (MC3-5): trip clear on its own topic
@@ -136,6 +140,7 @@ class QtBridge(QObject):
     reportReady = Signal(object)
     logMessage = Signal(object)
     boardChanged = Signal(object)
+    bringupEvent = Signal(object)
     anyEvent = Signal(object)
     busyChanged = Signal(bool)
 

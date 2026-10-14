@@ -1,0 +1,986 @@
+{
+ "schema": "bird.bend.bringup_steps",
+ "schema_version": 1,
+ "guide": {
+  "title": "Bird Bend Stand — board bring-up guide",
+  "version": "FW 0.8.6 / guide 0.4",
+  "file": "BRINGUP_GUIDE.md",
+  "content_version": "B test fixture (former 28-step example; engine tests, not shipped)"
+ },
+ "send_to": "Send this zip file to the product owner (e-mail) together with the photos of section 13.",
+ "sections": [
+  {
+   "id": "6",
+   "title": "6 PC software and first connection"
+  },
+  {
+   "id": "7",
+   "title": "7 Input checks — 48 V still OFF"
+  },
+  {
+   "id": "8",
+   "title": "8 48 V on: driver power, ENABLE / DISABLE, D-42 ENA cut"
+  },
+  {
+   "id": "9",
+   "title": "9 First motion — slow, no specimen"
+  },
+  {
+   "id": "10",
+   "title": "10 Direct-drive qualification (SYS-011)"
+  },
+  {
+   "id": "11",
+   "title": "11 Calibration (travel, load, tare)"
+  },
+  {
+   "id": "12",
+   "title": "12 Save to NVM, restart, verify"
+  },
+  {
+   "id": "13",
+   "title": "13 Bring-up package"
+  }
+ ],
+ "steps": [
+  {
+   "id": "6.3",
+   "section": "6",
+   "title": "Device line",
+   "instruction": "Connection & Config tab: read the Device line.",
+   "expected": "FW 0.8.6 (build 20261010-2135), dict hash 0xF8BCDCB8 ✓",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "hg": "≈ HG gate S-00 identity check",
+   "action": "show:connection",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for the board identity (GET_INFO) …",
+      "all": [
+       {
+        "src": "info",
+        "key": "fw_version",
+        "op": "eq",
+        "value": "0.8.6",
+        "label": "FW"
+       },
+       {
+        "src": "info",
+        "key": "build",
+        "op": "eq",
+        "value": "20261010-2135",
+        "label": "build"
+       },
+       {
+        "src": "info",
+        "key": "param_dict_hash",
+        "op": "eq",
+        "value": {
+         "$const": "PARAM_DICT_HASH"
+        },
+        "label": "dict hash"
+       },
+       {
+        "src": "info",
+        "key": "uid",
+        "op": "present",
+        "label": "UID"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "6.5",
+   "section": "6",
+   "title": "Link at 80 Hz",
+   "instruction": "Link line: about 80 Hz samples, no losses growing; LINK chip green CONNECTED.",
+   "expected": "LINK CONNECTED, 76…84 SPS",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for the stream …",
+      "all": [
+       {
+        "src": "link",
+        "key": "state",
+        "op": "eq",
+        "value": "CONNECTED",
+        "label": "link"
+       },
+       {
+        "src": "stream",
+        "key": "rate_sps",
+        "op": "between",
+        "value": [
+         76,
+         84
+        ],
+        "label": "rate [SPS]"
+       }
+      ]
+     }
+    ],
+    "timeout_s": 30
+   }
+  },
+  {
+   "id": "6.7",
+   "section": "6",
+   "title": "Board configuration",
+   "instruction": "Board configuration table (tick show advanced): check the listed values.",
+   "expected": "drv.pwr_sense_enable 0, drv.k1_check_enable 0, motion.steps_per_mm 800, afe.rate_sps 80 SPS",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "hg": "≈ HG-32 / C-26",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "param",
+        "key": "drv.pwr_sense_enable",
+        "op": "eq",
+        "value": 0
+       },
+       {
+        "src": "param",
+        "key": "drv.k1_check_enable",
+        "op": "eq",
+        "value": 0
+       },
+       {
+        "src": "param",
+        "key": "motion.steps_per_mm",
+        "op": "eq",
+        "value": 800
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "6.8",
+   "section": "6",
+   "title": "Indicator chips, 48 V off",
+   "instruction": "Compare the indicator bar with the table of the guide (48 V OFF, E-stop released, switches closed).",
+   "expected": "no latch, LIM S / LIM E green, HOMED red, ENA red, ALM red, CLK green",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "halt",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "paused",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "fault",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "limit_start",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "limit_end",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "homed",
+        "op": "off"
+       },
+       {
+        "src": "ind",
+        "key": "clk_fallback",
+        "op": "off"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "6.9",
+   "section": "6",
+   "title": "Load cell sign",
+   "instruction": "Readouts dock → Raw: pull lightly on the load cell by hand (tension), then push.",
+   "expected": "Raw increases on pull (a reversed sign is allowed — write it down)",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "sign",
+     "label": "Raw on pull",
+     "kind": "choice",
+     "choices": [
+      "increases",
+      "decreases"
+     ]
+    },
+    {
+     "name": "raw_pull",
+     "label": "Raw while pulling",
+     "kind": "number",
+     "unit": "counts",
+     "decimals": 0,
+     "required": false,
+     "required_when": {
+      "field": "sign",
+      "op": "eq",
+      "value": "decreases"
+     }
+    }
+   ]
+  },
+  {
+   "id": "7.1",
+   "section": "7",
+   "title": "E-stop latch",
+   "instruction": "Press the red E-stop and keep it pressed for more than 1 s.",
+   "expected": "ESTOP red, only ESTOP latched — no K1_WELDED, no other fault",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "hg": "≈ HG-32",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for ESTOP …",
+      "all": [
+       {
+        "src": "event",
+        "key": "ESTOP_SET",
+        "op": "seen"
+       },
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "on"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "FAULT_SET",
+      "op": "seen",
+      "label": "fault latched"
+     }
+    ]
+   }
+  },
+  {
+   "id": "7.2",
+   "section": "7",
+   "title": "E-stop clear",
+   "instruction": "Release the button (ESTOP stays red), wait ≥ 100 ms → Clear stop… → Clear E-STOP.",
+   "expected": "ESTOP green; nothing moves",
+   "kind": "auto",
+   "action": "clear_stop",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for Clear E-STOP …",
+      "all": [
+       {
+        "src": "event",
+        "key": "ESTOP_CLEARED",
+        "op": "seen"
+       },
+       {
+        "src": "ind",
+        "key": "estop",
+        "op": "off"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "data_flag",
+      "key": "MOVING",
+      "op": "set",
+      "label": "axis moving"
+     }
+    ]
+   }
+  },
+  {
+   "id": "7.3",
+   "section": "7",
+   "title": "PAUSE button",
+   "instruction": "Press and release PAUSE once; then clear with ▶ Resume.",
+   "expected": "PAUSED amber (BUTTON), then green after Resume",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "text": "press PAUSE …",
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "set"
+       }
+      ]
+     },
+     {
+      "text": "now ▶ Resume …",
+      "all": [
+       {
+        "src": "data_status",
+        "key": "PAUSED",
+        "op": "clear"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "7.4",
+   "section": "7",
+   "title": "START switch",
+   "instruction": "Press the START switch lever by hand, then release it.",
+   "expected": "LIM S red LIMIT_START, green again after release",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "text": "press the START lever …",
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_START",
+        "op": "set"
+       }
+      ]
+     },
+     {
+      "text": "release it …",
+      "all": [
+       {
+        "src": "data_status",
+        "key": "LIMIT_START",
+        "op": "clear"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "7.7",
+   "section": "7",
+   "title": "Both limit connectors unplugged",
+   "instruction": "Unplug both limit connectors at once, plug both back → Clear stop… → Clear faults.",
+   "expected": "LIMIT_WIRING + FAULT, all green after Clear faults",
+   "kind": "auto",
+   "action": "clear_stop",
+   "hg": "≈ HG-17",
+   "auto": {
+    "stages": [
+     {
+      "text": "unplug both connectors …",
+      "all": [
+       {
+        "src": "fault",
+        "key": "LIMIT_WIRING",
+        "op": "set"
+       }
+      ]
+     },
+     {
+      "text": "plug back, Clear faults …",
+      "all": [
+       {
+        "src": "fault",
+        "key": "LIMIT_WIRING",
+        "op": "clear"
+       },
+       {
+        "src": "ind",
+        "key": "fault",
+        "op": "off"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "8.3",
+   "section": "8",
+   "title": "ALM off with 48 V on",
+   "instruction": "Observer switches the 48 V PSU on; watch ALM and PEND.",
+   "expected": "ALM green OFF within ≈ 1 s",
+   "kind": "auto",
+   "stop_if_fail": true,
+   "hg": "≈ HG-16",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for ALM off …",
+      "all": [
+       {
+        "src": "io",
+        "key": "ALM",
+        "op": "clear"
+       }
+      ],
+      "min_s": 1.0
+     }
+    ],
+    "timeout_s": 120
+   }
+  },
+  {
+   "id": "8.5",
+   "section": "8",
+   "title": "ENABLE",
+   "instruction": "Hands off the shaft → Manual tab → tick Driver enabled.",
+   "expected": "ENA amber ENABLING, then green enabled; the motor holds",
+   "kind": "motion",
+   "motion": false,
+   "action": "enable",
+   "hg": "≈ HG-07",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for ENABLED …",
+      "all": [
+       {
+        "src": "data_flag",
+        "key": "ENABLED",
+        "op": "set"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "8.6",
+   "section": "8",
+   "title": "DISABLE = free",
+   "instruction": "Untick Driver enabled (dialog: Specimen is unloaded → Disable); turn the coupling by hand.",
+   "expected": "ENA red disabled; the shaft turns freely",
+   "kind": "confirm",
+   "action": "disable",
+   "stop_if_fail": true,
+   "hg": "≈ HG-07, C-07",
+   "safety": "Hands off the mouse while touching the coupling.",
+   "fields": [
+    {
+     "name": "free",
+     "label": "The shaft turns freely",
+     "kind": "confirm"
+    }
+   ]
+  },
+  {
+   "id": "8.8",
+   "section": "8",
+   "title": "DMM on the ENA loop (optional)",
+   "instruction": "M-1 across R_E with the MCU in reset and the E-stop pressed; M-5 +5V_CUT.",
+   "expected": "M-1 ≈ 0.7 V; M-5 4.75…5.25 V",
+   "kind": "measure",
+   "optional": true,
+   "hg": "≈ HG-10 d",
+   "fields": [
+    {
+     "name": "m1",
+     "label": "M-1 across R_E",
+     "kind": "number",
+     "unit": "V",
+     "min": 0.5,
+     "max": 0.9,
+     "decimals": 2
+    },
+    {
+     "name": "m5",
+     "label": "M-5 +5V_CUT",
+     "kind": "number",
+     "unit": "V",
+     "min": 4.75,
+     "max": 5.25,
+     "decimals": 2
+    }
+   ]
+  },
+  {
+   "id": "9.1",
+   "section": "9",
+   "title": "No-specimen mode",
+   "instruction": "Safety limits tab → Enter no-specimen mode… → tick No specimen is mounted → Switch PC load limits off.",
+   "expected": "amber banner NO-SPECIMEN MODE, NOSPEC chip",
+   "kind": "auto",
+   "action": "no_specimen",
+   "auto": {
+    "stages": [
+     {
+      "all": [
+       {
+        "src": "safety",
+        "key": "no_specimen_mode",
+        "op": "eq",
+        "value": true
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "9.3",
+   "section": "9",
+   "title": "Jog direction",
+   "instruction": "Manual tab: hold 'hold forward (+) ▶▶' for about 3 s at 1 mm/s, release.",
+   "expected": "the table moved away from the START switch and stopped on release",
+   "kind": "motion",
+   "action": "show:manual",
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "direction",
+     "label": "The table moved",
+     "kind": "choice",
+     "choices": [
+      "away from START",
+      "toward START"
+     ],
+     "pass_values": [
+      "away from START"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "9.4",
+   "section": "9",
+   "title": "Scale",
+   "instruction": "Caliper distance of the jog of 9.3 and the change of Travel (machine).",
+   "expected": "caliper = shown change ± 10 %",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "caliper_mm",
+     "label": "Caliper distance",
+     "kind": "number",
+     "unit": "mm",
+     "min": 0,
+     "decimals": 2
+    },
+    {
+     "name": "ratio",
+     "label": "Caliper / shown change",
+     "kind": "number",
+     "unit": "",
+     "min": 0.9,
+     "max": 1.1,
+     "decimals": 3
+    }
+   ]
+  },
+  {
+   "id": "9.6",
+   "section": "9",
+   "title": "HOME",
+   "instruction": "Press HOME (the normal confirmation appears: I accept homing under load → Home).",
+   "expected": "the table drives to START, backs off, HOMED green",
+   "kind": "motion",
+   "action": "home",
+   "stop_if_fail": true,
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for HOMED …",
+      "all": [
+       {
+        "src": "event",
+        "key": "HOMED",
+        "op": "seen"
+       },
+       {
+        "src": "data_flag",
+        "key": "HOMED",
+        "op": "set"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "HOME_FAILED",
+      "op": "seen",
+      "label": "homing failed"
+     }
+    ]
+   }
+  },
+  {
+   "id": "10.1.3",
+   "section": "10",
+   "title": "I_LED on ENA",
+   "instruction": "48 V off, E-stop pressed + released + Clear E-STOP; DMM across the 100 Ω ENA shunt.",
+   "expected": "≥ 0.60 V (I_LED ≥ 6 mA)",
+   "kind": "measure",
+   "stop_if_fail": true,
+   "hg": "≈ C-06 / HG-06",
+   "fields": [
+    {
+     "name": "u_ena",
+     "label": "ENA shunt voltage",
+     "kind": "number",
+     "unit": "V",
+     "min": 0.6,
+     "max": 2.0,
+     "decimals": 3
+    }
+   ]
+  },
+  {
+   "id": "10.1.4",
+   "section": "10",
+   "title": "I_LED on DIR",
+   "instruction": "48 V on, Driver enabled, table mid-stroke; jog (+) for ≈ 1 s; DMM across the DIR shunt.",
+   "expected": "≥ 0.60 V (I_LED ≥ 6 mA)",
+   "kind": "measure",
+   "action": "show:manual",
+   "motion": true,
+   "stop_if_fail": true,
+   "fields": [
+    {
+     "name": "u_dir",
+     "label": "DIR shunt voltage",
+     "kind": "number",
+     "unit": "V",
+     "min": 0.6,
+     "max": 2.0,
+     "decimals": 3
+    }
+   ]
+  },
+  {
+   "id": "10.1.5",
+   "section": "10",
+   "title": "I_LED readings decided",
+   "instruction": "Readings of 10.1.3 / 10.1.4 below 0.60 V: repeat with the mA range in series (or a 10 Ω shunt).",
+   "expected": "≥ 6 mA on ENA and DIR",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "readings",
+     "label": "Readings",
+     "kind": "choice",
+     "choices": [
+      "all readings ≥ 0.60 V (no repeat needed)",
+      "repeated with the mA range / 10 Ω shunt"
+     ],
+     "invalid_when": [
+      {
+       "values": [
+        "all readings ≥ 0.60 V (no repeat needed)"
+       ],
+       "when": [
+        {
+         "step": "10.1.3",
+         "field": "u_ena",
+         "op": "lt",
+         "value": 0.6
+        },
+        {
+         "step": "10.1.4",
+         "field": "u_dir",
+         "op": "lt",
+         "value": 0.6
+        },
+        {
+         "step": "10.1.3",
+         "field": "u_ena",
+         "op": "absent"
+        }
+       ],
+       "text": "a 10.1.3 / 10.1.4 reading is below 0.60 V (or missing) — repeat it with the mA range"
+      }
+     ]
+    },
+    {
+     "name": "i_ena_ma",
+     "label": "I_LED ENA (mA range)",
+     "kind": "number",
+     "unit": "mA",
+     "min": 6.0,
+     "decimals": 2,
+     "required_when": [
+      {
+       "step": "10.1.3",
+       "field": "u_ena",
+       "op": "lt",
+       "value": 0.6
+      }
+     ]
+    },
+    {
+     "name": "i_dir_ma",
+     "label": "I_LED DIR (mA range)",
+     "kind": "number",
+     "unit": "mA",
+     "min": 6.0,
+     "decimals": 2,
+     "required_when": [
+      {
+       "step": "10.1.4",
+       "field": "u_dir",
+       "op": "lt",
+       "value": 0.6
+      },
+      {
+       "field": "readings",
+       "op": "eq",
+       "value": "repeated with the mA range / 10 Ω shunt"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "10.2.3",
+   "section": "10",
+   "title": "Pulse-integrity check",
+   "instruction": "Axis homed, Driver enabled, no-specimen mode on, nothing in the travel, the observer's hand at the red E-stop. Press 'Run pulse-integrity check': 3 baseline re-homes, 10 round trips 5 ↔ 285 mm at the travel speed limit, final re-home.",
+   "expected": "no HOME_DRIFT and |d1| ≤ max(30 µm, 2 · max|d0ᵢ|)",
+   "kind": "pulse_integrity",
+   "action": "pulse_integrity",
+   "stop_if_fail": true,
+   "safety": "Full travel speed: no specimen, nothing in the travel, the observer's hand at the red E-stop.",
+   "params": {
+    "baseline_homes": 3,
+    "baseline_max_um": 100,
+    "round_trips": 10,
+    "from_mm": 5,
+    "to_mm": 285,
+    "speed_mm_s": 30,
+    "d_floor_um": 30,
+    "d_factor": 2.0,
+    "repeats_allowed": 1,
+    "home_event_timeout_s": 5,
+    "fail_text": "buffer board required (SYS-011)",
+    "baseline_fail_text": "check the START switch mounting (switch repeatability, not a buffer verdict)"
+   }
+  },
+  {
+   "id": "10.2.4",
+   "section": "10",
+   "title": "Pulse-integrity verdict",
+   "instruction": "Follows the verdict of 10.2.3.",
+   "expected": "10.2.3 PASS",
+   "kind": "auto",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for 10.2.3 …",
+      "all": [
+       {
+        "src": "step",
+        "key": "10.2.3",
+        "op": "eq",
+        "value": "PASS",
+        "label": "10.2.3"
+       },
+       {
+        "src": "step",
+        "key": "10.2.3",
+        "path": "action.result.verdict",
+        "op": "eq",
+        "value": "PASS"
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "step",
+      "key": "10.2.3",
+      "op": "eq",
+      "value": "FAIL",
+      "label": "10.2.3"
+     }
+    ]
+   }
+  },
+  {
+   "id": "11.1.1",
+   "section": "11",
+   "title": "Travel calibration",
+   "instruction": "Calibration & Tare → Start travel calibration wizard… → follow the wizard to Accept.",
+   "expected": "≈ 800 steps/mm accepted",
+   "kind": "wizard",
+   "action": "travel_wizard",
+   "params": {
+    "wizard": "travel_cal"
+   },
+   "fields": [
+    {
+     "name": "spm",
+     "label": "Accepted steps/mm",
+     "kind": "number",
+     "unit": "steps/mm",
+     "min": 760,
+     "max": 840,
+     "decimals": 3
+    }
+   ]
+  },
+  {
+   "id": "11.2.3",
+   "section": "11",
+   "title": "Load calibration",
+   "instruction": "PAUSED set by the observer → Start load calibration wizard… → zero, 1 kg, 10 kg → Accept.",
+   "expected": "PASS (LOW_SPAN warning expected)",
+   "kind": "wizard",
+   "action": "load_wizard",
+   "params": {
+    "wizard": "load_cal"
+   }
+  },
+  {
+   "id": "11.3.1",
+   "section": "11",
+   "title": "Tare",
+   "instruction": "Cell unloaded, axis still ≥ 1 s → TARE.",
+   "expected": "TARE chip green, THR VERIFIED",
+   "kind": "wizard",
+   "action": "tare",
+   "params": {
+    "wizard": "tare"
+   }
+  },
+  {
+   "id": "11.3.2",
+   "section": "11",
+   "title": "Force check with 10 kg",
+   "instruction": "Hang the 10 kg weight again and read Force.",
+   "expected": "98.1 N ± 1 %",
+   "kind": "measure",
+   "fields": [
+    {
+     "name": "force_n",
+     "label": "Force",
+     "kind": "number",
+     "unit": "N",
+     "min": 97.1,
+     "max": 99.1,
+     "decimals": 2
+    }
+   ]
+  },
+  {
+   "id": "12.1",
+   "section": "12",
+   "title": "Save to NVM",
+   "instruction": "Connection & Config → Save to NVM.",
+   "expected": "CFG green clean; the default-parameters notice is gone",
+   "kind": "nvm",
+   "action": "save_nvm",
+   "auto": {
+    "stages": [
+     {
+      "text": "waiting for Save to NVM …",
+      "all": [
+       {
+        "src": "event",
+        "key": "PARAMS_SAVED",
+        "op": "seen"
+       },
+       {
+        "src": "backend",
+        "key": "cfg_dirty",
+        "op": "eq",
+        "value": false
+       }
+      ]
+     }
+    ],
+    "fail_if": [
+     {
+      "src": "event",
+      "key": "NVM_ERROR",
+      "op": "seen"
+     }
+    ]
+   }
+  },
+  {
+   "id": "12.4",
+   "section": "12",
+   "title": "Verify after restart",
+   "instruction": "After the restart of 12.3: Connect, Read all.",
+   "expected": "same Device line, no default-parameters notice, CFG clean, values as saved",
+   "kind": "nvm",
+   "action": "read_all",
+   "auto": {
+    "stages": [
+     {
+      "text": "connect and Read all …",
+      "all": [
+       {
+        "src": "info",
+        "key": "fw_version",
+        "op": "eq",
+        "value": "0.8.6"
+       },
+       {
+        "src": "backend",
+        "key": "nvm_defaulted",
+        "op": "eq",
+        "value": false
+       },
+       {
+        "src": "backend",
+        "key": "cfg_dirty",
+        "op": "eq",
+        "value": false
+       },
+       {
+        "src": "nvm",
+        "key": "matches_last_save",
+        "op": "eq",
+        "value": true,
+        "label": "values = last saved set"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "13.1",
+   "section": "13",
+   "title": "Create the bring-up package",
+   "instruction": "Create bring-up package → send the zip to the product owner.",
+   "expected": "one zip with report, data and manifest",
+   "kind": "info"
+  }
+ ]
+}

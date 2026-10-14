@@ -32,10 +32,11 @@ for _p in (TOOLS, TOOLS / "fw_twin"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+import gate_res  # noqa: E402
 import gen_params  # noqa: E402
 import ref_codec as rc  # noqa: E402
 
-DICT = gen_params.load()
+DICT = gen_params.load(gate_res.params_yaml())       # D-57: bundled copy in the frozen gate runner
 PBYKEY = {p.key: p for p in DICT.params}
 DICT_HASH = f"0x{DICT.hash:08X}"     # R-HIL-01: from params.yaml (gen_params), never a hard-coded copy
 
@@ -228,11 +229,19 @@ def check_approval(ref: str | None, *, today: _dt.date | None = None, max_age_da
     return d
 
 
-def open_serial(port: str | None, approval: str | None, *, baud: int = 921600, today: _dt.date | None = None,
+def open_serial(port: str | None, approval: Any, *, baud: int = 921600, today: _dt.date | None = None,
                 max_age_days: int = 7, confirm: Callable[[str], bool] | None = None,
                 opener: Callable[..., Any] | None = None, repo: Path = REPO):
-    """The ONLY place that opens a serial port. All D-06 checks first; pyserial imported last."""
-    check_approval(approval, today=today, max_age_days=max_age_days, repo=repo)
+    """The ONLY place that opens a serial port. All D-06 checks first; pyserial imported last.
+    `approval` = a validated gate approval file (gate_approval.Approval, D-57 b: the gate runner's only form; its
+    validity window is re-checked at every (re)open) or, in the repository only, a reference string checked against
+    DECISIONS.md / STATUS.md (developer tests; never in the frozen runner)."""
+    if hasattr(approval, "check_window") and getattr(approval, "body_sha256", None):
+        approval.check_window(today)
+    elif gate_res.FROZEN:
+        raise InterlockError("D-06: the gate runner opens a port only with a validated approval file (D-57 b)")
+    else:
+        check_approval(approval, today=today, max_age_days=max_age_days, repo=repo)
     if not port or not str(port).strip():
         raise InterlockError("D-06: no port named — the PO names board and port; auto-detection is not allowed")
     if confirm is None:
@@ -294,12 +303,71 @@ class TwinTransport:
         self.tw.close()
 
 
+class LoggedTransport:
+    """D-57 c: raw frame log of a session — every byte written to and read from the transport with its time stamp
+    (PC clock; twin: virtual time), appended to `<out>/raw/frames.bin`. Record = struct '<QBI' (t_ns, direction
+    0 = PC→FW / 1 = FW→PC, length) + the bytes; file header RAW_MAGIC. All other attributes are the wrapped
+    transport's (reflash, reopen, close_port, tw, exe, kind)."""
+
+    def __init__(self, tr: Any, path: Path):
+        object.__setattr__(self, "_tr", tr)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new = not path.exists()
+        f = open(path, "ab")
+        if new:
+            f.write(RAW_MAGIC)
+        object.__setattr__(self, "_f", f)
+        object.__setattr__(self, "_n", 0)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tr, name)
+
+    def _log(self, direction: int, data: bytes) -> None:
+        if data and not self._f.closed:
+            self._f.write(struct.pack("<QBI", max(int(self._tr.now_ns()), 0), direction, len(data)) + bytes(data))
+            object.__setattr__(self, "_n", self._n + 1)
+            if self._n % 64 == 0:
+                self._f.flush()
+
+    def write(self, data: bytes) -> None:
+        self._log(0, data)
+        self._tr.write(data)
+
+    def read(self) -> bytes:
+        d = self._tr.read()
+        self._log(1, d)
+        return d
+
+    def close(self) -> None:
+        try:
+            self._tr.close()
+        finally:
+            if not self._f.closed:
+                self._f.close()
+
+
+RAW_MAGIC = b"BBSRAW1" + bytes([10])
+
+
+def read_raw(path: Path):
+    """Iterate (t_ns, direction, bytes) of a raw frame log (offline analysis)."""
+    b = Path(path).read_bytes()
+    if not b.startswith(RAW_MAGIC):
+        raise ValueError(f"{path}: not a raw frame log")
+    i = len(RAW_MAGIC)
+    while i + 13 <= len(b):
+        t, d, n = struct.unpack_from("<QBI", b, i)
+        i += 13
+        yield t, d, b[i:i + n]
+        i += n
+
+
 class SerialTransport:
     """ST-LINK VCP (921 600 Bd 8N1). Constructed only through open_serial() (D-06 interlock)."""
 
     kind = "target"
 
-    def __init__(self, port: str, approval: str, confirm: Callable[[str], bool], **kw):
+    def __init__(self, port: str, approval: Any, confirm: Callable[[str], bool], **kw):
         self.port, self.approval, self._confirm, self._kw = port, approval, confirm, kw
         self.ser = open_serial(port, approval, confirm=confirm, **kw)
 

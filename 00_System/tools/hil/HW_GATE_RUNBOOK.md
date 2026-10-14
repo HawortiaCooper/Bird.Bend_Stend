@@ -2,7 +2,7 @@
 
 | Doc | HW_GATE_RUNBOOK |
 |---|---|
-| Version | 0.2 (2026-10-05, M3 verification) — D-45 (a)–(g), Integrator review R-HIL-01…03 applied, DEF-M3-01 / DEF-HG-01 closed, twin dry run re-run on 2d36eec (ICD v0.7.3 / dict 6). 0.1 — first version, prepared under D-06 |
+| Version | 0.6 (2026-10-14) — gate runner v1.1: plain-language prompts with pictures B1–B9, bench facts at S-00, approved options only (C-GR-1), revocation and results-zip anchor (design limits a / b). 0.5 (2026-10-14) — D-57: the gate runner (GATE_RUNNER.md): approval file instead of `--approved`, results zip, HG-06 shunt changes with the 48 V OFF. 0.4 (2026-10-14) — D-56 b: HG-23 N/A without the buffer board (direct drive qualified by HG-06 + HG-25 re-home); gate images in the separate gate kit `04_Delivery/GateKit_FW<rel>/` (Orchestrator decision on review finding 13); reproducible build (`SOURCE_DATE_EPOCH`). 0.3 (2026-10-14, bring-up package review) — §2.3 / §2.4 and the IMG prompt: the PO flashes the delivery package's `.hex` files (method B2, no full erase, never the `.bin`; OI-A-DLV-06). 0.2 (2026-10-05, M3 verification) — D-45 (a)–(g), Integrator review R-HIL-01…03 applied, DEF-M3-01 / DEF-HG-01 closed, twin dry run re-run on 2d36eec (ICD v0.7.3 / dict 6). 0.1 — first version, prepared under D-06 |
 | Owner | Validator E (00_System/tools/hil, the Integrator reviews) |
 | Basis | FW_test_plan v0.4.2 §6 (HG-01…32, §6.7 order, §6.8 bench safety procedure), wiring.md v0.5 (C-xx, M-1…M-9), ICD v0.7.x Appendix C (DIAG_MEAS), D-06, D-35 G5, D-40 c, D-41, D-42, D-44 |
 | Tools | `hil_session.py` (runner), `hil_procs.py` (HG procedures), `hil_link.py` (D-06 interlock, link, DIAG_MEAS), `hil_operator.py` (prompts), `hil_budget.py` (§6.1 rule 4), `hil_report.py` (markdown report), `tests/` (unit tests) |
@@ -65,26 +65,53 @@ with the driver powered (§6.8 P-1).
 2. Implementer A builds the three images **from that one commit** and states the result of `check_meas_build.py`
    (TC-SYS-009-02 PASS — byte-identical safety handlers / core):
    `pio run -e nucleo_f446re` (release), `-e nucleo_f446re_meas` (HW_MEAS), `-e nucleo_f446re_meas_dwt` (HW_MEAS_DWT),
-   each with a private `PLATFORMIO_BUILD_DIR`; hand the three `firmware.elf` files to the PO.
+   each with a private `PLATFORMIO_BUILD_DIR` and `SOURCE_DATE_EPOCH` set (reproducible build), and packages them
+   (OI-A-DLV-06, v0.3; separate kits since v0.4):
+   - release image: `04_Delivery/BringUp_FW<rel>/firmware/BBS_FW_<rel>_release.hex` (the operator's bring-up package);
+   - gate images, **gate kit only**: `04_Delivery/GateKit_FW<rel>/BBS_FW_<rel>_HW_MEAS_GATE-ONLY.hex` and
+     `…/BBS_FW_<rel>_HW_MEAS_DWT_GATE-ONLY.hex`;
+   each folder with its own `SHA256SUMS.txt` and `BUILD_INFO.txt` (commit, `SOURCE_DATE_EPOCH`, GET_INFO build strings
+   `YYYYMMDD-HHMM` / `YYMMDD-HHMM-MEAS` / `-DWT`, the SHA-256 of each `firmware.elf`, flash ranges: sectors 0, 3, 4
+   only, nothing in the NVM sectors 1–2). The PO flashes these `.hex` files; the ELFs stay with A (their hashes in
+   `BUILD_INFO.txt` tie the `.hex` to the build). Before the session Validator E re-checks both kits: `SHA256SUMS.txt`
+   matches, each `.hex` has no record in `0x08004000…0x0800BFFF`, BUILD_INFO's commit is the session commit, and a
+   rebuild with the recorded `SOURCE_DATE_EPOCH` reproduces the `.hex` / ELF hashes.
 3. Twin dry run of the same commit, no ERROR item (see §8):
    `set BEND_TWIN_BUILD_DIR=<private dir>` then
    `.venv\Scripts\python 00_System\tools\hil\hil_session.py --twin --out <dir>`
-4. Unit tests: `.venv\Scripts\python -m pytest 00_System\tools\hil\tests -q` (39 passed).
+4. Unit tests: `.venv\Scripts\python -m pytest 00_System\tools\hil\tests -q` (103 passed on 2026-10-14).
 
 ### 2.4 Flashing (the PO performs it — D-06)
-STM32CubeProgrammer over the Nucleo's ST-LINK (SWD), **no full-chip erase** (the NVM log in sectors 1–2 keeps the
-commissioning parameters, e.g. `motion.dir_invert`), verify, reset and run:
-`STM32_Programmer_CLI -c port=SWD mode=UR -w firmware.elf -v -rst`
+STM32CubeProgrammer over the Nucleo's ST-LINK (SWD), **method B2 of the package's `FLASHING.md`: the `.hex`, no
+full-chip erase** (the NVM log in sectors 1–2 keeps the commissioning parameters of the bring-up, e.g.
+`motion.steps_per_mm`, `motion.dir_invert`), verify, reset and run:
+`STM32_Programmer_CLI -c port=SWD mode=UR -w <file>.hex -v -rst`
+Never the `.bin` and never `-e all` / "Full chip erase" during the gate: both wipe the saved configuration. Before the
+first flash of the session the PO saves the board configuration with the PC application (**Save to file…**,
+`*.bbboard.json`) as a fall-back. The session prompt names the file to flash.
 The session prompts "PO: flash …" and waits; the driver PSU may stay on (the MCU reset keeps the driver holding, D-13,
 and the FW boots NOT_ENABLED with pulses blocked).
 
 ## 3. Starting the session
 
+**Since D-57 the operator runs the session alone with the frozen gate runner of the gate kit**
+(`BirdBendStand-GateRunner.exe`; design, approval file, results zip and offline analysis: `GATE_RUNNER.md`). The
+D-06 approval is an **approval file** generated by the Orchestrator (`make_approval.py`); the board UID and any
+accepted-open items come from it; `--approved` / `--accepted-open` on the command line are refused.
+
 ```
-.venv\Scripts\python 00_System\tools\hil\hil_session.py --port COM7 --approved D-06-GATE-20261012 ^
-    --board-uid 3400xxxxxxxxxxxxxxxxxxxx --out hil_sessions\20261012_HG1
+BirdBendStand-GateRunner.exe --approval approval_D-06-GATE-20261020.json --port COM7 --out D:\gate\20261020_HG1
 ```
-Resume after an interruption: same `--out`, same `--port` / `--approved` / `--board-uid`, add `--from HG-xx` (or
+(source run for Validator E's rehearsals: `.venv\Scripts\python 00_System\tools\hil\gate_runner.py …`, same options.)
+**Revocation (design limit a):** the runner cannot see DECISIONS.md; if the PO revokes the gate approval after the
+file was issued, the PO tells the operator directly to stop. An approval file is valid for at most 7 days.
+**Results anchor (design limit b):** at the end the runner prints the results zip's SHA-256 in a framed block
+("SEND THIS LINE …"); the operator sends that line to the PO at once and separately from the zip (e.g. in the message
+text).
+At the end the runner writes `gate_<date>_<UID>_<session>.zip` into `--out`; the operator sends it to the PO and
+Validator E evaluates it with `hil_analyze.py <zip> --zip-sha "<the line the operator sent>" --approval-log 00_System\specs\GATE_APPROVAL_LOG.md`
+(the Orchestrator appends the row that `make_approval.py` prints, GR-5).
+Resume after an interruption: same `--out`, same `--port` / `--approval`, add `--from HG-xx` (or
 `--only`): the session continues (same session id) and starts with **S-ID** (identity re-check). A run without
 `--from` / `--only`, or with a different board / approval, is a NEW session: a board session then needs a fresh
 `--out` (FWR-13). Whatever `--only` / `--from` select, the runner always runs the identity block first (S-00, or S-ID
@@ -164,8 +191,10 @@ therefore never move the axis.
 | IMG-MEAS2 | [M] PO flashes HW_MEAS again | – |
 | HG-21 / HG-22 | [M] presence sense fitted? | N/A in release 1 (D-41) |
 
-### Phase 3 — buffer board (SYS-011)
-| HG-23 | [M] inspection, taps moved to the buffer outputs; HG-06 / HG-07 / HG-08 repeated (`--buffer-fitted`) | I_LED 10…13 mA; timing as HG-07 / HG-08 |
+### Phase 3 — buffer board (SYS-011; only if the D-56 b direct-drive qualification failed)
+D-56 b / SRS v0.6.8: no buffer board is fitted. The direct 3.3 V drive is qualified by HG-06 (I_LED ≥ 6 mA, VOH ≥ 3.0 V) and the pulse-integrity re-home of HG-25 (no HOME_DRIFT, drift ≤ `home.drift_tol_um`); HG-23 answers "not installed" → N/A. Only after a failed qualification is the buffer fitted and HG-23 run with `--buffer-fitted`.
+
+| HG-23 | [M] buffer installed? no → N/A (D-56 b); yes: inspection, taps moved to the buffer outputs; HG-06 / HG-07 / HG-08 repeated (`--buffer-fitted`) | N/A without the buffer; with it: I_LED 10…13 mA; timing as HG-07 / HG-08 |
 |---|---|---|
 
 ### Phase 4 — first load (spring), only after the SYS-009 gate

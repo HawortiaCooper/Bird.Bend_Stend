@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bird.bend.bringup_steps/1",
+  "title": "Bird Bend Stand bring-up assistant: step definitions (D-56 a, SRS SW-BRU-001)",
+  "description": "Data file shipped with the application (bend_stand/resources/bringup_steps.json). Content is authored from the delivered bring-up guide (same step ids); the engine (core/bringup.py) adds semantic checks: unique ids, known sections, known action ids, known condition sources / keys / ops, kind-specific params.",
+  "type": "object",
+  "required": ["schema", "schema_version", "guide", "sections", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "bird.bend.bringup_steps"},
+    "schema_version": {"const": 1},
+    "guide": {
+      "type": "object",
+      "required": ["title", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1, "description": "guide / FW delivery version, e.g. 'FW 0.8.6'"},
+        "file": {"type": "string", "description": "guide file name in the delivery package"},
+        "content_version": {"type": "string", "description": "version of this step file (A)"}
+      }
+    },
+    "send_to": {"type": "string", "description": "text of the package dialog: whom to send the zip to"},
+    "sections": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["id", "title"], "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]*$"},
+          "title": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}}
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "section", "title", "instruction", "expected", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]*$", "description": "guide step id, e.g. '7.2' or '3.2-8'"},
+        "section": {"type": "string"},
+        "title": {"type": "string", "minLength": 1},
+        "instruction": {"type": "string", "minLength": 1},
+        "expected": {"type": "string"},
+        "kind": {"enum": ["info", "confirm", "measure", "auto", "motion", "wizard", "nvm", "pulse_integrity"]},
+        "optional": {"type": "boolean", "description": "may be skipped without counting as missing (still needs a reason)"},
+        "stop_if_fail": {"type": "boolean", "description": "the guide says STOP when this step fails"},
+        "safety": {"type": "string", "description": "safety note shown with the step"},
+        "hg": {"type": "string", "description": "overlap with a formal HW-gate item (same check, not gate evidence)"},
+        "motion": {"type": "boolean", "description": "the step moves the axis (its motion is recorded; default true for kinds motion / pulse_integrity / travel_cal wizard)"},
+        "action": {"type": ["string", "null"], "description": "GUI action id (bringup_dock.ACTIONS, 'show:<tab>') or the engine action 'pulse_integrity'"},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/field"}},
+        "auto": {"$ref": "#/$defs/auto"},
+        "params": {"type": "object", "description": "kind-specific parameters (wizard: wizard; pulse_integrity: baseline_homes, baseline_max_um, round_trips, from_mm, to_mm, speed_mm_s (number), d_floor_um, d_factor, repeats_allowed, home_event_timeout_s, fail_text, baseline_fail_text)"}
+      }
+    },
+    "field": {
+      "type": "object",
+      "required": ["name", "label", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "label": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["confirm", "number", "text", "choice"]},
+        "unit": {"type": "string"},
+        "min": {"type": ["number", "null"]},
+        "max": {"type": ["number", "null"]},
+        "decimals": {"type": "integer", "minimum": 0, "maximum": 9},
+        "choices": {"type": "array", "items": {"type": "string"}},
+        "required": {"type": "boolean"},
+        "pass_values": {"type": "array", "description": "choice / text values that PASS; any other entered value makes the step FAIL"},
+        "required_when": {
+          "description": "the field is required only while one of these entry conditions holds (overrides 'required')",
+          "anyOf": [{"$ref": "#/$defs/entry_condition"},
+                    {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/entry_condition"}}]
+        },
+        "invalid_when": {
+          "type": "array",
+          "description": "entry rules: the entered value (or one of 'values') is refused with 'text' while one of the 'when' conditions holds",
+          "items": {
+            "type": "object", "required": ["when", "text"], "additionalProperties": false,
+            "properties": {
+              "values": {"type": "array", "description": "only these entered values are refused (default: any value)"},
+              "when": {"anyOf": [{"$ref": "#/$defs/entry_condition"},
+                                 {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/entry_condition"}}]},
+              "text": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "entry_condition": {
+      "type": "object", "required": ["field", "op"], "additionalProperties": false,
+      "description": "an operator entry of this step ('field') or of another step ('step' + 'field') compared with 'value'",
+      "properties": {
+        "step": {"type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]*$"},
+        "field": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "op": {"enum": ["eq", "ne", "lt", "le", "gt", "ge", "in", "not_in", "contains", "regex", "between", "present", "absent", "set", "clear"]},
+        "value": {}
+      }
+    },
+    "auto": {
+      "type": "object",
+      "required": ["stages"],
+      "additionalProperties": false,
+      "properties": {
+        "stages": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/stage"}},
+        "fail_if": {"type": "array", "items": {"$ref": "#/$defs/condition"}},
+        "timeout_s": {"type": ["number", "null"], "minimum": 0},
+        "arm": {"enum": ["select", "action"], "description": "select (default): evaluation starts when the step is selected; action: when its engine action starts"}
+      }
+    },
+    "stage": {
+      "type": "object",
+      "required": ["all"],
+      "additionalProperties": false,
+      "properties": {
+        "all": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/condition"}},
+        "text": {"type": "string", "description": "shown while waiting for this stage"},
+        "min_s": {"type": "number", "minimum": 0, "description": "the conditions must hold continuously for at least this time"}
+      }
+    },
+    "condition": {
+      "type": "object",
+      "required": ["src", "key", "op"],
+      "additionalProperties": false,
+      "properties": {
+        "src": {"enum": ["ind", "data_flag", "data_status", "fault", "io", "sys_flag", "backend", "link", "stats",
+                         "stream", "motion", "safety", "calibration", "tare", "recording", "info", "param", "event",
+                         "topic", "nvm", "step"]},
+        "key": {"type": "string", "minLength": 1},
+        "op": {"enum": ["eq", "ne", "lt", "le", "gt", "ge", "in", "not_in", "contains", "regex", "between", "present",
+                        "absent", "set", "clear", "on", "off", "seen", "not_seen"]},
+        "value": {"description": "literal, or {\"$const\": NAME} (PARAM_DICT_HASH, PROTO_MAJOR, PROTO_MINOR, PAYLOAD_VERSION, ICD_VERSION, SW_VERSION) or {\"$param\": key} (board value)"},
+        "arg": {"type": ["string", "integer"], "description": "event: arg name / value filter"},
+        "path": {"type": "string", "description": "src step: dotted field of the other step's record (default 'state'; e.g. 'action.result.verdict', 'entries.u_ena', 'origin')"},
+        "label": {"type": "string", "description": "text of the observation in the automatic result"}
+      }
+    }
+  }
+}

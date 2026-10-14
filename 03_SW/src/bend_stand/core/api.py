@@ -46,6 +46,9 @@ from bend_stand.core.sequencer.model import (  # noqa: E402
     Block, Loop, SeqIssue, Sequence, Step, StepDefaults, StepKind, new_uid,
 )
 from bend_stand.core.sequencer.plan import Plan, PlannedStep  # noqa: E402
+from bend_stand.core.bringup import (  # noqa: E402  D-56 a bring-up assistant (§25, GRQ-B-40)
+    BuAuto, BuField, BuPackage, BuSection, BuStatus, BuStep,
+)
 
 #: A motion ticket: a future resolved with a ``MoveOutcome`` (SW_design §5.4).
 MoveTicket = Future  # Future[MoveOutcome]
@@ -60,8 +63,12 @@ TOPICS: tuple[str, ...] = (
     "sample.taken", "marks.edited", "resume.ignored", "hotkey.state", "hotkey.test", "report.ready", "log",
     "device.board_changed",                                       # B6-33 (6), SWR-19: payload = new board UID
     "safety.no_specimen_scope",                                   # B6-35, D-54 a: payload scope str | None
+    "bringup.state", "bringup.step",                              # §25.6, D-56 a: payload BuStatus / BuStep
 )
 TOPICS_PENDING_GUI: tuple[str, ...] = ()                         # topics published before the GUI maps them
+#: D-56 a (§25): published by ``backend.bringup`` — payload ``BuStatus`` / ``BuStep``; part of ``TOPICS`` (the bridge
+#: maps both to ``bringupEvent``).
+BRINGUP_TOPICS: tuple[str, ...] = ("bringup.state", "bringup.step")
 
 
 @runtime_checkable
@@ -256,6 +263,29 @@ class TestHooksAPI(Protocol):
 
 
 @runtime_checkable
+class BringupAPI(Protocol):
+    """``backend.bringup`` — Bring-up assistant (§25, D-56 a, SW-BRU-001…004). The first nine members are D's
+    contract GRQ-B-40 (``tests/gui/fake_bringup.py``); ``run_action`` … ``sessions`` are B's additions. The real
+    ``mark`` also takes ``origin="operator"`` (``"cli-test"`` for the headless simulator smoke test, §25.2)."""
+
+    def status(self) -> BuStatus: ...
+    def sections(self) -> list[BuSection]: ...
+    def steps(self) -> list[BuStep]: ...
+    def step(self, step_id: str) -> BuStep: ...
+    def start(self, *, confirmed: bool = False) -> GateResult: ...
+    def select(self, step_id: str) -> None: ...
+    def submit(self, step_id: str, entries: Mapping[str, Any], remark: str = "") -> list[Issue]: ...
+    def mark(self, step_id: str, state: str, *, reason: str = "", remark: str = "") -> GateResult: ...
+    def create_package_async(self) -> Future[BuPackage]: ...
+    # B's additions
+    def run_action(self, step_id: str, *, confirmed: bool = False) -> GateResult: ...
+    def cancel_action(self) -> Any: ...
+    def close_session(self, why: str = "operator") -> GateResult: ...
+    def resume(self, session_id: str) -> GateResult: ...
+    def sessions(self) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
 class BackendAPI(Protocol):
     """The facade the GUI constructs once (§15.1). Global actions never raise and return in ≤ 5 ms."""
 
@@ -273,6 +303,7 @@ class BackendAPI(Protocol):
     sequencer: SequencerAPI
     reports: ReportAPI
     events: EventBusAPI
+    bringup: BringupAPI                                           # §25.6, D-56 a
     sim: SimControlAPI | None
     test_hooks: TestHooksAPI | None
 
@@ -305,7 +336,7 @@ GuiRun = Callable[[BackendAPI, argparse.Namespace], int]
 PROTOCOLS: tuple[type, ...] = (
     EventBusAPI, ConfigAPI, MotionAPI, LimitsAPI, DataViewAPI, ChannelRegistryAPI, MarksAPI, SessionAPI,
     EngineAPI, TareEngineAPI, LoadCalEngineAPI, CalibrationStoreAPI, SequencerAPI, ReportAPI, SimControlAPI,
-    TestHooksAPI, BackendAPI,
+    TestHooksAPI, BackendAPI, BringupAPI,
 )
 
 __all__ = [
@@ -328,6 +359,8 @@ __all__ = [
     "StepKind", "Step", "Loop", "StepDefaults", "Sequence", "Block", "SeqIssue", "new_uid", "Plan", "PlannedStep",
     "PathPoint", "GeneratorSchema", "FieldSpec", "StepResult", "SeqWindow", "SwTripCleared", "ReportPaths",
     "RecordingInfo", "ReportResult",
+    # D-56 a (§25)
+    "BringupAPI", "BRINGUP_TOPICS", "BuAuto", "BuField", "BuPackage", "BuSection", "BuStatus", "BuStep",
     # errors
     "BendStandError", "CalibrationError", "CommandNotExecuted", "CommandOutcomeUnknown", "CommandTimeout",
     "ConfigReadOnly", "ConfirmationRequired", "FileFormatError", "GateRefused", "IncompatibleFirmware",

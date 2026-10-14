@@ -12,6 +12,7 @@ from fakes import refuse, tick
 from bend_stand.core.api import RecordingStatus
 from bend_stand.gui.dialogs import safe_dialog
 from bend_stand.gui.widgets.stop_button import StopButton
+from bend_stand.core.testing import isolated_settings  # noqa: E402  B-SAFE-01: never the real user folders
 
 
 @pytest.fixture
@@ -81,8 +82,8 @@ def test_change_root_on_real_backend(make_window, tmp_path) -> None:
     is a file is refused with "not writable" and the folder stays."""
     backend_mod = pytest.importorskip("bend_stand.core.backend")
     from test_sim_manual import step
-    be = backend_mod.Backend(backend_mod.BackendSettings(clock="lockstep", test_hooks=True, hotkey="off",
-                                                         sim_nvm_path=str(tmp_path / "nvm.json")))
+    be = backend_mod.Backend(backend_mod.BackendSettings(**isolated_settings(clock="lockstep", test_hooks=True, hotkey="off",
+                                                         sim_nvm_path=str(tmp_path / "nvm.json"))))
     be.start()
     try:
         be.test_hooks.result(be.connect_async("sim"), 5000)

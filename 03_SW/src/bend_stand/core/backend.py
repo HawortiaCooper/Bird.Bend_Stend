@@ -52,6 +52,7 @@ from bend_stand.core import params_gen as pgen
 from bend_stand.core import paths
 from bend_stand.core import protocol_gen as pg
 from bend_stand.core import session as session_mod
+from bend_stand.core.bringup import BringupEngine
 from bend_stand.core.calibration.load import LoadCalEngine
 from bend_stand.core.calibration.store import CalibrationStore
 from bend_stand.core.calibration.travel import TravelCalEngine
@@ -125,6 +126,10 @@ class BackendSettings:
     #: full-length diagnostic logs (Reader ``rx_log`` 100 000, in-process simulator wire / sent logs 200 000 each);
     #: None = on with ``test_hooks`` (validation / integration fixtures), else small (5 000 each, OBS-P3-04)
     test_logs: bool | None = None
+    #: D-56 a bring-up assistant: step file override (tests) and package output folder (None: env
+    #: BEND_STAND_BRINGUP_DIR, else Documents/BirdBendStand/bringup)
+    bringup_steps: str | None = None
+    bringup_root: str | None = None
 
 
 #: diagnostic log lengths (OBS-P3-04): normal operation keeps them small (≈ 1 MB), test runs opt in
@@ -815,6 +820,7 @@ class Backend:
         self.data.trace_provider = self.seq.trace
         self.sequencer = SequencerAPI(self)
         self.reports = ReportAPI(self)
+        self.bringup = BringupEngine(self, steps_path=s.bringup_steps, out_dir=s.bringup_root)   # D-56 a
         self.test_hooks: Any = None
         if s.test_hooks:
             from bend_stand.core.testing import TestHooks  # noqa: PLC0415
@@ -837,6 +843,10 @@ class Backend:
         self._started = True
         self.liveness.install_excepthook()
         self._start_hotkey()
+        try:
+            self.bringup.attach()                         # SW-BRU-002: resume the active bring-up session
+        except Exception:  # noqa: BLE001 — the assistant never prevents the start
+            log.exception("bring-up session not resumed")
         if self.lockstep:
             return
         from bend_stand.core import timing  # noqa: PLC0415
@@ -880,6 +890,10 @@ class Backend:
                     except Exception:  # noqa: BLE001
                         self.device._close_link()  # noqa: SLF001
         finally:
+            try:
+                self.bringup.shutdown()                   # flush + close the bring-up files (SW-BRU-002)
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                log.exception("bring-up shutdown failed")
             self._sup_stop.set()
             t, self._sup_thread = self._sup_thread, None
             if t is not None:
@@ -1000,6 +1014,10 @@ class Backend:
         self.motion.tick(now)
         self.seq.tick(now)
         self._auto_thresholds()
+        try:
+            self.bringup.tick(now)                        # D-56 a: evaluation / collection (cheap, 100 ms)
+        except Exception:  # noqa: BLE001 — the assistant never breaks the Supervisor
+            log.exception("bring-up tick failed")
         hk = self.hotkey
         if hk is not None and now >= self._next_hotkey_ping_ns:
             self._next_hotkey_ping_ns = now + 250 * MS

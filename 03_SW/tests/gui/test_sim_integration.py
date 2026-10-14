@@ -26,6 +26,7 @@ backend_mod = pytest.importorskip("bend_stand.core.backend")
 from bend_stand.core import protocol_gen as pg  # noqa: E402
 from bend_stand.core.api import BackendAPI, GateId  # noqa: E402
 from bend_stand.gui.dialogs import safe_dialog  # noqa: E402
+from bend_stand.core.testing import isolated_settings  # noqa: E402  B-SAFE-01: never the real user folders
 
 T_CONNECT_MS = 10000
 
@@ -33,8 +34,8 @@ T_CONNECT_MS = 10000
 @pytest.fixture
 def sim_backend(tmp_path):
     # hotkey "off": no system-wide key hook in GUI tests; the GUI then uses its app-level shortcut (§5.3)
-    be = backend_mod.Backend(backend_mod.BackendSettings(sim_nvm_path=str(tmp_path / "nvm.json"),
-                                                         recordings_root=str(tmp_path / "rec"), hotkey="off"))
+    be = backend_mod.Backend(backend_mod.BackendSettings(**isolated_settings(sim_nvm_path=str(tmp_path / "nvm.json"),
+                                                         recordings_root=str(tmp_path / "rec"), hotkey="off")))
     assert isinstance(be, BackendAPI)
     be.start()
     yield be
@@ -279,8 +280,8 @@ def test_perf_smoke_on_simulator(oop_sim_window, qtbot, capsys) -> None:
 def test_real_hotkey_status_shown(make_window, tmp_path, qtbot) -> None:
     """Verifies: SW-STOP-002 (B4-07) — the KEY chip follows the backend's real hotkey status; with the key active
     (fake hook) the GUI installs no app-level Pause shortcut (never a double path, GQ-19)."""
-    be = backend_mod.Backend(backend_mod.BackendSettings(sim_nvm_path=str(tmp_path / "nvm.json"),
-                                                         recordings_root=str(tmp_path / "rec"), hotkey="fake"))
+    be = backend_mod.Backend(backend_mod.BackendSettings(**isolated_settings(sim_nvm_path=str(tmp_path / "nvm.json"),
+                                                         recordings_root=str(tmp_path / "rec"), hotkey="fake")))
     be.start()
     try:
         win = make_window(be)

@@ -2,7 +2,7 @@
 
 | Item | Value |
 |---|---|
-| Version | **0.6.9 — D-54** (travel calibration without load calibration, recordings folder at runtime; §9.3, §15.5f B6-35). **0.6.8 — review residuals SWR-29…36** (D-53 a no-specimen exit, §15.5f B6-34). **0.6.7 — P3 perf findings** (SWD-P3-01 recorder, OBS-P3-01 / 04, liveness filter, diagnostic log sizes). **0.6.6 — SW review fixes** (SW_code_review v1.1 SWR-01…28 except the packaging items, D-53, §15.5f B6-33, §22c). **0.6.5 — review fixes SWR-11/14/23/24/27** (§14 log file, §24 locks; B packaging share). **0.6.4 — load-calibration plausibility** (D-50 a, §9.4, §15.5f B6-32). **0.6.2 — coverage + M4 notes + manual items** (§22c post-gate revision, §15.5f B6-24…B6-31, §12.4 `inject step_stall`). **0.6.1 — Windows distribution** (§24, PyInstaller build for the lab PC). **0.6 — M4 (Sequencer) backend** (§22c work breakdown + as built, §15.5f API delta B6-01…B6-23 for D). **0.5.1 — M3 gate fix (SWD-M3-01, MC3-4)**. **0.5 — M3 (SW application) backend** (§22b work breakdown, §15.5e API delta B5-01…17 for D). **0.4.1 — M2 close-out** (SWD-M2-01…03, MC2-4, D-41…D-43; §22a). **0.4 — M2 (Sensor & motion) backend + M1 close-out** (ICD v0.5 / v0.6 decode, SRS v0.5.1, D-36…D-39; §22a, §15.5d). Earlier: **0.3.1 — DRAFT for the P1 gate** (aligned to **ICD v0.4 / v0.4.1** (D-34), SRS v0.3, D-29…D-34, SW_test_plan SWD-P1-01…18 / C1–C7; v0.2 answered GRQ-B-01…18) |
+| Version | **0.6.13 — bring-up review fixes** (SWD-P3-03…09, OBS-F-BRU-01/02; §25). **0.6.12 — D-56 a Bring-up assistant backend** (`core.bringup`, §25; SW-BRU-001…004, SYS-011 pulse-integrity check). **0.6.9 — D-54** (travel calibration without load calibration, recordings folder at runtime; §9.3, §15.5f B6-35). **0.6.8 — review residuals SWR-29…36** (D-53 a no-specimen exit, §15.5f B6-34). **0.6.7 — P3 perf findings** (SWD-P3-01 recorder, OBS-P3-01 / 04, liveness filter, diagnostic log sizes). **0.6.6 — SW review fixes** (SW_code_review v1.1 SWR-01…28 except the packaging items, D-53, §15.5f B6-33, §22c). **0.6.5 — review fixes SWR-11/14/23/24/27** (§14 log file, §24 locks; B packaging share). **0.6.4 — load-calibration plausibility** (D-50 a, §9.4, §15.5f B6-32). **0.6.2 — coverage + M4 notes + manual items** (§22c post-gate revision, §15.5f B6-24…B6-31, §12.4 `inject step_stall`). **0.6.1 — Windows distribution** (§24, PyInstaller build for the lab PC). **0.6 — M4 (Sequencer) backend** (§22c work breakdown + as built, §15.5f API delta B6-01…B6-23 for D). **0.5.1 — M3 gate fix (SWD-M3-01, MC3-4)**. **0.5 — M3 (SW application) backend** (§22b work breakdown, §15.5e API delta B5-01…17 for D). **0.4.1 — M2 close-out** (SWD-M2-01…03, MC2-4, D-41…D-43; §22a). **0.4 — M2 (Sensor & motion) backend + M1 close-out** (ICD v0.5 / v0.6 decode, SRS v0.5.1, D-36…D-39; §22a, §15.5d). Earlier: **0.3.1 — DRAFT for the P1 gate** (aligned to **ICD v0.4 / v0.4.1** (D-34), SRS v0.3, D-29…D-34, SW_test_plan SWD-P1-01…18 / C1–C7; v0.2 answered GRQ-B-01…18) |
 | Date | 2026-10-03 |
 | Owner | Implementer B (SW backend): overall architecture + backend (`core`, `io`, `calc`), package root (`bend_stand/__init__.py`, `__main__.py`), launch scripts `03_SW/run*.bat`, `03_SW/tests/conftest.py` (D-29 n). GUI design: `03_SW/docs/SW_design_GUI.md` (Implementer D), which consumes §15 of this document. |
 | Binding inputs | `00_System/specs/SRS.md` **v0.3** (SAF-SW-, SW-, IF-, NFR-001..004, §3.2, §5.2; new SW-LIM-004; the v0.4 draft was cross-checked — same 82 SW-side IDs, traceability §20 unchanged), `DECISIONS.md` D-01…D-33, **`ICD_protocol.md` v0.4** (final P1 draft; PROTO 1.0, PAYLOAD 1; STATUS 86 B with `pause_src`; PAUSED latch with BLOCK bit PAUSED (D-30); RESUME 0x3C VERIFY class (D-31); hard rule H5 (D-33 a); homing at START only; `state_schema` 2; frozen sim/twin vocabulary v2 in tools/README; `units_vectors.json`) and its **v0.4.1** delta (D-34: HALT_CLEAR / ESTOP_CLEAR / FAULT_CLEAR become VERIFY class on the priority path), `03_SW/docs/SW_test_plan.md` (Validator F, verdict YES WITH CONDITIONS; SWD-P1-01…18), `protocol.yaml` + generated `core/protocol_gen.py` (names/codes), `params.yaml` **dict_version 3** (PARAM_DICT_HASH **0xF0376293**; since dict 2: `home.ref_switch` 0x0401 retired, `drv.k1_weld_ms` 0x0705 added; dict 3: `motion.steps_per_mm` default 800 (D-27 closed), `afe.timeout_ms` default 250 + H5 (D-33 a)) + generated `core/params_gen.py`, `00_System/tools/{ref_codec.py, ref_cmdcheck.py, README.md, vectors/}` (check vectors ICD v0.4: 509, `state_schema` 2; `units_vectors.json`), R3 (§1.6–1.7, §5, §6, §7), R4 (§2, §4–§12), R5 (§0, §5.5, §8), `SW_design_GUI.md` v0.1 §11.2 (GRQ-B-01…18), §14 (GF-04/05/07/10) |
@@ -2300,6 +2300,11 @@ SW-SEQ-006, SAF-SW-001/002/004/005, SW-STOP-004 changed — rows below updated).
 | SW-PLT-001 | §1 | `pyproject.toml` | B |
 | SW-PLT-002 | §0 KD-01, §18 | layering test, `calc` | B |
 | SW-PLT-003 | §5.2, §15.2 | `core.device`, `core.linkstats` | B + D (statistics view) |
+| SW-BRU-001 | §25.1, §25.2, §25.6 | `core.bringup` (step file + schema, evaluation, entries), `core.minischema` | B + D (§3.8 dock) |
+| SW-BRU-002 | §25.3 | `core.bringup.BringupEngine` (session, collection, resume) | B |
+| SW-BRU-003 | §25.5 | `core.bringup.build_package` / `verify_package`, CLI `bringup-export` | B + D (package dialog) |
+| SW-BRU-004 | §25.4, §25.6 | `run_action` through `core.motion` gates only | B + D (normal GUI handlers) |
+| SYS-011 (PC part) | §25.4 | pulse-integrity check (EVENT HOMED d, baseline, criterion) | B |
 | SW-CFG-001 | §5.3 | `core.params`, `params_gen` metadata | B + D (typed form) |
 | SW-CFG-002 | §5.3, §13.1 | `core.params` board-config file | B + D |
 | SW-CFG-003 | §5.3 | `Device.write_and_verify` | B + D (status column) |
@@ -2750,6 +2755,10 @@ against §15.5f from the start.
 | 0.6.9 | 2026-10-10 | Implementer B | **D-54 (SRS v0.6.7):** (a) SW-CAL-002 travel calibration independent of the load calibration — start gate without LOAD_INPUT_INVALID / NOT_HOMED, CONFIRM NO_SPECIMEN_MOUNTED, wizard-scoped no-specimen state (PC load limits off for owner TRAVEL_CAL only, FW thresholds not widened, banner state, events), scope ended on every exit with the SWR-29 restore path, HOME-first phase; (c) SW-ACQ-002 `reports.set_root` (writable probe, refused while recording, stored in the session). §9.3, §15.5f B6-35. |
 | 0.6.10 | 2026-10-10 | Implementer B | NFR-009: `DataView.xy()` decimation vectorised (`dataview.minmax_select`, identical indices to the former per-segment loop — unit test; 600 s × 80 Hz: 31.8 → 1.0 ms). `safety.no_specimen_scope` moved into `api.TOPICS` (D maps it). Time-pane columns not aligned to absolute time (optional item left: it changes the `t_col` contract of `PlotSnapshot`). |
 | 0.6.11 | 2026-10-10 | Implementer B | SWR-38 (S3): the travel wizard's abort paths stop its own running command (controlled STOP, standstill awaited ≤ 5 s) before releasing the no-specimen scope and the owner; other motion owners checked (§9.3). |
+| 0.6.12 | 2026-10-14 | Implementer B | **D-56 a (SRS v0.6.8 SW-BRU-001…004) Bring-up assistant backend**, new §25: step-definition data file + JSON schema (`bend_stand/resources`, `core.minischema`), engine `core.bringup` (evaluation of status / events / parameters, operator entries, wizard results, continuous collection, kill-safe session + resume, motion-step recordings), pulse-integrity check per D-56 b / SYS-011 with Validator E's rules (EVENT HOMED d, HOMED-at-issue, 3-re-home baseline, `baseline_max_um`, |d1| ≤ max(30 µm, 2·max|d0ᵢ|), one repeat, disturbance restarts, speed-cap FAIL with raw; numbers in the step file), package zip (HTML, schema-validated JSON, SHA-256 manifest, data-folder rule), CLI `bringup-export`, `api.BringupAPI` + `BRINGUP_TOPICS` (then moved into `api.PROTOCOLS` / `BackendAPI.bringup` / `api.TOPICS` once D's fake and bridge had them), step `origin` (auto / operator / cli-test) in the record and the HTML; Validator E's review B-BRU-04 items 1, 2, 7, 8, 10, 11 (exact 30 mm/s, stop-and-report FAILs, freshness rule, fresh HOMED, baseline HOME_DRIFT, E_RANGE label) and schema `step` source / `min_s` / `required_when` / `invalid_when` (also referencing another step's entries); engine tests on the fixture `tests/unit/core/data/bringup_steps_example.json`, shipped-file tests separate; data-safety rule: `core.testing.isolated_settings` (temp folders for every test / simulator helper unless explicit or `real_user_data=True`), `BEND_STAND_RECORDINGS_DIR`; `BackendSettings.bringup_steps / bringup_root`, conftest `BEND_STAND_BRINGUP_DIR`; §20 rows. |
+| 0.6.13 | 2026-10-14 | Implementer B | **Validator F's bring-up review (SW_code_review v1.6 §8.10):** SWD-P3-03 observed values in the waiting / FAIL text; SWD-P3-04 another board UID stops the session (`board_mismatch`, refusals `BOARD_CHANGED`, new session or package; report lists every board); SWD-P3-05 CSP in the bring-up report; SWD-P3-07 package roots from the application only, every path resolved, skips logged as incidents; SWD-P3-08 `check_session_doc` (SESSION_UNREADABLE instead of AttributeError); SWD-P3-09 pipeline: EVENT SEQ 0 of a boot-time EVENT after a FW restart is a new baseline, not a loss (`BOOT_TIME_EVENTS`); OBS-F-BRU-01 simulator ALM reads active while the driver is unpowered and `estop drv_power_follows` restores the supply after the closing (tools/README, twin); OBS-F-BRU-02 §25.4 matches the code. Cross-step entry rules (`required_when` / `invalid_when` with `step`), `origin`. |
+| 0.6.14 | 2026-10-14 | Implementer B | **GR-1 (D-57): frozen gate runner** — `03_SW/packaging/gate_runner/` (spec, `build_gate_runner.ps1`, `gr_build.py`, `smoke_gate_runner.py` G1–G7, D-06 test hook), `requirements-gaterunner.txt` + hash-pinned lock; console one-folder `BirdBendStand-GateRunner` into `04_Delivery/GateKit_FW<rel>/` (git-ignored) with params.yaml, picture map, bench pictures and the FW twin of the same checkout; runner hash = `gate_res.bundle_sha256` (= make_approval), reproducible build (PE timestamps normalised, PYTHONHASHSEED=0, commit date in the version resource). §24.6. |
+| 0.6.13 | 2026-10-14 | Implementer B | **Packaging of the bring-up assistant (§25, D-56 a)**: spec datas `bend_stand/resources/*.json`; smoke S7 (resources present, identical to the source tree, step file valid) and S10 (`--headless --bringup-mark` → `bringup-export` → `--verify`, damaged copy refused); entry option `--headless --sim --bringup-mark STEP_ID` (simulator only: exit 2 with a COM port / tcp:// / without --headless --sim, checked before any backend; marks recorded with origin `cli-test` — engine field by the bringup.py owner — and the remark "marked from the command line (test)"; S10 checks the HTML shows it and the refusal); tests in `test_dist_packaging.py` / `test_cli_report.py`. Trial build only (private folders); the release build follows the commit. |
 
 ## 24. Windows distribution (packaging) — SW-PLT-001, SYS-008, D-06
 
@@ -2764,7 +2773,7 @@ instructions with measured numbers: `03_SW/packaging/README.md`.
 |---|---|
 | Tool | PyInstaller **6.22.3** + hooks-contrib 2026.8, one-folder mode (no one-file: no unpacking to `%TEMP%` at every start, faster start, AV-friendlier); UPX off; `optimize=0` (asserts as in the tested tree) |
 | Pins | `03_SW/requirements-build.txt` = `-r requirements.txt` + PyInstaller and its dependencies (exact); `pyproject.toml` extra `build` (ranges). **v0.6.5 (SWR-27):** hash-pinned `requirements-build.lock.txt` (13 packages incl. transitive, SHA-256 of the exact wheel; `packaging/lock_requirements.py generate / check`); `build_dist.ps1 -InstallDeps` installs it with `--require-hashes`, `buildinfo.py check-env` compares the venv with the lock (direct + transitive); the build stops on a mismatch (reproducibility) |
-| Spec | `packaging/BirdBendStand.spec`: entry `entry_birdbendstand.py` (= `bend_stand.__main__.main`); `collect_submodules("bend_stand")` (the GUI is imported dynamically by `__main__`; `io.sim` incl. the out-of-process server is included — `--sim` works on the target, SYS-008); package data `bend_stand/gui/resources/BirdBendStand.ico` at the same relative path (`gui.resources.app_icon()`: window / taskbar icon, GRQ-B-31 c; also pyproject `package-data`); excludes: test/build tools, `numpy.f2py`, `ssl`, unused Qt modules, pyqtgraph examples/OpenGL/Jupyter; Qt translations dropped (English UI) |
+| Spec | `packaging/BirdBendStand.spec`: entry `entry_birdbendstand.py` (= `bend_stand.__main__.main`); `collect_submodules("bend_stand")` (the GUI is imported dynamically by `__main__`; `io.sim` incl. the out-of-process server is included — `--sim` works on the target, SYS-008); package data `bend_stand/gui/resources/BirdBendStand.ico` and `bend_stand/resources/*.json` (bring-up steps + schemas, §25; the spec asserts both step files exist) at the same relative path (`gui.resources.app_icon()`: window / taskbar icon, GRQ-B-31 c; also pyproject `package-data`); excludes: test/build tools, `numpy.f2py`, `ssl`, unused Qt modules, pyqtgraph examples/OpenGL/Jupyter; Qt translations dropped (English UI) |
 | Executables | `BirdBendStand.exe` (GUI subsystem, operator use) and `BirdBendStand-cli.exe` (console, unbuffered stdout: `--headless`, `--version`, diagnostics), one shared `_internal/` |
 | Version | `[project].version` + git short hash → PEP 440 `0.1.0+g<hash>` (`.dirty` if `03_SW/src`, `packaging`, `pyproject.toml` or requirements differ from HEAD). The spec writes `bend_stand-<version>.dist-info/METADATA` into the bundle → `bend_stand.__version__` (importlib.metadata, unchanged code) reports the build in `--version`, About and every `sw_version` field; Windows version resource (file version 0.1.0.0, product version string, git hash + build time in *Comments*); icon `packaging/assets/BirdBendStand.ico` (generated by `make_icon.py`, stdlib) |
 | Docs | `packaging/docs_html.py` (stdlib Markdown subset → HTML, GitHub heading ids): `03_SW/docs/USER_MANUAL.md`, `QUICK_REFERENCE.md` and `img/` → `<dist>/docs/` as `.md` + `.html` (Windows 10 has no `.md` handler; shortcuts open the HTML); a missing referenced screenshot stops the build (OI-UM-03) |
@@ -2808,7 +2817,10 @@ referenced screenshot, no pytest / PyInstaller / yaml); **S8** `--headless --sim
 `cli report <recording> --out <tmp>` → rc 0, `report.json` (bird.bend.report, rows > 0) + `report.html`, missing
 folder → rc 2; **S9** (v0.6.5) windowed exe started without console handles: stdio in `BirdBendStand.log`, the GUI
 exit line exactly once in `bend_stand.log` and not in `BirdBendStand.log`; S2 / S3 also require `bend_stand.log`
-with the start and incident lines. Unit tests `tests/unit/test_dist_packaging.py` (version / dist name, pin parsing, version resource,
+with the start and incident lines; **S10** (bring-up, SW-BRU-002/003) `cli --headless --sim --bringup-mark <first step>` →
+session with that step PASS, `bringup-export --out` (same data folder) → one zip, `--verify` → "package OK", a
+damaged copy → rc ≠ 0; S7 also checks `bend_stand/resources/*.json` (identical to the source tree) and validates the
+bundled step file. Unit tests `tests/unit/test_dist_packaging.py` (version / dist name, pin parsing, version resource,
 dist-info, deterministic zip, icon + GUI icon resource, rthook guard and log redirect, spec excludes, git-ignore, docs
 renderer and installed manuals) and `tests/unit/test_cli_report.py` (`report` subcommand, `--recordings`, `--record`).
 
@@ -2817,6 +2829,12 @@ smoke 7/7 PASS offscreen and 7/7 PASS from the extracted zip with a Python-free 
 platform; `--headless --sim` start → connected 1.1–1.4 s; GUI start → quit 2.0 s warm / 3.1 s cold. v0.6.3 build:
 folder 137.5 MiB / 247 files (incl. `docs/` 3.1 MiB), zip 62.2 MiB; smoke **8/8 PASS** in the build run and 8/8 from
 the extracted zip with a Python-free `PATH`.
+
+### 24.6 Gate runner (D-57, GR-1)
+
+Validator E's hardware-gate runner is frozen by the same infrastructure: `03_SW/packaging/gate_runner/README.md`
+(build, bundle layout per GATE_RUNNER.md §1, runner hash, reproducibility, smoke G1–G7). The application build and
+the runner build share `buildinfo.py` (version / git / version resource / zip) and the lock tooling.
 
 ### 24.4 Findings / open items (packaging)
 
@@ -2827,3 +2845,163 @@ the extracted zip with a Python-free `PATH`.
 | F-B-PKG-03 | Orchestrator | SRS SW-PLT-001 describes the venv + requirements route only; add the frozen distribution (or a DM-02 note) if it becomes the delivery form. |
 | F-B-PKG-04 | D | B part done (v0.6.3: `--recordings DIR`); open for D: a GUI folder picker (the Report tab shows the folder read-only). |
 | F-B-PKG-05 | Orchestrator | Installer not built: Inno Setup 6 is not installed on the dev PC; `.iss` ready (`build_dist.ps1 -Installer`). |
+
+---
+
+## 25. Bring-up assistant (`core.bringup`) — SW-BRU-001…004, SYS-011 (D-56)
+
+The operator brings the board up alone (D-56 a): the application walks the steps of the delivered bring-up guide
+(`04_Delivery/BringUp_FW…/BRINGUP_GUIDE.md`, same step ids), evaluates what the board shows, takes the operator's
+entries, collects the evidence continuously and packs it into one zip. GUI: `SW_design_GUI.md` §3.8 (dock
+`widgets/bringup_dock.py`, contract GRQ-B-40). Engine: `core/bringup.py` (Qt-free), `backend.bringup`.
+
+### 25.1 Step definitions (data file, schema-versioned)
+
+`bend_stand/resources/bringup_steps.json` (`bird.bend.bringup_steps` v1) is shipped with the application; its JSON
+schema is `bend_stand/resources/bringup_steps.schema.json` (subset of draft 2020-12, checked by `core.minischema`,
+no third-party package). **Content: A** (authored from the guide; B ships a 28-step example covering every kind);
+**safety review of the content: Validator E**. `load_definitions()` = schema + semantic check (unique ids, known
+sections, action ids, condition sources / keys / ops against the generated tables, kind parameters); a bad file never
+stops the application — `start()` is refused with `STEP_FILE_INVALID`.
+
+| Field | Meaning |
+|---|---|
+| `id`, `section`, `title`, `instruction`, `expected` | guide step id (`7.2`, `3.2-8`, `10.2.3`), section id, texts |
+| `kind` | `info` · `confirm` · `measure` · `auto` · `motion` · `wizard` · `nvm` · `pulse_integrity` |
+| `action` | GUI action id of `bringup_dock.ACTIONS` (`enable`, `disable`, `home`, `no_specimen`, `leave_no_specimen`, `travel_wizard`, `load_wizard`, `tare`, `save_nvm`, `save_file`, `read_all`, `clear_stop`, `hotkey_test`), `show:<connection\|limits\|marks\|manual\|calibration>`, or the engine action `pulse_integrity` |
+| `fields` | operator entries: `name`, `label`, `kind` confirm / number / text / choice, `unit`, `min`, `max`, `decimals`, `choices`, `required`, `pass_values` |
+| `auto` | `stages` (ordered; each `all` conditions true at one evaluation), `fail_if`, `timeout_s`, `arm` (`select`) |
+| `params` | kind-specific: wizard `wizard` (travel_cal / load_cal / tare); pulse_integrity: see §25.4 |
+| `optional`, `stop_if_fail`, `safety`, `hg`, `motion` | flags / notes for the GUI and the report; `motion` = the step's motion is recorded |
+
+**Condition** `{src, key, op, value, arg, label}`: `src` = `ind` (indicator key), `data_flag` / `data_status` /
+`fault` / `io` / `sys_flag` (generated bit names), `backend` / `link` / `stats` / `stream` / `motion` / `safety` /
+`calibration` / `tare` / `recording` (dotted field of `BackendStatus`), `info` (GET_INFO: `fw_version` "a.b.c",
+`build`, `uid`, `proto`, `param_dict_hash`, `features`, …), `param` (board value), `event` (FW EVENT seen since the
+stage was armed; `arg` filters the arg name / value; other ops compare the newest event's value), `topic` (EventBus
+topic seen), `nvm` (`saves`, `matches_last_save`, `record_seq`, `dumps`), `step` (another step's record:
+`key` = step id, `path` = dotted field, default `state`, e.g. `action.result.verdict`). A stage may carry `min_s`
+(the conditions must hold continuously that long). **Entry rules** use *entry conditions* `{step?, field, op, value}`
+— `field` of this step, or of another step when `step` is given (that step's saved entries; a missing entry is
+`None`, so `absent` catches it): a field may carry `required_when` (one condition or a list, any match → required;
+overrides `required`) and `invalid_when` (list of `{values?, when, text}`: the entered value — or only the listed
+`values` — is refused with ERROR `INVALID` "<label>: <text>" while any `when` condition holds; nothing is stored).
+Example: 10.1.5 "no repeat needed" refused after a 0.50 V reading in 10.1.3, and the mA field then required. `op` = eq ne lt le gt ge in not_in
+contains regex between present absent set clear on off seen not_seen. `value` may be `{"$const": NAME}`
+(PARAM_DICT_HASH, PROTO_MAJOR, PROTO_MINOR, PAYLOAD_VERSION, ICD_VERSION, SW_VERSION) or `{"$param": key}`.
+
+### 25.2 Evaluation and step state
+
+Per step: `NOT_DONE` / `PASS` / `FAIL` / `SKIPPED` (reason required). Parts: the automatic result (`auto`: NA →
+WAITING → PASS / FAIL), the wizard / engine action (RUNNING / PASS / FAIL / ABORTED) and the operator entries
+(`check_entries`: missing required / non-numeric / unknown choice = ERROR issue, nothing stored; outside the limits or
+not in `pass_values` = FAIL). State = FAIL if a part failed, PASS if every present part passed, else NOT_DONE
+(`resolve_state`, pure). `mark()` sets the state by hand (recorded as `manual`); `mark(NOT_DONE)` resets and re-arms. Every step records its
+**origin** — who set the current state: `auto` (automatic check, wizard / engine result), `operator` (entries or a
+mark in the dock), `auto+operator`, or `cli-test` (`mark(..., origin="cli-test")`, used only by the packaging smoke
+option `--headless --sim --bringup-mark`); shown in `session.json`, `bringup.json` (`origin`, `summary.cli_test`, a
+note) and `report.html` (cli-test in red plus a banner: "not operator evidence").
+The automatic check of the **selected** step is evaluated on the Supervisor tick every 100 ms against
+`backend.status()`, the DATA flags / status and the events since its stage was armed; leaving the step disarms it.
+**Freshness rule (B-BRU-04 item 7):** a stage (and `fail_if`) is evaluated only while the link is CONNECTED and the
+newest board data (DATA flags or GET_STATUS) is newer than both the stage arming and the last connect / BOOT — stale
+or default flags (e.g. 0 after a disconnect) never satisfy a "clear" / "off" condition; one stage advances per fresh
+evaluation. While a stage waits, its automatic text shows the values observed for the conditions not met yet
+("… — observed: FW = 0.7.5; build = SIM-…", SWD-P3-03); a `fail_if` / timeout FAIL names the observed value too
+(`ne` on an unknown GET_INFO / parameter value never fails).
+Wizard steps follow `cal.travel.state` / `cal.load.state` / `tare.state` (DONE → PASS, ABORTED / REFUSED → FAIL).
+**No auto-advance** — the GUI moves on only on [Next ▶].
+
+### 25.3 Session, collection, resume (SW-BRU-002)
+
+`<data>/bringup/sessions/<id>/` (`<data>` = `%APPDATA%\BirdBendStand`): `session.json` (`bird.bend.bringup_session`
+v1; atomic write after every operator change, automatic changes within 200 ms), `events.jsonl` (every EventBus record
+except the bring-up topics and repeated `seq.status`, DATA flag / status changes `bringup.data_bits`, GET_STATUS
+changes `bringup.status`, step history; appended, flushed, fsynced), `params/params_<n>_<tag>.json` (full board set
+at `start`, after every NVM save — detected from `nvm_record_seq` — at `end`, at every `package`), `info.json`
+(GET_INFO), `snapshots.jsonl` (link statistics, NVM state at start, every 60 s and at a package),
+`settings_start.json`, `steps_used.json`. `<data>/bringup/active.json` names the open session; `attach()` at
+backend start resumes it (a RUNNING action becomes ABORTED "interrupted by an application restart", a WAITING check
+NA). A recording (`record_start_with({"bringup": …})`, only when the recorder is idle) covers every motion step from
+the first MOVING edge while it is selected (and the whole pulse-integrity run) and stops when the step is left or
+resolved at standstill. **Another board (SWD-P3-04):** a GET_INFO UID other than the session's board sets `board_mismatch` (logged
+`BOARD_CHANGED`, `boards_seen` lists all): the session stops taking results — `submit` / `mark` / `run_action`
+refused `BOARD_CHANGED`, no automatic evaluation or wizard result — and `status().board_mismatch` offers "start a new
+session for this board" (`start(confirmed=True)`) or "create the package of the old session"; the report shows every
+board seen and a red banner. The original board clears it (`BOARD_RESTORED`). A damaged `session.json` (wrong member
+types) is `FileFormatError` → not resumed, `resume` → `SESSION_UNREADABLE`, logged (`check_session_doc`, SWD-P3-08).
+Threads: EventBus observer (queues, < 1 ms), Supervisor tick (bits, evaluation, no file I/O on the real clock),
+writer thread `bend-bringup` (files, recording start / stop, publications); on the lock-step clock the writer runs
+inside the tick (deterministic tests).
+
+### 25.4 Pulse-integrity check (D-56 b, SYS-011, Validator E's rules)
+
+The only engine-run action: `run_action(step_id, confirmed=False)`. All numbers are step parameters
+(`baseline_homes` 3, `baseline_max_um` 100, `round_trips` 10, `from_mm` 5, `to_mm` 285, `speed_mm_s` 30 (a
+number: exactly this speed, never faster), `d_floor_um` 30, `d_factor` 2, `repeats_allowed` 1,
+`home_event_timeout_s`, `fail_text`, `baseline_fail_text`).
+
+1. Gates first, unchanged: `motion.check(MOVE, target)` for both ends and `motion.check(HOME)`; a refusal is
+   returned as is (nothing moves). If the PC / FW speed limits (`v_cap`, `v_travel`, FW `v_limit`) are below the
+   step speed → REFUSE `SPEED_BELOW_QUALIFICATION` ("the qualification needs 30 mm/s"), no FAIL, no limit raised.
+   Without `confirmed` the result is CONFIRM `BRINGUP_MOTION` (+ the HOME gate's own CONFIRM items);
+   `confirmed=True` passes `load_confirmed` to the re-homes.
+2. Baseline: `baseline_homes` re-homes; each HOME only while HOMED is confirmed by board data younger than 300 ms and
+   newer than the last connect / BOOT (item 8); d = EVENT HOMED value (signed µm) — never an operator
+   transcription. max|d0ᵢ| > `baseline_max_um`, or HOME_DRIFT during the baseline (at the first event, item 10) →
+   FAIL `baseline_fail_text` ("check the START switch mounting", verdict BASELINE_SCATTER, not a repeat).
+3. `round_trips` × (`to_mm`, `from_mm`) through `motion.move_to` at the speed (all gates on every move).
+4. Final re-home d1. PASS iff no HOME_DRIFT (FAULT_SET arg or fault bit) and |d1| ≤ max(`d_floor_um`, `d_factor` ·
+   max|d0ᵢ|); a failed verdict allows `repeats_allowed` repeats, then FAIL `fail_text` ("buffer board required
+   (SYS-011)") and `run_action` → REPEAT_EXHAUSTED.
+5. **ABORTED** (readings discarded, "run the check again from the baseline", not counted; the cause is named):
+   E-stop, driver disable, ALM active, LINK_WDG, HALT, PAUSE, HOME_FAILED, link not CONNECTED, another fault, a
+   stopped / refused move, a missing EVENT HOMED (timeout), `cancel_action()` (→ `backend.stop("bringup")`).
+6. **FAIL + stop with report** (`hard_fail`; `run_action` → `STOP_REPORTED` for the rest of the session; B-BRU-04
+   items 2 / 11): LIMIT_SET or a stop caused by a limit during a move, FAULT_SET STEP_FAULT / LOAD_LIMIT / AFE_FAULT,
+   an unexpected BOOT (also when the reset first ended the move or dropped the link: a BOOT within 10 s upgrades that
+   ABORTED attempt), a NACK E_RANGE ("E_RANGE refusal (no limit is raised): <raw>"; `MoveOutcome.nack`).
+Every attempt (d0, d1, limit, speed, moves, raw, verdict) is kept in `action.attempts`.
+
+### 25.5 Package (SW-BRU-003)
+
+`create_package_async()` (report worker; partial at any point; also for the last closed session) → `BuPackage(path,
+size_bytes, files, send_to, partial, sha256)`; offline: `build_package(session_dir, out_dir, data_dir=…)` and the CLI
+`BirdBendStand-cli.exe bringup-export [<session>] [--out DIR] [--data DIR]` / `--verify ZIP`. Zip name
+`bringup_<YYYYMMDD>_<board UID>_<FW build>.zip` (suffix `_2`… if it exists) in `BEND_STAND_BRINGUP_DIR`, else
+`Documents\BirdBendStand\bringup` (written to a temp file, then renamed). Contents: `report.html` (self-contained,
+every value escaped, no scripts), `bringup.json` (`bird.bend.bringup_record` v1 — steps, entries, automatic results,
+attempts, history, versions app / ICD / proto / dict / FW / board / OS / Python; **validated against**
+`bringup_record.schema.json` before writing, also shipped in the zip), `session/…` (§25.3), `logs/bend_stand.log*`
+(incident log), `calibration/…`, `settings/sessions/*.json`, `settings/gui.ini`, `recordings/<folder>/…` of the
+session, `manifest.json` (SHA-256 + size of every other file). Every path — including every recording folder named
+in `session.json` — is resolved (links, junctions, `..`) and must lie below `<data>` or a recordings root the
+application knows (`app_recording_roots`: env / default root and the root of `<data>/sessions/*.json`; the engine adds
+its current root and the roots it recorded into) — roots are never taken from `session.json`; anything else is
+skipped with a note and an incident-log line (SWD-P3-07). `report.html` carries the script-free CSP of SWR-11
+(SWD-P3-05). `verify_package()` checks hashes, unlisted files and the schema.
+
+### 25.6 API (`api.BringupAPI`, GRQ-B-40) and topics
+
+| Member | Contract |
+|---|---|
+| `status() → BuStatus` | active, session_id, board_uid, fw_build, started_utc, total / done / passed / failed / skipped, current, folder; + closed_utc, action_running, last_package, definitions |
+| `sections() → [BuSection(id, title, step_ids)]`, `steps()`, `step(id) → BuStep` | BuStep = D's fields (kind auto / operator / action / info, fields, action, motion, stop_if_fail, safety, hg, auto BuAuto(state, text), state, entries, remark, skip_reason) + step_kind, optional, engine_action, action_state, action_text, manual |
+| `start(*, confirmed=False) → GateResult` | CONFIRM `SESSION_EXISTS` while one is open (the old one is closed and kept) |
+| `select(id)`, `submit(id, entries, remark="") → [Issue]`, `mark(id, state, *, reason="", remark="") → GateResult` | as §25.2; `NO_SESSION`, `REASON_REQUIRED`, `UNKNOWN_STEP`, `OPERATION_RUNNING`, `BAD_ORIGIN` refusals; the real `mark` has the extra keyword `origin="operator"` (`MARK_ORIGINS`) |
+| `create_package_async() → Future[BuPackage]` | §25.5 |
+| `run_action(id, *, confirmed=False) → GateResult` | engine actions only (`pulse_integrity`); GUI actions → `NOT_AN_ENGINE_ACTION` |
+| `cancel_action()`, `close_session(why)`, `resume(session_id)`, `sessions()` | B's additions |
+
+Topics `api.BRINGUP_TOPICS` = `bringup.state` (BuStatus), `bringup.step` (BuStep) — part of `api.TOPICS` (bridge
+signal `bringupEvent`); `BringupAPI` is in `api.PROTOCOLS` and `BackendAPI.bringup` (D's `FakeBringup` conforms).
+
+**SW-BRU-004:** the engine never moves by itself: `select` / `submit` / `mark` / `start` send nothing (unit test),
+GUI actions run through the normal GUI handlers (D), the pulse-integrity check needs a confirmed `run_action` and uses
+the normal motion API on every move; STOP / Pause / banners are unaffected.
+
+Tests: `tests/unit/core/test_bringup.py` (step-file validity + 20 refusal cases, condition / entry vectors, simulator
+walk-through of the automatic, operator, wizard, NVM and motion kinds, pulse integrity PASS / drift FAIL + repeat +
+buffer verdict / baseline scatter / disturbance ×3 / gate refusals identical / speed-cap FAIL / cancel, kill-and-restart
+resume, session confirm / close / resume, package manifest + HTML + schema + data-folder rule + tamper detection, CLI,
+Protocol conformance + topics, real-clock writer thread).

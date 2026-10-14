@@ -275,9 +275,11 @@ class Runner:
         data = self.out / "data"
         data.mkdir(exist_ok=True)
         os.environ["BEND_STAND_DATA_DIR"] = str(data)
-        self.be = Backend(BackendSettings(wire_log=self.a.wire_log, test_hooks=self.a.wire_log,
-                                          recordings_root=str(self.out / "rec"), data_dir=str(data),
-                                          hotkey=self.a.hotkey))
+        from bend_stand.core.testing import isolated_settings  # noqa: PLC0415 — data-safety rule (2026-10-14)
+
+        self.be = Backend(BackendSettings(**isolated_settings(
+            wire_log=self.a.wire_log, test_hooks=self.a.wire_log, recordings_root=str(self.out / "rec"),
+            data_dir=str(data), bringup_root=str(self.out / "bringup"), hotkey=self.a.hotkey)))
         self.be.start()
         self.win = MainWindow(self.be, settings=make_settings(self.out / "gui.ini"))
         self.win.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)   # another app keeps the focus

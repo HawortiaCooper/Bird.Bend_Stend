@@ -6,13 +6,13 @@ Code files = files whose `Implements:` lines cite the ID; Test files = test file
 
 ## Summary
 
-- Requirements: **174**
+- Requirements: **178**
 - Without any design reference: **0** 
 - Without a test case: **0** 
 - Without an `Implements:` tag in code (excluding HW/inspection-only, see status column): **0** 
 - Not cited by any test file (excluding HW/inspection-only): **0** 
-- Tagged files scanned: code 257, tests 219
-- Distinct test-case IDs: FW 145, SW 201
+- Tagged files scanned: code 260, tests 232
+- Distinct test-case IDs: FW 147, SW 221
 
 ## Matrix
 
@@ -26,15 +26,15 @@ Code files = files whose `Implements:` lines cite the ID; Test files = test file
 | SYS-006 | M2 | Must | 0 | 1 | 0 | 0 | 2 | 1 | 0 | 2 | no code (hardwired E-stop circuit (HW)) |
 | SYS-007 | M1 | Must | 0 | 0 | 0 | 0 | 2 | 1 | 0 | 1 | no code (01_HW documentation (inspection)) |
 | SYS-008 | M1 | Must | 0 | 4 | 16 | 9 | 0 | 7 | 33 | 38 | complete |
-| SYS-009 | M2 | Must | 3 | 1 | 0 | 0 | 8 | 3 | 2 | 4 | complete |
+| SYS-009 | M2 | Must | 3 | 1 | 0 | 0 | 8 | 4 | 2 | 6 | complete |
 | SYS-010 | M1 | Must | 0 | 3 | 4 | 8 | 0 | 1 | 1 | 5 | complete |
-| SYS-011 | M2 | Must | 0 | 4 | 0 | 0 | 9 | 1 | 0 | 0 | no code (buffer board (HW)), no test file (HW gate) |
+| SYS-011 | ), where d0ᵢ are 3 baseline re-homes taken before the run and d = the HOMED event deviation, valid only if the axis was homed when HOME started (Validator E statistics: d is a difference of two switch captures; one repeat allowed); a baseline with max | d0ᵢ | 0 | 4 | 6 | 0 | 14 | 4 | 1 | 3 | complete |
 | SAF-FW-001 | M2 | Must | 10 | 12 | 3 | 0 | 0 | 1 | 7 | 12 | complete |
 | SAF-FW-002 | M2 | Must | 8 | 22 | 1 | 0 | 3 | 5 | 10 | 18 | complete |
 | SAF-FW-003 | M2 | Must | 7 | 16 | 1 | 0 | 0 | 2 | 10 | 18 | complete |
 | SAF-FW-004 | M2 | Must | 5 | 11 | 1 | 0 | 1 | 5 | 5 | 15 | complete |
 | SAF-FW-005 | M2 | Must | 5 | 13 | 1 | 0 | 4 | 3 | 7 | 12 | complete |
-| SAF-FW-006 | M2 | Must | 6 | 7 | 2 | 1 | 2 | 1 | 8 | 8 | complete |
+| SAF-FW-006 | M2 | Must | 6 | 7 | 2 | 1 | 3 | 1 | 8 | 8 | complete |
 | SAF-FW-007 | M2 | Must | 4 | 6 | 1 | 0 | 3 | 3 | 4 | 3 | complete |
 | SAF-FW-008 | M2 | Must | 5 | 11 | 1 | 0 | 1 | 3 | 6 | 17 | complete |
 | SAF-FW-009 | M2 | Must | 5 | 6 | 1 | 0 | 0 | 1 | 8 | 9 | complete |
@@ -58,7 +58,7 @@ Code files = files whose `Implements:` lines cite the ID; Test files = test file
 | SAF-SW-001 | M3 | Must | 0 | 0 | 27 | 14 | 0 | 4 | 11 | 24 | complete |
 | SAF-SW-002 | M3 | Must | 4 | 0 | 20 | 10 | 0 | 5 | 5 | 13 | complete |
 | SAF-SW-003 | M3 | Must | 4 | 0 | 8 | 5 | 0 | 4 | 7 | 14 | complete |
-| SAF-SW-004 | M3 | Must | 1 | 0 | 14 | 31 | 0 | 2 | 9 | 19 | complete |
+| SAF-SW-004 | M3 | Must | 1 | 0 | 14 | 32 | 0 | 2 | 9 | 21 | complete |
 | SAF-SW-005 | M3 | Must | 0 | 0 | 8 | 33 | 0 | 5 | 16 | 24 | complete |
 | SAF-SW-006 | M4 | Should | 0 | 0 | 14 | 16 | 0 | 2 | 6 | 7 | complete |
 | FW-PLT-001 | M1 | Must | 0 | 3 | 0 | 0 | 0 | 1 | 4 | 2 | complete |
@@ -80,11 +80,11 @@ Code files = files whose `Implements:` lines cite the ID; Test files = test file
 | FW-HOM-001 | M2 | Must | 7 | 6 | 1 | 0 | 0 | 3 | 5 | 12 | complete |
 | FW-HOM-002 | M2 | Must | 4 | 4 | 1 | 1 | 0 | 1 | 4 | 8 | complete |
 | FW-HOM-003 | M2 | Should | 0 | 2 | 0 | 0 | 0 | 1 | 0 | 3 | no code (home repeatability on the stand (HW)) |
-| FW-HOM-004 | M2 | Must | 0 | 8 | 1 | 2 | 1 | 1 | 4 | 7 | complete |
+| FW-HOM-004 | M2 | Must | 0 | 8 | 1 | 2 | 3 | 1 | 4 | 7 | complete |
 | FW-SW-001 | M2 | Must | 0 | 10 | 1 | 0 | 3 | 1 | 5 | 6 | complete |
 | FW-SW-002 | M2 | Must | 0 | 6 | 0 | 0 | 1 | 1 | 4 | 3 | complete |
 | FW-SW-003 | M2 | Must | 1 | 6 | 1 | 2 | 1 | 1 | 5 | 4 | complete |
-| FW-SW-004 | M2 | Must | 1 | 6 | 1 | 2 | 2 | 1 | 7 | 5 | complete |
+| FW-SW-004 | M2 | Must | 1 | 6 | 1 | 2 | 2 | 1 | 7 | 6 | complete |
 | FW-SW-005 | M2 | Must | 0 | 13 | 1 | 2 | 3 | 1 | 4 | 8 | complete |
 | FW-CFG-001 | M1 | Must | 8 | 7 | 0 | 0 | 0 | 2 | 2 | 4 | complete |
 | FW-CFG-002 | M1 | Must | 8 | 5 | 1 | 0 | 0 | 1 | 4 | 8 | complete |
@@ -116,15 +116,15 @@ Code files = files whose `Implements:` lines cite the ID; Test files = test file
 | IF-004 | M1 | Must | 5 | 7 | 3 | 0 | 0 | 2 | 8 | 15 | complete |
 | IF-005 | M1 | Must | 5 | 3 | 7 | 0 | 0 | 4 | 8 | 23 | complete |
 | IF-006 | M1 | Must | 3 | 5 | 8 | 0 | 0 | 1 | 8 | 14 | complete |
-| IF-007 | M1 | Must | 3 | 3 | 6 | 0 | 0 | 1 | 4 | 14 | complete |
+| IF-007 | M1 | Must | 3 | 3 | 6 | 0 | 0 | 1 | 4 | 15 | complete |
 | IF-008 | M1 | Must | 4 | 2 | 8 | 11 | 0 | 2 | 9 | 19 | complete |
 | IF-009 | M1 | Must | 3 | 2 | 2 | 0 | 0 | 1 | 5 | 10 | complete |
 | IF-010 | M1 | Must | 3 | 2 | 3 | 0 | 0 | 1 | 7 | 22 | complete |
 | IF-011 | M1 | Must | 5 | 4 | 11 | 5 | 0 | 2 | 12 | 22 | complete |
 | IF-012 | M1 | Must | 6 | 1 | 3 | 1 | 0 | 1 | 5 | 11 | complete |
-| SW-PLT-001 | M1 | Must | 0 | 0 | 10 | 5 | 0 | 2 | 8 | 13 | complete |
-| SW-PLT-002 | M1 | Must | 0 | 0 | 8 | 5 | 0 | 2 | 14 | 10 | complete |
-| SW-PLT-003 | M1 | Must | 1 | 0 | 6 | 10 | 0 | 3 | 13 | 14 | complete |
+| SW-PLT-001 | M1 | Must | 0 | 0 | 10 | 5 | 0 | 2 | 8 | 14 | complete |
+| SW-PLT-002 | M1 | Must | 0 | 0 | 8 | 5 | 0 | 2 | 14 | 11 | complete |
+| SW-PLT-003 | M1 | Must | 1 | 0 | 6 | 10 | 0 | 3 | 13 | 15 | complete |
 | SW-CFG-001 | M1 | Must | 0 | 0 | 6 | 12 | 0 | 2 | 8 | 8 | complete |
 | SW-CFG-002 | M1 | Must | 0 | 0 | 5 | 7 | 0 | 1 | 7 | 6 | complete |
 | SW-CFG-003 | M1 | Must | 0 | 0 | 8 | 14 | 0 | 2 | 9 | 16 | complete |
@@ -147,24 +147,24 @@ Code files = files whose `Implements:` lines cite the ID; Test files = test file
 | SW-MAN-004 | M3 | Must | 0 | 0 | 6 | 7 | 0 | 2 | 6 | 6 | complete |
 | SW-MAN-005 | M3 | Must | 0 | 0 | 5 | 10 | 0 | 1 | 4 | 3 | complete |
 | SW-MAN-006 | M3 | Must | 0 | 0 | 7 | 12 | 0 | 2 | 4 | 5 | complete |
-| SW-STOP-001 | M3 | Must | 1 | 0 | 7 | 23 | 0 | 5 | 18 | 26 | complete |
-| SW-STOP-002 | M3 | Must | 2 | 0 | 9 | 11 | 0 | 5 | 8 | 18 | complete |
+| SW-STOP-001 | M3 | Must | 1 | 0 | 7 | 24 | 0 | 5 | 18 | 28 | complete |
+| SW-STOP-002 | M3 | Must | 2 | 0 | 9 | 11 | 0 | 5 | 8 | 19 | complete |
 | SW-STOP-003 | M3 | Must | 1 | 0 | 7 | 10 | 0 | 2 | 7 | 18 | complete |
-| SW-STOP-004 | M4 | Must | 2 | 0 | 14 | 21 | 0 | 13 | 12 | 15 | complete |
+| SW-STOP-004 | M4 | Must | 2 | 0 | 14 | 21 | 0 | 13 | 12 | 16 | complete |
 | SW-ACQ-001 | M1 | Must | 0 | 0 | 7 | 6 | 0 | 1 | 5 | 11 | complete |
-| SW-ACQ-002 | M3 | Must | 0 | 0 | 14 | 6 | 0 | 2 | 6 | 15 | complete |
+| SW-ACQ-002 | M3 | Must | 0 | 0 | 14 | 6 | 0 | 2 | 6 | 16 | complete |
 | SW-ACQ-003 | M3 | Must | 0 | 0 | 7 | 5 | 0 | 2 | 6 | 6 | complete |
 | SW-ACQ-004 | M3 | Must | 0 | 0 | 11 | 5 | 0 | 4 | 5 | 13 | complete |
 | SW-CAL-001 | M3 | Must | 0 | 0 | 20 | 20 | 0 | 4 | 12 | 9 | complete |
 | SW-CAL-002 | M3 | Must | 0 | 0 | 12 | 10 | 1 | 2 | 7 | 12 | complete |
 | SW-CAL-003 | M3 | Must | 0 | 0 | 11 | 9 | 1 | 1 | 5 | 6 | complete |
 | SW-CAL-004 | M3 | Must | 0 | 0 | 10 | 7 | 0 | 1 | 6 | 8 | complete |
-| SW-CAL-005 | M3 | Must | 0 | 0 | 8 | 10 | 0 | 1 | 7 | 7 | complete |
+| SW-CAL-005 | M3 | Must | 0 | 0 | 8 | 10 | 0 | 1 | 7 | 8 | complete |
 | SW-CAL-006 | M3 | Must | 0 | 0 | 8 | 6 | 0 | 2 | 5 | 9 | complete |
 | SW-CAL-007 | outside 0.5…2 × nominal is shown as "K implausible" and needs an explicit operator confirmation recorded in the calibration file. | PO-SW-8.FIT, D-23, R4 §6.2, D-50 (a) | 0 | 0 | 12 | 10 | 1 | 2 | 5 | 11 | complete |
 | SW-CAL-008 | M3 | Should | 0 | 0 | 10 | 10 | 0 | 1 | 12 | 11 | complete |
 | SW-CAL-009 | M3 | Must | 0 | 0 | 10 | 9 | 0 | 2 | 11 | 8 | complete |
-| SW-TARE-001 | M3 | Must | 0 | 0 | 10 | 18 | 0 | 1 | 6 | 9 | complete |
+| SW-TARE-001 | M3 | Must | 0 | 0 | 10 | 18 | 0 | 1 | 6 | 10 | complete |
 | SW-TARE-002 | M3 | Must | 0 | 0 | 8 | 10 | 0 | 2 | 9 | 8 | complete |
 | SW-TARE-003 | M3 | Must | 0 | 0 | 11 | 9 | 0 | 1 | 6 | 6 | complete |
 | SW-SEQ-001 | M4 | Must | 0 | 0 | 11 | 14 | 0 | 2 | 7 | 6 | complete |
@@ -183,6 +183,10 @@ Code files = files whose `Implements:` lines cite the ID; Test files = test file
 | SW-REP-002 | M4 | Must | 1 | 0 | 10 | 8 | 0 | 2 | 6 | 11 | complete |
 | SW-REP-003 | M4 | Should | 0 | 0 | 9 | 8 | 0 | 1 | 5 | 8 | complete |
 | SW-REP-004 | M4 | Should | 0 | 0 | 9 | 11 | 0 | 1 | 6 | 8 | complete |
+| SW-BRU-001 | P3 | Must | 0 | 0 | 7 | 9 | 0 | 4 | 3 | 7 | complete |
+| SW-BRU-002 | P3 | Must | 0 | 0 | 6 | 3 | 0 | 3 | 1 | 9 | complete |
+| SW-BRU-003 | P3 | Must | 0 | 0 | 6 | 3 | 1 | 6 | 4 | 8 | complete |
+| SW-BRU-004 | P3 | Must | 0 | 0 | 5 | 5 | 0 | 3 | 2 | 6 | complete |
 | NFR-001 | M3 | Must | 0 | 0 | 15 | 20 | 0 | 4 | 11 | 13 | complete |
 | NFR-002 | M3 | Must | 1 | 0 | 10 | 10 | 0 | 2 | 4 | 11 | complete |
 | NFR-003 | M3 | Must | 1 | 0 | 9 | 9 | 1 | 2 | 4 | 7 | complete |

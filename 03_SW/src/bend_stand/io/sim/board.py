@@ -602,7 +602,7 @@ class SimBoard:
         self.last_raw = st.raw
         self.world.drv_power = st.drv_power
         self.pwr_filt = st.drv_power
-        self.world.alm = st.alm_active
+        self.world.alm = st.alm_active and st.drv_power      # the driver's own alarm (unpowered reads ALM anyway)
         self.alm_filt = st.alm_active
         if not st.nvm_record_valid:
             self.nvm.records = [None, None]

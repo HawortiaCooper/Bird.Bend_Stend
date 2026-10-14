@@ -1,5 +1,5 @@
 # Bird Bend Stand — Quick reference card
-SW 0.1.0 · details in [`USER_MANUAL.md`](USER_MANUAL.md) · **Emergency: red E-stop.**
+SW 0.1.0 · FW 0.8.6 · details in [`USER_MANUAL.md`](USER_MANUAL.md) · **Emergency: red E-stop.**
 
 ## Stops and how to clear them
 | Stop | Effect | Clear |
@@ -24,7 +24,7 @@ Enter / Space never confirm anything; confirmations need a mouse click.
 4. KEY chip `REGISTERED` (Pause/Break active); test with **Tools ▸ Test Pause/Break key…** at the start of the day.
 5. **Driver enabled** → **HOME** (path to START free) → HOMED green `homed`.
 6. **CAL** valid (`PASS`, amber `LOW_SPAN` accepted), **TCAL** not shown, **THR** `VERIFIED`, no **NOSPEC** chip.
-7. Periodically (start of a campaign): hardwired ENA cut — Nucleo held in RESET, press E-stop → shaft free by hand.
+7. At the start of every test campaign: hardwired ENA cut — Nucleo held in RESET, press E-stop → shaft free by hand; release E-stop (RESET still held) → holds again at once (D-45 a).
 
 ## Pre-test checklist (every specimen)
 1. Fixture mounted, specimen **not** loaded, axis still ≥ 1 s → **TARE** (TARE chip green, THR `VERIFIED`).

@@ -7,3 +7,6 @@
 *.h text eol=lf
 *.cpp text eol=lf
 *.ini text eol=lf
+# operator delivery packages: firmware images byte-exact (hashes in SHA256SUMS.txt)
+04_Delivery/**/*.hex -text
+04_Delivery/**/*.bin binary
